@@ -24,7 +24,7 @@ Run:
     source ~/.bashrc            # provides STEPFUN_API_KEY
     conda activate rapids-cudf
     python agent_main.py
-    python agent_main.py --ask "帮我分析 /home/Developer/power_clean.csv 有没有异常值"
+    python agent_main.py --ask "帮我分析 /data/sales.csv 有没有异常值"
 """
 
 from __future__ import annotations

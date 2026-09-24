@@ -5,10 +5,11 @@ how values are tested against the fence (strict < / > vs <= / >=), or in how NaN
 lands. Voltage is reported to 3 decimals, so values sitting exactly on the fence are real.
 """
 
+import os
 import cudf
 import pandas as pd
 
-PATH = "/home/Developer/power_clean.csv"
+PATH = os.environ.get("DIAG_DATA", "power_clean.csv")
 COL = "Voltage"
 
 pdf = pd.read_csv(PATH, usecols=[COL])
@@ -55,7 +56,7 @@ import subprocess
 import json
 
 out = subprocess.run(
-    ["python", "/home/Developer/cudf-analytics-skill/scripts/gpu_analytics.py",
+    ["python", os.environ.get("GPU_ANALYTICS_SCRIPT", "gpu_analytics.py"),
      "--input", PATH, "--op", "outliers", "--columns", COL],
     capture_output=True, text=True)
 res = json.loads(out.stdout)["outliers"]["results"][COL]

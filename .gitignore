@@ -9,6 +9,10 @@ venv/
 .gpu_vs_cpu_cache.json
 agent/.gpu_vs_cpu_cache.json
 
+# Generated demo datasets (multi-GB CSV). Produce one with:
+#   scripts/memory_ceiling_test.py --rows 20000000 --columns 8
+benchmark/demo/
+
 # Scratch / data downloads
 .dl/
 *.zip
@@ -16,11 +20,8 @@ benchmark_data/
 attribution_data/
 ceiling_data/
 
-# SSH.NET dependencies for the GB10 helper: ~15 MB of third-party DLLs.
-# Re-fetch them rather than vendoring binaries (see README).
-.tools/lib/
-.tools/bc/
-.tools/sshnet/
+# Personal dev helper for reaching a private host; not part of the submission
+.tools/
 
 # Logs and temp output
 *.log.tmp

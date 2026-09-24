@@ -10,14 +10,34 @@
 # Assertions are made against the tool-call trace (which skill ran, with what arguments,
 # whether the engine was cuDF) rather than against prose, because prose always reads well.
 #
-# Usage: bash run_criteria_tests.sh [--only CASE_SUBSTRING]
+# Portable: paths are derived from this script's own location, so the suite runs from any
+# checkout. Override the data file with DEMO_DATA, and the interpreter with CONDA_ENV.
+#
+# Usage:
+#   bash run_criteria_tests.sh [--only CASE_SUBSTRING]
+#   DEMO_DATA=/path/to/data.csv bash run_criteria_tests.sh
 
-source /home/Developer/agent/env_stepfun.sh
-source /home/Developer/miniforge3/etc/profile.d/conda.sh
-conda activate rapids-cudf
-cd /home/Developer/agent || exit 1
+# Resolve this script's directory, following symlinks, so no absolute path is assumed.
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+AGENT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+cd "$AGENT_DIR" || exit 1
 
-DATA="/home/Developer/sales_demo.csv"
+# Optional environment setup, if present (provides STEPFUN_API_KEY in a non-interactive shell).
+[ -f "$AGENT_DIR/env_stepfun.sh" ] && source "$AGENT_DIR/env_stepfun.sh"
+
+# Optional conda activation: set CONDA_ENV to enable, or export the interpreter directly.
+if [ -n "${CONDA_ENV:-}" ]; then
+  # shellcheck disable=SC1091
+  [ -f "$(conda info --base 2>/dev/null)/etc/profile.d/conda.sh" ] && \
+    source "$(conda info --base)/etc/profile.d/conda.sh" && conda activate "$CONDA_ENV"
+fi
+
+DATA="${DEMO_DATA:-$AGENT_DIR/../benchmark/demo/sales_demo.csv}"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
@@ -98,9 +118,9 @@ run_case "corr-selection" \
   "$DATA 里哪些数值列之间相关性最强" \
   "operation.: .corr"
 
-# (4) missing file must be reported, not crash
+# (4) missing file must be reported, not crash (path derived so it works anywhere)
 run_case "missing-file" \
-  "分析一下 /home/Developer/this_file_does_not_exist.csv" \
+  "分析一下 $AGENT_DIR/this_file_does_not_exist.csv" \
   "不存在|not exist"
 
 # (4) wrong column name must be reported

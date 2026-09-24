@@ -26,7 +26,7 @@ benchmark/
 ├── gb10_run.log                    # Raw benchmark output
 └── smoke/gb10_smoke_test.log       # Raw log: 59 checks passing on GB10 (cuDF 25.10)
 
-.tools/gb10.ps1                     # Helper to drive GB10 over SSH from Windows without prompts
+.tools/gb10.ps1                     # Local dev helper for driving GB10 over SSH (not tracked)
 README.md                           # This file
 skill.md                            # Short entry-point note
 ```
@@ -37,21 +37,6 @@ skill.md                            # Short entry-point note
 > To make DSH pick it up, copy (or mount) `skills/cudf-analytics/` into one of those
 > locations. If your agent registers tools via `skills.py` function-calling instead,
 > no such step is needed.
-
-### About `.tools/gb10.ps1`
-
-The `ssh` shipped with Windows cannot accept a password non-interactively, so this helper
-drives GB10 through SSH.NET:
-
-```powershell
-$env:GB10_PW='<password>'
-.\.tools\gb10.ps1 -Cmd "nvidia-smi"                    # run a remote command
-.\.tools\gb10.ps1 -Put "<local>" -To "<remote>"         # upload a file
-```
-
-The password is read only from an environment variable — never written to disk, never echoed.
-GB10 currently uses **password authentication**; switching to public-key auth (append this
-machine's `~/.ssh/id_ed25519.pub` to `~/.ssh/authorized_keys` on GB10) is safer and simpler.
 
 The skill's `description` field is the trigger. It is written as "what the user says /
 when this must be called", and it explicitly lists the cases that should **not** trigger
@@ -371,24 +356,51 @@ immediately. Without it the demo takes ~128 s; with it, ~76 s.
 
 ---
 
-## Reproducing the whole thing on GB10
+## Reproducing it
+
+### Anywhere, no GPU required (reviewers: start here)
+
+The GPU path needs a GB10, but the whole pipeline is designed to run without one — the engine
+falls back to pandas automatically and reports `engine: "pandas"` plus the reason. So the
+correctness of the analysis, the agent loop, and the error handling can all be verified on an
+ordinary machine:
 
 ```bash
-ssh -p 6060 Developer@106.13.186.155
-source ~/.bashrc                        # provides STEPFUN_API_KEY
-conda activate rapids-cudf
+pip install -r requirements.txt
+python skills/cudf-analytics/scripts/smoke_test.py     # 59 assertions, CPU path
+python skills/cudf-analytics/scripts/gpu_analytics.py --input <any.csv> --op auto
+```
 
-# 1) Skill self-check (59 assertions, GPU vs CPU cross-validation)
-cd ~/cudf-analytics-skill && python scripts/smoke_test.py
+Expect `"accelerated": false` and `"fallback_reason"` explaining that cuDF is unavailable.
+**No speedup claims are made on this path** — that is the point of the honest reporting.
+
+The agent loop additionally needs a StepFun API key and a data file:
+
+```bash
+export STEPFUN_API_KEY=<your key>
+cd agent && python agent_main.py --ask "分析 /path/to/data.csv 的异常值"
+```
+
+### On a GB10 (full GPU path)
+
+Substitute your own host, port and user:
+
+```bash
+ssh -p <port> <user>@<host>
+source ~/.bashrc                        # provides STEPFUN_API_KEY
+conda activate rapids-cudf              # cuDF 25.10 / pandas 2.3.3 / py3.11
+
+# 1) Skill self-check: 59 assertions, including GPU-vs-CPU numerical agreement
+cd skills/cudf-analytics && python scripts/smoke_test.py
 
 # 2) The agent, one question
-cd ~/agent && python agent_main.py --ask "分析一下 /home/Developer/sales_demo_small.csv 的异常值"
+cd ../../agent && python agent_main.py --ask "分析 /path/to/data.csv 的异常值"
 
-# 3) The scripted demo (7 steps, ~63 s)
-cd ~/agent && python demo_script.py
+# 3) The scripted demo (7 steps, ~76 s, each step shows its measured speedup)
+python demo_script.py --prewarm && python demo_script.py
 
-# 4) The criteria suite (7 cases)
-cd ~/agent && bash run_criteria_tests.sh
+# 4) The judging-criteria suite (7 cases)
+bash run_criteria_tests.sh
 ```
 
 Demo datasets on GB10: `sales_demo_small.csv` (5M rows, 572 MB — use this for live demos) and

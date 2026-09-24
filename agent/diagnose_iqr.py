@@ -5,10 +5,11 @@ and therefore the outlier count. pandas defaults to linear interpolation; if the
 does not request linear explicitly, it may use nearest, giving a different Q1/Q3.
 """
 
+import os
 import cudf
 import pandas as pd
 
-PATH = "/home/Developer/power_clean.csv"
+PATH = os.environ.get("DIAG_DATA", "power_clean.csv")
 COL = "Voltage"
 
 pdf = pd.read_csv(PATH, usecols=[COL])

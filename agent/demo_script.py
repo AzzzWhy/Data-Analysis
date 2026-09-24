@@ -35,7 +35,12 @@ from openai import OpenAI
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from agent_main import Agent, MODEL_NAME, build_client  # noqa: E402
 
-DATA = os.environ.get("DEMO_DATA", "/home/Developer/sales_demo.csv")
+_HERE = os.path.dirname(os.path.abspath(__file__))
+
+# Dataset for the demo. Defaults to a "demo" directory next to this checkout; override with
+# DEMO_DATA or --data. Kept free of machine-specific absolute paths so the script is portable.
+_default_data = os.path.join(os.path.dirname(_HERE), "benchmark", "demo", "sales_demo.csv")
+DATA = os.environ.get("DEMO_DATA", _default_data)
 
 # (title, what the audience should notice, question)
 STEPS = [
@@ -68,7 +73,7 @@ STEPS = [
     (
         "⑥ 异常路径：文件不存在",
         "健壮性：不崩溃、不乱猜，而是明确报告问题（对应评审标准④）",
-        "分析一下 /home/Developer/no_such_file_xyz.csv",
+        "分析一下 {missing_file}",
     ),
     (
         "⑦ 不该调用工具时就不调用",
@@ -127,7 +132,8 @@ def main() -> int:
 
     if args.list:
         for i, (title, notice, q) in enumerate(STEPS, 1):
-            print(f"{i}. {title}\n   question: {q.format(data=args.data)}\n"
+            print(f"{i}. {title}\n"
+                  f"   question: {q.format(data=args.data, missing_file='<nonexistent>.csv')}\n"
                   f"   watch for: {notice}")
         return 0
 
@@ -154,7 +160,10 @@ def main() -> int:
 
     for step_no, (title, notice, question) in enumerate(selected, 1):
         banner(f"{title}\n【看这里】{notice}", "-")
-        question = question.format(data=data_path)
+        question = question.format(
+            data=data_path,
+            missing_file=os.path.join(_HERE, "no_such_file_xyz.csv"),
+        )
         print(f"用户: {question}\n")
         started = time.perf_counter()
         try:

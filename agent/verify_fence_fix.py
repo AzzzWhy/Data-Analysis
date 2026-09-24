@@ -6,12 +6,13 @@ disagreement caused by 4e-14 of floating-point difference in the IQR fence).
 After the fix both engines must report the same counts, and any values sitting on a fence
 must be reported in `fence_ties_excluded` rather than silently changing the total.
 """
+import os
 import json
 import subprocess
 import sys
 
-ENGINE = "/home/Developer/cudf-analytics-skill/scripts/gpu_analytics.py"
-PATH = "/home/Developer/power_clean.csv"
+ENGINE = os.environ.get("GPU_ANALYTICS_SCRIPT") or "gpu_analytics.py"
+PATH = os.environ.get("DIAG_DATA", "power_clean.csv")
 
 COLS = ["Global_active_power", "Global_reactive_power", "Voltage", "Global_intensity",
         "Sub_metering_1", "Sub_metering_2", "Sub_metering_3"]

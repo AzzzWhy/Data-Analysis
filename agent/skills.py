@@ -38,6 +38,15 @@ _ENGINE_CANDIDATES = [
 ]
 
 
+def find_engine() -> str:
+    """Resolve the analytics engine path, or raise with somewhere useful to look.
+
+    Public entry point: other scripts (e.g. gpu_vs_cpu_demo.py) reuse this rather than
+    re-implementing path discovery, so a layout change only has to be handled once.
+    """
+    return _find_engine()
+
+
 def _find_engine() -> str:
     """Resolve the analytics engine path, or raise with somewhere useful to look."""
     env = os.environ.get("GPU_ANALYTICS_SCRIPT")
@@ -82,7 +91,7 @@ skill_definitions = [
                 "properties": {
                     "file_path": {
                         "type": "string",
-                        "description": "服务器上数据文件的绝对或相对路径，例如 /home/Developer/power_clean.csv"
+                        "description": "服务器上数据文件的绝对或相对路径，例如 /data/sales.csv"
                     },
                     "operation": {
                         "type": "string",
@@ -136,7 +145,7 @@ skill_definitions = [
                 "properties": {
                     "directory": {
                         "type": "string",
-                        "description": "要搜索的目录，默认 /home/Developer"
+                        "description": "要搜索的目录，默认当前工作目录"
                     }
                 },
                 "required": []
@@ -530,10 +539,15 @@ def analyze_dataset(file_path: str, operation: str, by: str = None, agg: str = N
         return _err(f"{type(exc).__name__}: {exc}")
 
 
-def list_datasets(directory: str = "/home/Developer") -> str:
-    """List analysable data files with sizes, so the agent can pick a target."""
+def list_datasets(directory: str = None) -> str:
+    """List analysable data files with sizes, so the agent can pick a target.
+
+    Defaults to $DEMO_DATA_DIR, then the current working directory. Deliberately not a
+    machine-specific absolute path, so the skill works on any checkout.
+    """
     try:
-        directory = os.path.expanduser(str(directory or "/home/Developer"))
+        default_dir = os.environ.get("DEMO_DATA_DIR") or os.getcwd()
+        directory = os.path.expanduser(str(directory or default_dir))
         if not os.path.isdir(directory):
             return _err(f"目录不存在: {directory}")
         exts = {".csv", ".tsv", ".parquet", ".pq", ".jsonl", ".json", ".xlsx", ".xls"}

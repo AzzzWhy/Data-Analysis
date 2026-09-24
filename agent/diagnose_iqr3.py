@@ -3,10 +3,11 @@
 If the answer is "a non-trivial number", then an IQR outlier count is not reproducible
 across engines, and the fix is a relative tolerance on the fence comparison.
 """
+import os
 import cudf
 import pandas as pd
 
-PATH = "/home/Developer/power_clean.csv"
+PATH = os.environ.get("DIAG_DATA", "power_clean.csv")
 
 COLS = ["Global_active_power", "Global_reactive_power", "Voltage", "Global_intensity",
         "Sub_metering_1", "Sub_metering_2", "Sub_metering_3"]

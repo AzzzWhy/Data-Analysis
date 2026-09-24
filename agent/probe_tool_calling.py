@@ -40,7 +40,7 @@ for model in [os.environ.get("STEPFUN_MODEL", "step-3.7-flash")]:
         r = client.chat.completions.create(
             model=model,
             messages=[{"role": "user",
-                       "content": "帮我分析 /home/Developer/power_clean.csv 里有没有异常值"}],
+                       "content": "帮我分析 /data/sales.csv 里有没有异常值"}],
             tools=TOOLS,
             tool_choice="auto",
         )

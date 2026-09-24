@@ -12,8 +12,8 @@ story lives: the read stage dominates end-to-end time, so an end-to-end figure u
 the GPU's effect on computation and overstates it as "GPU acceleration" of everything.
 
 Run:
-    python gpu_vs_cpu_demo.py                                  # defaults to the 20M-row file
-    python gpu_vs_cpu_demo.py --data /home/Developer/sales_demo.csv --rows-limit 3
+    python gpu_vs_cpu_demo.py                                  # defaults to DEMO_DATA
+    python gpu_vs_cpu_demo.py --data /path/to/data.csv --repeats 2
 """
 
 from __future__ import annotations
@@ -25,10 +25,22 @@ import subprocess
 import sys
 import time
 
-ENGINE = os.environ.get(
-    "GPU_ANALYTICS_SCRIPT",
-    "/home/Developer/cudf-analytics-skill/scripts/gpu_analytics.py")
-DEFAULT_DATA = "/home/Developer/sales_demo.csv"
+# Reuse the skill's own engine resolution so there is one place that knows the layout.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import skills as _skills
+
+    ENGINE = _skills.find_engine()
+except Exception:
+    # Standalone fallback: keep working even if skills.py cannot be imported.
+    ENGINE = os.environ.get(
+        "GPU_ANALYTICS_SCRIPT",
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                     "skills", "cudf-analytics", "scripts", "gpu_analytics.py"))
+DEFAULT_DATA = os.environ.get(
+    "DEMO_DATA",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                 "benchmark", "demo", "sales_demo.csv"))
 
 
 def banner(text: str, char: str = "=") -> None:

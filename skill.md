@@ -48,15 +48,19 @@ users ask in either language.
 - The agent application (tool-calling loop, scripted demo, 7-case criteria suite) lives in
   `agent/`; see "The agent application" in `README.md`. `run_criteria_tests.sh` passes 7/7.
 
-## Quick start for the agent (on GB10)
+## Quick start for the agent
 
 ```bash
-ssh -p 6060 Developer@106.13.186.155
+# On the GB10 (substitute your own host/port/user)
+ssh -p <port> <user>@<host>
 source ~/.bashrc                 # provides STEPFUN_API_KEY
 conda activate rapids-cudf
-cd ~/agent
+cd agent
 
-python agent_main.py --ask "分析一下 /home/Developer/sales_demo_small.csv 的异常值"
-python demo_script.py            # scripted 7-step demo, ~63 s
-bash run_criteria_tests.sh       # 7 criteria cases
+python agent_main.py --ask "分析 /path/to/data.csv 的异常值"
+python demo_script.py --prewarm && python demo_script.py   # 7-step demo, ~76 s
+bash run_criteria_tests.sh       # 7 judging-criteria cases
 ```
+
+Without a GPU the same code runs on pandas and reports `engine="pandas"` honestly; see the
+"Reproducing it" section of `README.md` for the no-GPU path.

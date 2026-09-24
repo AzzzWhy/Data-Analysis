@@ -5,11 +5,12 @@ from scratch with pandas (an implementation independent of the cuDF path that pr
 the agent's numbers) and prints both. If they disagree, the agent's answer was wrong and
 that is a serious problem for a tool whose whole purpose is accurate statistics.
 """
+import os
 import sys
 
 import pandas as pd
 
-PATH = "/home/Developer/power_clean.csv"
+PATH = os.environ.get("DIAG_DATA", "power_clean.csv")
 
 df = pd.read_csv(PATH)
 print(f"rows read: {len(df):,}")
