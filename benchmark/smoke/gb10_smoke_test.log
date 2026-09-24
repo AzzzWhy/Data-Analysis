@@ -1,0 +1,84 @@
+fixture: /tmp/cudf-analytics-smoke-uhypxv1j/fixture.csv (1.42 MB, 20,000 rows)
+
+engine detection
+  [PASS] profile exits 0
+  [PASS] engine reported
+  [PASS] accelerated flag consistent with engine
+       -> engine=cudf gpu=NVIDIA GB10 rows=None version=25.10.00
+
+profile
+  [PASS] profile data nested under its op key
+  [PASS] profile reports all rows
+  [PASS] numeric columns detected
+  [PASS] string column excluded from numeric
+  [PASS] null counts present for sparse column
+  [PASS] preview returned
+
+summary
+  [PASS] summary exits 0
+  [PASS] summary has revenue stats
+  [PASS] count excludes nulls
+  [PASS] mean matches independently computed pandas value
+  [PASS] median matches independent value
+  [PASS] q1/q3 match independent values
+  [PASS] quartiles ordered q1<=median<=q3
+  [PASS] min<=max
+  [PASS] sparse column count matches independent value
+
+groupby
+  [PASS] groupby exits 0
+  [PASS] all groups returned
+  [PASS] groupby rows present
+  [PASS] aggregate columns flattened
+  [PASS] sorted descending by first metric
+  [PASS] mean <= sum for every group
+
+groupby (median + nunique, the agg aliases cuDF is strict about)
+  [PASS] median/nunique groupby exits 0
+  [PASS] median column present
+  [PASS] nunique column present
+  [PASS] all groups returned
+  [PASS] per-group median matches independent value
+  [PASS] per-group nunique matches independent value
+
+corr
+  [PASS] corr exits 0
+  [PASS] matrix is square over numeric cols
+  [PASS] diagonal is 1.0
+  [PASS] symmetric
+  [PASS] revenue/cost correlation matches independent value
+  [PASS] pairs ranked by |corr|
+
+outliers
+  [PASS] outliers exits 0
+  [PASS] bounds computed
+  [PASS] bounds ordered
+  [PASS] outlier count is a small share
+  [PASS] examples returned
+  [PASS] planted outlier detected in quantity
+  [PASS] planted extreme value present in quantity examples
+  [PASS] only the requested numeric columns were scanned
+
+auto (single-call path the agent uses)
+  [PASS] auto exits 0
+  [PASS] auto bundles profile+summary+outliers
+  [PASS] auto includes timing
+
+error handling
+  [PASS] missing file exits 2
+  [PASS] missing file returns error payload
+  [PASS] groupby without --by exits 2
+  [PASS] bad agg func exits 2
+  [PASS] bad agg func explains the error
+  [PASS] non-numeric --columns exits 2
+
+--force-cpu parity (CPU numbers must match the default path)
+  [PASS] force-cpu exits 0
+  [PASS] force-cpu reports pandas
+  [PASS] CPU path mean matches independent value
+  [PASS] GPU/CPU means agree
+  [PASS] GPU/CPU medians agree
+  [PASS] GPU/CPU max agree
+
+============================================================
+ALL CHECKS PASSED

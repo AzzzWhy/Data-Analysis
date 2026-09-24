@@ -1,0 +1,23 @@
+# Runtime dependencies.
+#
+# Two environments are involved, and they have different requirements.
+
+# ---- Agent side (the application) -------------------------------------------------
+# Needs the LLM client plus pandas. cuDF is optional: without it the skill falls back to
+# pandas automatically and reports engine="pandas" instead of claiming GPU acceleration.
+openai>=1.0
+pandas>=2.0
+
+# ---- Skill side (the GPU engine, on GB10) -----------------------------------------
+# For real GPU acceleration install RAPIDS cuDF instead of the line below. On GB10 that is
+# the `rapids-cudf` conda environment:
+#
+#     conda activate rapids-cudf        # cuDF 25.10, pandas 2.3.3, numpy 2.2.6, py3.11
+#
+# cuDF cannot be installed with pip on aarch64/GB10; use the RAPIDS conda channel.
+# Everything below is needed by the plain-pandas fallback path and by the test scripts:
+numpy>=1.24
+
+# ---- Optional, for reading non-CSV formats and richer benchmarks ------------------
+# pyarrow      # Parquet / JSONL
+# openpyxl     # Excel (.xlsx)

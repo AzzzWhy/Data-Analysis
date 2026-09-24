@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# GPU/CPU comparison cache: machine-specific timings, useless in version control
+.gpu_vs_cpu_cache.json
+agent/.gpu_vs_cpu_cache.json
+
+# Scratch / data downloads
+.dl/
+*.zip
+benchmark_data/
+attribution_data/
+ceiling_data/
+
+# SSH.NET dependencies for the GB10 helper: ~15 MB of third-party DLLs.
+# Re-fetch them rather than vendoring binaries (see README).
+.tools/lib/
+.tools/bc/
+.tools/sshnet/
+
+# Logs and temp output
+*.log.tmp
+nohup.out
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini

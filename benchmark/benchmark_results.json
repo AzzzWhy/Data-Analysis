@@ -1,0 +1,206 @@
+{
+  "generated_at": "2026-09-24T12:59:54",
+  "methodology": {
+    "baseline": "pandas 2.3.3, default settings (single-threaded C ops)",
+    "accelerated": "cuDF 25.10.00 on NVIDIA GB10",
+    "repeats": 3,
+    "statistic": "median of repeats",
+    "sync": "device synchronized before every timed region",
+    "fairness": "identical pipeline, identical file, page cache warmed before timing"
+  },
+  "host": {
+    "platform": "Linux-6.14.0-1015-nvidia-aarch64-with-glibc2.39",
+    "machine": "aarch64",
+    "python": "3.11.16",
+    "logical_cores": 20,
+    "total_memory_gb": null,
+    "gpu": "NVIDIA GB10",
+    "cudf": "25.10.00",
+    "pandas": "2.3.3"
+  },
+  "results": [
+    {
+      "rows": 3000000,
+      "label": "3m",
+      "file": "synthetic_3000000.csv",
+      "file_mb": 563.9,
+      "cpu_steps": {
+        "read": 1.6732,
+        "mean": 0.0027,
+        "groupby": 0.0561,
+        "corr": 0.0759,
+        "quantile": 0.0367,
+        "total": 1.8452
+      },
+      "gpu_steps": {
+        "read": 0.2016,
+        "mean": 0.0011,
+        "groupby": 0.0068,
+        "corr": 0.0401,
+        "quantile": 0.0193,
+        "total": 0.269
+      },
+      "speedup": {
+        "read": 8.3,
+        "mean": 2.45,
+        "groupby": 8.25,
+        "corr": 1.89,
+        "quantile": 1.9,
+        "total": 6.86
+      },
+      "check": {
+        "pandas": {
+          "rows": 3000000,
+          "corr_revenue_cost": -0.000165,
+          "revenue_p99": 10476.517594,
+          "mean_revenue": 1074.191746
+        },
+        "cudf": {
+          "rows": 3000000,
+          "corr_revenue_cost": -0.000165,
+          "revenue_p99": 10476.517594,
+          "mean_revenue": 1074.191746
+        }
+      },
+      "agreement": {
+        "mean_revenue": {
+          "pandas": 1074.191746,
+          "cudf": 1074.191746,
+          "rel_diff": 0.0
+        },
+        "corr_revenue_cost": {
+          "pandas": -0.000165,
+          "cudf": -0.000165,
+          "rel_diff": 0.0
+        },
+        "revenue_p99": {
+          "pandas": 10476.517594,
+          "cudf": 10476.517594,
+          "rel_diff": 0.0
+        }
+      }
+    },
+    {
+      "rows": 10000000,
+      "label": "10m",
+      "file": "synthetic_10000000.csv",
+      "file_mb": 1882.4,
+      "cpu_steps": {
+        "read": 5.8425,
+        "mean": 0.0118,
+        "groupby": 0.2175,
+        "corr": 0.2615,
+        "quantile": 0.1266,
+        "total": 6.4591
+      },
+      "gpu_steps": {
+        "read": 0.7037,
+        "mean": 0.002,
+        "groupby": 0.0183,
+        "corr": 0.1188,
+        "quantile": 0.0593,
+        "total": 0.9022
+      },
+      "speedup": {
+        "read": 8.3,
+        "mean": 5.9,
+        "groupby": 11.89,
+        "corr": 2.2,
+        "quantile": 2.13,
+        "total": 7.16
+      },
+      "check": {
+        "pandas": {
+          "rows": 10000000,
+          "corr_revenue_cost": -8.7e-05,
+          "revenue_p99": 10441.816833,
+          "mean_revenue": 1073.607831
+        },
+        "cudf": {
+          "rows": 10000000,
+          "corr_revenue_cost": -8.7e-05,
+          "revenue_p99": 10441.816833,
+          "mean_revenue": 1073.607831
+        }
+      },
+      "agreement": {
+        "mean_revenue": {
+          "pandas": 1073.607831,
+          "cudf": 1073.607831,
+          "rel_diff": 0.0
+        },
+        "corr_revenue_cost": {
+          "pandas": -8.7e-05,
+          "cudf": -8.7e-05,
+          "rel_diff": 0.0
+        },
+        "revenue_p99": {
+          "pandas": 10441.816833,
+          "cudf": 10441.816833,
+          "rel_diff": 0.0
+        }
+      }
+    },
+    {
+      "rows": 30000000,
+      "label": "30m",
+      "file": "synthetic_30000000.csv",
+      "file_mb": 5669.5,
+      "cpu_steps": {
+        "read": 17.4644,
+        "mean": 0.0272,
+        "groupby": 0.6269,
+        "corr": 0.7641,
+        "quantile": 0.4046,
+        "total": 19.2857
+      },
+      "gpu_steps": {
+        "read": 2.4197,
+        "mean": 0.0045,
+        "groupby": 0.0504,
+        "corr": 0.3364,
+        "quantile": 0.1754,
+        "total": 2.9882
+      },
+      "speedup": {
+        "read": 7.22,
+        "mean": 6.04,
+        "groupby": 12.44,
+        "corr": 2.27,
+        "quantile": 2.31,
+        "total": 6.45
+      },
+      "check": {
+        "pandas": {
+          "rows": 30000000,
+          "corr_revenue_cost": 0.000255,
+          "revenue_p99": 10486.945676,
+          "mean_revenue": 1075.430922
+        },
+        "cudf": {
+          "rows": 30000000,
+          "corr_revenue_cost": 0.000255,
+          "revenue_p99": 10486.945676,
+          "mean_revenue": 1075.430922
+        }
+      },
+      "agreement": {
+        "mean_revenue": {
+          "pandas": 1075.430922,
+          "cudf": 1075.430922,
+          "rel_diff": 0.0
+        },
+        "corr_revenue_cost": {
+          "pandas": 0.000255,
+          "cudf": 0.000255,
+          "rel_diff": 0.0
+        },
+        "revenue_p99": {
+          "pandas": 10486.945676,
+          "cudf": 10486.945676,
+          "rel_diff": 0.0
+        }
+      }
+    }
+  ]
+}
