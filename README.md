@@ -1,407 +1,382 @@
-# Data Analysis Agent Skill (cuDF-accelerated) — NVIDIA DGX Spark Hackathon
+<div align="center">
 
-A Skill package that closes the loop from **agent question → skill trigger → GPU compute →
-delivered result**. It performs large-scale tabular data analysis with **cuDF (RAPIDS)** on
-**NVIDIA GB10 / DGX Spark**, and **falls back to pandas automatically** when no GPU or no
-cuDF is available, so it produces a result in any environment.
+# Data-Analysis Agent Skill
 
-The headline result, measured on real hardware, is in
-[Measured on GB10](#measured-on-gb10) below.
+### 让大模型在 GB10 上用 GPU 做**真实**的全量数据分析
 
----
+*第三届 NVIDIA DGX Spark 黑客松 · Agent Skills 开发挑战赛*
 
-## Layout
+<br>
 
-```
-skills/cudf-analytics/
-├── SKILL.md                        # The skill: YAML frontmatter + trigger conditions + workflow
-└── scripts/
-    ├── gpu_analytics.py            # Core engine: cuDF analysis + pandas fallback, emits JSON
-    ├── benchmark_cpu_vs_gpu.py     # CPU vs GPU timing, produces the submission tables
-    └── smoke_test.py               # 59 self-checks against independently computed truth
+<img alt="platform" src="https://img.shields.io/badge/platform-NVIDIA%20GB10-76B900?style=for-the-badge&logo=nvidia&logoColor=white">
+<img alt="engine" src="https://img.shields.io/badge/engine-RAPIDS%20cuDF-7400B8?style=for-the-badge">
+<img alt="llm" src="https://img.shields.io/badge/LLM-step--3.7--flash-4B8BBE?style=for-the-badge">
+<img alt="license" src="https://img.shields.io/badge/license-MIT-blue?style=for-the-badge">
 
-benchmark/
-├── benchmark_results.md            # The GB10 comparison table (paste straight into a submission)
-├── benchmark_results.json          # Same, with full conditions and precision deltas
-├── gb10_run.log                    # Raw benchmark output
-└── smoke/gb10_smoke_test.log       # Raw log: 59 checks passing on GB10 (cuDF 25.10)
+<br><br>
 
-.tools/gb10.ps1                     # Local dev helper for driving GB10 over SSH (not tracked)
-README.md                           # This file
-skill.md                            # Short entry-point note
-```
+**数据永远不进模型上下文。**
+模型只决定「算什么」,统计量由 GPU 在**全量数据**上算出来。
 
-> **Discovery note:** DSH auto-discovers skills only under `.dsh/skills`, `.agents/skills`,
-> or `$DSH_HOME/skills`, and it recognises only `<name>/SKILL.md` at one level deep.
-> Therefore `skills/cudf-analytics/SKILL.md` is **not** loaded automatically by DSH.
-> To make DSH pick it up, copy (or mount) `skills/cudf-analytics/` into one of those
-> locations. If your agent registers tools via `skills.py` function-calling instead,
-> no such step is needed.
+<br>
 
-The skill's `description` field is the trigger. It is written as "what the user says /
-when this must be called", and it explicitly lists the cases that should **not** trigger
-(charting, model training, querying a database) to avoid false positives.
+|  |  |
+| :--- | :--- |
+| 🔍 **自主决策** | 自己判断该调哪个 Skill、参数怎么填,不需要人指定 |
+| ⚡ **GPU 加速** | cuDF 全量计算,20M 行分组聚合 **3.93×**、相关性 **3.69×** |
+| 📊 **当场证明** | 每次回答都附上**这一问实测**的 GPU/CPU 耗时对比 |
+| 🛡️ **诚实降级** | 没有 GPU 就自动回退 pandas,并如实声明 `engine="pandas"` |
+| ✅ **可复核** | 59 项自检 + 7 项评审用例 + 每个数字独立复算 |
+
+</div>
 
 ---
 
-## Capabilities
+## 它解决什么问题
 
-| Operation | Description |
-| --- | --- |
-| `profile` | row/column counts, dtypes, null counts, memory use, first N rows |
-| `summary` | per-column count/mean/std/min/Q1/median/Q3/max |
-| `groupby` | grouped aggregation supporting `count,size,sum,mean,min,max,std,median,nunique,first,last` |
-| `corr` | correlation matrix (pearson / kendall / spearman) |
-| `outliers` | IQR outlier detection (`Q1-1.5IQR` … `Q3+1.5IQR`) plus the offending rows |
-| `auto` | profile + summary + outliers in a single call |
+大模型直接读 CSV 做分析有三个死穴:**读不进**(大文件超出上下文)、**算不准**(靠抽样猜)、**算不快**(纯 CPU)。
 
-Supported formats: CSV / Parquet / TSV / JSONL / JSON / Excel.
+这个 Agent 的做法是把两件事拆开:
+
+```
+        用户用中文提问
+              │
+              ▼
+   ┌──────────────────────┐
+   │  大模型（只做决策）    │   决定：调哪个 Skill？参数怎么填？
+   │  step-3.7-flash      │   看不到数据本身
+   └──────────┬───────────┘
+              │  function call
+              ▼
+   ┌──────────────────────┐
+   │  Skill（在本机执行）   │   cuDF 全量计算，不采样
+   │  analyze_dataset     │   同时实测 CPU 对照
+   └──────────┬───────────┘
+              │  真实统计量（JSON）
+              ▼
+   ┌──────────────────────┐
+   │  大模型（只做表达）    │   中文结论 + 实测加速比
+   └──────────────────────┘
+```
+
+**数据不经过模型,所以数据量不受模型限制。** 20,000,000 行、3 GB 的 CSV,模型只需要看到几十行统计结果。
 
 ---
 
-## Running it on GB10 (three steps)
+## 现场实录
 
-```bash
-conda activate rapids-cudf
-cd <this directory>
+真实运行输出(`python demo_script.py`,2000 万行 / 3.04 GB):
 
-# 1) Self-check: every operation is correct, and GPU and CPU agree numerically
-python skills/cudf-analytics/scripts/smoke_test.py
+```console
+用户: 按 region 统计 sales_demo.csv 的 revenue 总和与均值，各取前5
 
-# 2) A real dataset: --op auto returns the summary and outliers in one call
-python skills/cudf-analytics/scripts/gpu_analytics.py --input /path/to/data.csv --op auto
+  [round 1] -> analyze_dataset({"file_path": "sales_demo.csv",
+                                "operation": "groupby", "by": "region",
+                                "agg": "revenue:sum,mean", "top_k": 5})
+      OK  engine=cudf  rows=20,000,000  2.63s  | GPU 2.63s vs CPU 10.22s = 3.88x
+--- Agent 回答 ---
+## Revenue 总和排名（Top 5）
+| 排名 | 地区  | 总收入            |
+|------|-------|-------------------|
+| 1    | LATAM | 4,300,004,248.14  |
+| 2    | AMER  | 4,299,776,626.08  |
+| 3    | APAC  | 4,298,033,716.38  |
+| 4    | MEA   | 4,294,925,776.77  |
+| 5    | EMEA  | 4,286,931,276.58  |
 
-# 3) Produce the CPU-vs-GPU comparison for the submission
-python skills/cudf-analytics/scripts/benchmark_cpu_vs_gpu.py --rows 1m 5m 20m --repeats 3
+## 运行情况
+本次分析在 GPU（NVIDIA GB10）上通过 cuDF 完成，全量 20,000,000 行耗时 2.63 秒；
+同一计算在 CPU pandas 上耗时 10.22 秒，GPU 快 3.88 倍。
+> 注意：端到端耗时包含 CSV 读取，读取阶段两引擎都在用多核并行；pandas 基线默认
+> 单线程，因此该倍数并不完全等同于纯计算阶段的 GPU 优势。
 ```
 
-Step 3 writes `benchmark_results.json` and `benchmark_results.md`, both ready to paste into
-a submission.
+注意三件事:**没有给操作名**(模型自己选的 `groupby`)、**扫描了全量 2000 万行**、**加速比是这一问当场测出来的**。
 
-### Common invocations
+---
 
-```bash
-# Group by region, return the top 10 groups
-gpu_analytics.py --input sales.csv --op groupby --by region \
-  --agg "revenue:sum,mean|quantity:max" --top-k 10
+## 对照评审标准
 
-# Analyze selected columns only; restrict what is read to save memory
-gpu_analytics.py --input big.csv --op outliers --columns revenue,cost --usecols row_id,region,revenue,cost
+| 评审维度 | 本项目的实现 | 可验证的证据 |
+| :--- | :--- | :--- |
+| **① 技能调用能力**<br><sub>自主判断何时调用 + 参数正确</sub> | 模型从 2 个 Skill 中自主选择;未给文件时先调 `list_datasets` 发现数据;概念性问题**不调**工具;列名报错后自动改调 `profile` 学真实列名再重试 | `run_criteria_tests.sh` **7/7 通过**,断言打在工具调用轨迹上而非回答文本上 |
+| **② 任务完成度**<br><sub>自然语言 → 真实结果</sub> | 6 种操作全部返回真实统计量;回答里给中文结论、排名、表格与关键发现 | `smoke_test.py` **59 项断言**;`verify_*.py` 独立复算 |
+| **③ 创新性** | 见下方「创新点在哪」 | 加速比在对话内当场测量 |
+| **④ 代码可用性**<br><sub>可部署 / 健壮 / 异常处理</sub> | 引擎自动降级;`analyze_dataset` **永不抛异常**;无 GPU、文件不存在、列名错误、中文列名都能优雅处理并提供可执行的下一步 | 无 GPU 路径可跑;**第⑥步**演示文件不存在;`run_criteria_tests.sh` 覆盖 3 类异常输入 |
+| **⑤ 演示效果**<br><sub>端到端对话流畅</sub> | 7 步脚本化演示,**76 秒**,每步显示加速比;`--prewarm` 预热保证现场零等待 | `demo_script.py` |
 
-# Force the CPU path, to compare against the GPU result
-gpu_analytics.py --input sales.csv --op summary --force-cpu
+### 创新点在哪
+
+坦白说,"用 cuDF 加速数据分析"本身门槛极低。所以我们把创新放在**可被验证的诚实性**上:
+
+**① 加速比在对话内当场测量,而不是引用一张事先准备好的表。**
+评委看到的不是"我曾在别处测到 6.45×",而是"这一问、这份文件、这条命令,GPU 2.63 秒,CPU 10.22 秒"。
+
+**② 主动报告对自己不利的数据。**
+归因实验证明端到端加速里**只有约 3× 来自 GPU 计算**,其余主要是并行 CSV 解析(polars 也能做到);pandas 基线只用 1 核而机器有 20 核。**这些限定条件写在 README 和系统提示词里,由模型主动向用户复述。**
+
+**③ 真实数据上发现的正确性 bug。**
+见下方「只在真实数据上暴露的 bug」——两个引擎对同一问题给出**不同答案**,根因是 4e-14 的浮点差。
+
+---
+
+## 实测数据
+
+### 环境
+
+| 项 | 值 |
+| :--- | :--- |
+| GPU | NVIDIA GB10 |
+| 驱动 | 580.126.09 |
+| 架构 | aarch64 · Linux 6.14.0-1015-nvidia |
+| 内存 | 121 GB(可用 117 GB) |
+| CPU | 20 逻辑核 |
+| cuDF | 25.10.00 |
+| pandas | 2.3.3(基线) |
+| Python | 3.11.16 |
+
+### GPU vs CPU(2000 万行 / 3.04 GB,同文件同命令)
+
+| 操作 | GPU | CPU | 加速比 |
+| :--- | ---: | ---: | ---: |
+| `groupby` 分组聚合 | 2.60 s | 10.22 s | **3.93×** |
+| `corr` 相关性矩阵 | 3.13 s | 11.56 s | **3.69×** |
+| `outliers` IQR 异常值 | 3.37 s | 10.91 s | **3.24×** |
+| `summary` 分位数/标准差 | 5.28 s | 16.16 s | **2.62×** |
+| `auto` 综合概览 | 9.45 s | 20.80 s | **2.20×** |
+
+### 多规模端到端基准
+
+| 规模 | 文件 | 读取 | groupby | 端到端 |
+| :--- | ---: | ---: | ---: | ---: |
+| 3M | 564 MB | 8.30× | 8.25× | 6.86× |
+| 10M | 1.88 GB | 8.30× | 11.89× | 7.16× |
+| 30M | 5.67 GB | 7.22× | 12.44× | 6.45× |
+
+两个引擎的数值差 `rel_diff = 0.00e+00`(完全一致)。
+
+### ⚠️ 但有多少真的是 GPU 的功劳?
+
+这是**最容易被夸大**的地方,所以单独测了归因:
+
+| 场景 | 加速比 | 说明 |
+| :--- | ---: | :--- |
+| 冷缓存读取 | 6.09× ~ 6.35× | 含并行 I/O(非 GPU 独有) |
+| 热缓存读取 | 7.93× ~ 8.05× | 含并行 I/O(非 GPU 独有) |
+| **纯内存计算** | **2.86× ~ 3.09×** | **这才是 GPU 计算本身** |
+
+**结论:冷读加速中约 47~49% 来自计算,其余来自并行解析与核数差。**
+本项目如实报告这一点,而不是拿 6.45× 当卖点。
+
+### 只在真实数据上暴露的 bug 🐛
+
+在 UCI 家庭用电数据(2,075,259 行)上,`Voltage` 列的 IQR 异常值数量:
+
+```
+pandas → 51,067        cuDF → 50,763        差 304
+```
+
+用 3 个诊断脚本逐层排查后定位:Q1/Q3 在所有引擎、所有插值方法下**完全相同**,我的插值假设是错的。真因是**浮点累加**——pandas 算出下界 `233.14000000000004`,cuDF 算出 `233.14`,相差 4e-14,而数据里**恰好有 `233.14` 这个值**,裸 `s < low` 对平局的处理因此不同。
+
+修复:引入 `1e-9` 相对容差,并显式报告 `fence_ties_excluded`。修复后 7 列全部一致:
+
+```
+Voltage                 50,763   50,763    OK    fence_ties_excluded=304
+Sub_metering_1         169,105  169,105    OK    ties=1,880,175 (IQR=0)
 ```
 
 ---
 
-## Output contract (what an agent parses)
+## Agent 应用结构
+
+### 循环骨架
+
+```python
+messages = [system, user]
+for _ in range(MAX_TOOL_ROUNDS):          # 上限 6 轮，防止死循环
+    resp = client.chat.completions.create(model=MODEL, messages=messages,
+                                          tools=skill_definitions, temperature=0)
+    if not resp.choices[0].message.tool_calls:
+        break                             # 模型认为可以回答了
+    for call in resp.choices[0].message.tool_calls:
+        result = execute_tool(call)       # 永不抛异常，失败也是 JSON
+        messages.append(tool_result(result))
+```
+
+### 健壮性:演示而非声称
+
+| 异常输入 | Agent 行为 |
+| :--- | :--- |
+| 文件不存在 | 明确报告 `文件不存在: <path>`,**不猜测、不编造** |
+| 列名错误 | 改调 `profile` 拿到真实列名,再重试一次(3 轮内自愈) |
+| 中文列名 `销售额` | 同上,自愈链完整 |
+| 数据里有 1,440 个唯一日期 | 不会把每个日期当一组,避免输出撑爆 token |
+| 没有 GPU | 回退 pandas,并声明 `engine="pandas"` 与原因 |
+| API 报错 / 无 tool_calls | 捕获并降级为文字回答,不崩溃 |
+
+### 每个数字都被独立复算
+
+Agent 报出的数值**不是自己说了算**。`verify_*.py` 用 pandas(与 cuDF 独立的代码路径)从零重算并对比:
+
+```
+column           agent  independent   match     pct
+----------------------------------------------------
+revenue        518,394      518,394      OK  10.37%
+quantity             0            0      OK   0.00%
+
+  revenue mean      = 1073.83      (agent said 1073.83)  OK
+  revenue median    = 403.67       (agent said 403.67)   OK
+  quantity min      = 1            (agent said 1)        OK
+  quantity max      = 499          (agent said 499)      OK
+  quantity median   = 250.0        (agent said 250)      OK
+
+mismatches: 0
+PASS: every recorded claim reproduced independently.
+```
+
+### 已知局限
+
+- Agent 自主性**偏浅**:单轮选工具 + 偶尔一步纠错,尚无多步规划型任务
+- 只有 CSV 路径有充分测试,Parquet/Excel 走的是通用读取路径
+- 加速比对比会额外跑一次 CPU,首次查询增加 15~25 秒(用 `--prewarm` 规避)
+- 概念性回答质量受模型本身限制,与 Skill 无关
+
+### 输出契约(模型实际解析的内容)
+
+引擎输出**元数据在顶层、操作数据嵌在自己的键下**,Agent 据此判断有没有真的用上 GPU:
 
 ```jsonc
 {
   "ok": true,
-  "op": "auto",
-  "engine": "cudf",              // or "pandas"
-  "accelerated": true,           // true only when engine == "cudf"
-  "fallback_reason": null,       // explains why, when it fell back
-  "rows_scanned": 20000000,      // the whole file, not a sample
-  "op_seconds": 1.83,
-  "profile": { ... }, "summary": { ... }, "outliers": { ... }
+  "op": "groupby",
+  "engine": "cudf",              // cuDF 成功
+  "engine_version": "25.10.00",
+  "gpu": "NVIDIA GB10",
+  "accelerated": true,           // 真的走了 GPU
+  "fallback_reason": null,       // 降级时这里说明原因
+  "total_seconds": 2.63,         // 端到端（含读取）
+  "groupby": {
+    "by": "region",
+    "agg": "revenue:sum,mean",
+    "rows_scanned": 20000000,    // 注意：行数在操作块内部
+    "compute_seconds": 1.91,     // 纯计算（不含读取）
+    "groups": [ /* ... */ ]
+  }
 }
 ```
 
-**Key rule: GPU acceleration may only be claimed when `engine == "cudf"`.**
-On fallback the script records the reason in `fallback_reason`, and the agent must tell the
-user plainly that it ran on CPU.
+**退出码**(实测,非推测):
 
-Exit codes: `0` success; `2` bad request (missing file, unknown column, malformed `--agg`);
-`3` the computation itself failed.
+| 退出码 | 触发条件 | 实测场景 |
+| ---: | :--- | :--- |
+| `0` | 分析跑完,结果在 `ok` 字段里 | 成功;也可出现在「文件能读但没有可用列」的情况 |
+| `2` | **输入问题**——模型可以自己修正 | 文件不存在 · `by` 列名不存在 · `columns` 列名不存在 |
+| `3` | **引擎内部异常**,非预期 | 未被前两类覆盖的异常(保留给真正的 bug) |
 
----
-
-## Measured on GB10
-
-### Environment
-
-`NVIDIA GB10`, driver 580.126.09, aarch64, 121 GB unified memory, Linux 6.14.0-1015-nvidia,
-20 logical cores. `rapids-cudf` conda env: **cuDF 25.10.00 / pandas 2.3.3 / numpy 2.2.6 /
-Python 3.11.16**. `import cudf` plus a smoke computation verified working.
-
-### Verification: `smoke_test.py` — 59 checks, 0 failures
-
-`engine=cudf`, `gpu=NVIDIA GB10`. Every operation's output was compared against ground truth
-computed independently in pandas:
-
-- `summary` / `groupby` (including the `median` and `nunique` aliases) / `corr` / `outliers`
-  all match the independent values
-- **GPU vs CPU cross-check passed**: mean, median and max are identical under cuDF and pandas
-- Error handling and fallback behaviour match the contract (all four exit-code-2 bad requests)
-- Raw log: `benchmark/smoke/gb10_smoke_test.log`
-
-### Benchmark: three scales, zero numerical difference between engines
-
-Baseline is pandas 2.3.3 with default settings (single-threaded C-level aggregations),
-20 logical cores, median of 3 repeats, device synchronized before every timed region,
-both engines reading the same file with the page cache warmed.
-
-| Rows | File | Step | pandas | cuDF | Speedup |
-| ---: | ---: | :--- | ---: | ---: | ---: |
-| 3,000,000 | 564 MB | read CSV | 1.673 s | 0.202 s | **8.30×** |
-| 3,000,000 | 564 MB | groupby | 0.056 s | 0.007 s | **8.25×** |
-| 3,000,000 | 564 MB | end-to-end | 1.845 s | 0.269 s | **6.86×** |
-| 10,000,000 | 1.88 GB | read CSV | 5.843 s | 0.704 s | **8.30×** |
-| 10,000,000 | 1.88 GB | groupby | 0.217 s | 0.018 s | **11.89×** |
-| 10,000,000 | 1.88 GB | end-to-end | 6.459 s | 0.902 s | **7.16×** |
-| 30,000,000 | 5.67 GB | read CSV | 17.464 s | 2.420 s | **7.22×** |
-| 30,000,000 | 5.67 GB | groupby | 0.627 s | 0.050 s | **12.44×** |
-| 30,000,000 | 5.67 GB | corr | 0.764 s | 0.336 s | **2.27×** |
-| 30,000,000 | 5.67 GB | quantile | 0.405 s | 0.175 s | **2.31×** |
-| 30,000,000 | 5.67 GB | end-to-end | 19.286 s | 2.988 s | **6.45×** |
-
-**Conclusion: end-to-end analysis of a 30,000,000-row CSV (5.67 GB) drops from 19.3 s to
-3.0 s — roughly 6.5× — with zero difference in the results between the two engines**
-(`rel_diff=0.00e+00`).
-
-### But how much of that is actually the GPU?
-
-That end-to-end number is **not** a measure of GPU compute: the file read accounts for
-81–91% of it. `attribution_test.py` separates the two by pre-loading both engines outside
-the timed region, so only computation is measured:
-
-| Rows | Scenario | pandas | cuDF | Speedup |
-| ---: | :--- | ---: | ---: | ---: |
-| 3,000,000 | read, cold cache | 1.783 s | 0.293 s | **6.09×** |
-| 3,000,000 | read, warm cache | — | — | **7.93×** |
-| 3,000,000 | **compute, in-memory (all stages)** | — | — | **2.86×** |
-| 10,000,000 | read, cold cache | — | — | **6.35×** |
-| 10,000,000 | **compute, in-memory (all stages)** | — | — | **3.09×** |
-
-**Only the "compute, in-memory" rows are attributable to the GPU: about 3×.**
-Of the ~6–8× read gain, roughly half is compute and the rest is parallel CSV parsing —
-which a CPU-only tool such as polars or Dask could also achieve. The pandas baseline also
-uses a single core out of 20, so part of every figure above is core count rather than the
-GPU. Quote the ~3× compute number alongside any end-to-end figure.
-
-Reproduce: `python scripts/attribution_test.py --rows 3m 10m --repeats 5`
-
-### A correctness bug found only on real data
-
-Real data exposed something synthetic fixtures could not: IQR fences are computed by two
-different engines, and floating-point error lands differently in each.
-
-On the 2M-row power dataset, column `Voltage`: pandas computed the lower fence as
-`233.14000000000004` and cuDF as `233.14` — a gap of 4e-14. The column contains the exact
-value `233.14`, so a bare `s < fence` test counted **304 extra outliers under pandas**:
-51,067 vs 50,763 for the same query on the same file.
-
-The fix applies a relative tolerance (`1e-9`) to the fence comparison, so a value sitting
-on a fence is treated as a tie and not called an outlier. Both engines now report identical
-counts on all seven columns, and any ties are reported explicitly in
-`fence_ties_excluded` rather than silently changing the total. Verified by
-`agent/verify_fence_fix.py`: all seven columns agree.
-
-This is the kind of defect that only shows up on real data with real precision limits, and
-it would have been invisible in a demo — the same question would simply have returned two
-different answers on two different runs.
-
-### Caveats
-
-- The speedups above were measured on **synthetic data**. Re-running the benchmark on a real
-  dataset will give different numbers (column types, share of string columns and null ratio
-  all matter).
-- Generating the 5.67 GB benchmark file created 7.6 GB of temporary data on GB10, which has
-  been cleaned up.
+`2` 与 `3` 的区别很实用:前者表示「模型把参数搞错了,重试一次就行」,后者表示「引擎出问题了」。**任何失败都不抛异常**,统一返回 `{"ok": false, "error": "..."}`。
 
 ---
 
-## Submission notes
+## 仓库结构
 
-1. **Form**: an agent application plus skill encapsulation (`SKILL.md` defines the trigger
-   conditions and the standard workflow; `scripts/` provides the tool calls). The agent
-   understands the request, orchestrates the flow and delivers the result.
-2. **GPU compute**: cuDF performs full-file aggregation on GB10 — no sampling. The output
-   field `rows_scanned` carries the full row count.
-3. **Quantified comparison**: use the measured table above, and always state the conditions
-   (pandas defaults, single-threaded, as baseline; 20 logical cores; median of 3; device
-   synchronized before timing; page cache warmed).
-4. **Numerical correctness**: this is the easiest thing to be challenged on. Answer with
-   `rel_diff=0.00e+00` and the 59-check suite.
-5. **Hardware advantage**: GB10's unified memory removes the host↔device copy. Scaled test:
-   20,000,000 rows → cuDF 2.7 s vs pandas 13.1 s (4.9×); 60,000,000 rows → cuDF 7.0 s vs
-   pandas 38.8 s (5.5×). Note the read stage is ~80% of both figures.
-6. **Robustness**: automatic fallback to pandas when no GPU / cuDF is available, so a
-   reviewer's environment can still run it.
+```
+├── agent/                          Agent 应用（比赛主体）
+│   ├── agent_main.py               tool-calling 循环
+│   ├── skills.py                   Skill 注册 + GPU/CPU 实测对比 + 输出压缩
+│   ├── demo_script.py              7 步演示（--prewarm 预热）
+│   ├── run_criteria_tests.sh       7 项评审用例
+│   ├── gpu_vs_cpu_demo.py          两引擎并排对照
+│   ├── env_stepfun.sh              非交互 shell 的 key 加载
+│   ├── verify_*.py                 独立复算 Agent 报的数字
+│   ├── diagnose_iqr*.py            IQR 浮点 bug 的根因诊断
+│   └── probe_tool_calling.py       验证模型支持 function calling
+│
+├── skills/cudf-analytics/          Skill 本体
+│   ├── SKILL.md                    触发条件 + 工作流（中英双语触发词）
+│   └── scripts/
+│       ├── gpu_analytics.py        核心引擎（cuDF / pandas 双路径）
+│       ├── smoke_test.py           59 项自检 + GPU/CPU 数值一致性
+│       ├── attribution_test.py     归因：I/O vs 计算
+│       ├── memory_ceiling_test.py  多规模压力测试
+│       └── benchmark_cpu_vs_gpu.py 基准测试
+│
+├── benchmark/                      GB10 实测证据与原始日志
+├── INNOVATION_OPTIONS.md           5 个创新方案评估
+└── LICENSE · requirements.txt
+```
+
+### Skill 是怎么被触发的
+
+`SKILL.md` 的 `description` 字段就是触发器,写成「用户会怎么问 / 什么情况下必须调用」,并明确列出**不该触发**的情况。
+
+> **Discovery note:** DSH 只在 `.dsh/skills`、`.agents/skills`、`$DSH_HOME/skills` 下自动发现 Skill,且只认**一层深**的 `<name>/SKILL.md`。因此 `skills/cudf-analytics/SKILL.md` **不会**被 DSH 自动加载;需要把它复制或挂载到上述位置。如果像本项目这样用 `skills.py` 把工具注册给模型(function calling),则不需要这一步。
 
 ---
 
-## The agent application
+## 跑起来
 
-The competition's actual target is an **agent that autonomously calls Skills**, not a Skill in
-isolation — so the tool-calling loop is the main deliverable, and the Skill is the component
-it drives.
+### 没有 GPU 也能验(评委从这里开始)
 
-```
-agent/
-├── agent_main.py          # StepFun LLM + the tool-calling loop (the core of the submission)
-├── skills.py              # Skill schemas (what the model sees) + implementations (what runs)
-├── demo_script.py         # scripted live demo, one step per judging criterion
-├── run_criteria_tests.sh  # 7-case suite asserting autonomous selection and robustness
-├── env_stepfun.sh         # loads STEPFUN_API_KEY in a non-interactive shell
-└── verify_*.py            # independent re-computation of the agent's own claims
-```
-
-### Loop shape
-
-```
-user question
-  -> model (with skill schemas attached)
-  -> tool_calls? --no--> final answer (done)
-  |                    yes
-  -> execute the skill locally on GB10
-  -> append the real result to the transcript
-  -> model again            (bounded by MAX_TOOL_ROUNDS = 6)
-```
-
-Two skills are offered: `analyze_dataset` (wraps `gpu_analytics.py`) and `list_datasets`
-(discovers what data exists). The same `SKILL.md` trigger knowledge is carried in the schema
-`description`, because that text — not the markdown file — is what the model actually reads
-when deciding whether to call.
-
-### Measured results
-
-`step-3.7-flash` supports function calling (verified before building on it), and selects the
-right skill from Chinese prompts without being told which one to use:
-
-| Prompt (Chinese) | Skill the agent chose | Result |
-| :--- | :--- | :--- |
-| 帮我看看这份数据，给我一个整体概览 | `analyze_dataset(operation="auto")` | cuDF, 5,000,000 rows, 3.1 s |
-| 按 region 统计 revenue 总和与均值 | `groupby(by="region", agg="revenue:sum,mean", top_k=5)` | cuDF, 1.2 s |
-| 哪些数值列之间相关性最强 | `corr(top_k=10)` | cuDF, 1.4 s |
-| 单独算 revenue 和 cost 的 IQR 异常值 | `outliers(columns="revenue,cost")` | cuDF, 1.7 s |
-| 服务器上有哪些数据文件 | `list_datasets({})` | 0.01 s |
-| 解释一下什么是 IQR | *(no tool — correct)* | 5.5 s |
-
-`run_criteria_tests.sh`: **7 / 7 cases pass**, covering autonomous selection, argument
-correctness, a missing file, a wrong column name, file discovery, and the negative case where
-no tool should be called. Full demo run: **7 steps, ~63 s total**.
-
-### Robustness, demonstrated rather than asserted
-
-Given a Chinese business term that is not a real column (`销售额`), the agent recovers on its
-own:
-
-```
-round 1 -> groupby(agg="销售额:sum")   FAILED: Column(s) ['销售额'] do not exist
-round 2 -> profile                     OK   (learns the real column names)
-round 3 -> groupby(agg="revenue:sum")  OK   (retries correctly)
-```
-
-Other handled paths: missing file (the agent calls the tool, gets the real error, and explains
-it — rather than guessing from the filename), unknown skill name, malformed argument JSON,
-API failure, and a runaway tool loop (hard cap, then a forced summary).
-
-### Every number the agent reports was independently re-checked
-
-Reusing a valid earlier result is not fabrication, but it must still be verified. The agent
-once answered an outlier question from a previous `auto` result instead of calling the tool
-again; recomputing with pandas confirmed all of it (518,394 = 10.37% for `revenue`, 0 for
-`quantity`, mean 1,073.83, median 403.67) — zero discrepancies. Separately, `Voltage` on the
-power dataset *did* disagree by 304 counts, which is the floating-point bug described above.
-
-### Known limitation
-
-`auto` already computes outliers, so an agent may answer a later outlier question by reusing
-that block instead of making a fresh call. The prompt now requires a new call per distinct
-analysis request, and the demo questions are chosen so each step needs a genuine computation.
-
-### The GPU speedup is shown inside the answer, per call
-
-A benchmark table can be dismissed as "measured somewhere else". Instead, every tool call
-also runs the identical query on the CPU and the measured comparison is reported in the
-answer itself:
-
-```
-本次分析在 GPU（NVIDIA GB10）上通过 cuDF 完成，全量 20,000,000 行耗时 5.50 秒；
-同一计算在 CPU pandas 上耗时 10.91 秒，GPU 快 1.99 倍。
-说明：该倍数是端到端耗时对比，其中 CSV 读取阶段两引擎都利用了多核并行 I/O；
-CPU 基线 pandas 运行在单线程，因此该倍数不等于纯 GPU 计算内核的理论加速比。
-```
-
-Measured per-step speedups on the 20M-row file (3.0 GB), same file and same command:
-
-| Operation | GPU | CPU | Speedup |
-| :--- | ---: | ---: | ---: |
-| `groupby` (revenue sum/mean by region) | 2.60 s | 10.22 s | **3.93×** |
-| `corr` (correlation matrix) | 3.13 s | 11.56 s | **3.69×** |
-| `outliers` (IQR, two columns) | 3.37 s | 10.91 s | **3.24×** |
-| `summary` (quantiles, std) | 5.28 s | 16.16 s | **2.62×** |
-| `auto` (profile + summary + outliers) | 9.45 s | 20.80 s | **2.20×** |
-
-Methodology, chosen so the ratio survives scrutiny:
-
-- the CPU side runs **twice** and the **best** time is used, so CPU jitter cannot flatter the GPU;
-- both engines process the **same file** with the **same command**, verified by comparing
-  scanned row counts — an earlier bug passed `--limit` and silently compared 5 rows instead
-  of 20 million, producing a nonsense "0.1×";
-- the model is instructed to quote **GPU time, CPU time and the ratio**, and to repeat the
-  caveat that read time and core count are part of the figure.
-
-```bash
-python demo_script.py --prewarm   # measure the comparisons before the audience arrives
-python demo_script.py             # 7 steps, ~76 s, each showing its speedup
-```
-
-`--prewarm` exists because the first run of a given query pays for the CPU measurement. Warming
-writes the comparisons to `.gpu_vs_cpu_cache.json`, so live steps show their speedup
-immediately. Without it the demo takes ~128 s; with it, ~76 s.
-
----
-
-## Reproducing it
-
-### Anywhere, no GPU required (reviewers: start here)
-
-The GPU path needs a GB10, but the whole pipeline is designed to run without one — the engine
-falls back to pandas automatically and reports `engine: "pandas"` plus the reason. So the
-correctness of the analysis, the agent loop, and the error handling can all be verified on an
-ordinary machine:
+GPU 路径需要 GB10,但**整条流水线在没有 GPU 时也能跑**——引擎自动回退 pandas,并如实报告 `engine: "pandas"` 和原因。因此分析正确性、Agent 循环、异常处理都可以在普通机器上验证:
 
 ```bash
 pip install -r requirements.txt
-python skills/cudf-analytics/scripts/smoke_test.py     # 59 assertions, CPU path
-python skills/cudf-analytics/scripts/gpu_analytics.py --input <any.csv> --op auto
+python skills/cudf-analytics/scripts/smoke_test.py        # 59 项断言
+python skills/cudf-analytics/scripts/gpu_analytics.py --input <任意.csv> --op auto
 ```
 
-Expect `"accelerated": false` and `"fallback_reason"` explaining that cuDF is unavailable.
-**No speedup claims are made on this path** — that is the point of the honest reporting.
-
-The agent loop additionally needs a StepFun API key and a data file:
+应当看到 `"accelerated": false` 和解释 cuDF 不可用的 `fallback_reason`。
+**这条路径上我们不主张任何加速**——这正是诚实报告的意义。
 
 ```bash
-export STEPFUN_API_KEY=<your key>
+export STEPFUN_API_KEY=<你的 key>
 cd agent && python agent_main.py --ask "分析 /path/to/data.csv 的异常值"
 ```
 
-### On a GB10 (full GPU path)
-
-Substitute your own host, port and user:
+### 在 GB10 上(完整 GPU 路径)
 
 ```bash
 ssh -p <port> <user>@<host>
-source ~/.bashrc                        # provides STEPFUN_API_KEY
+source ~/.bashrc                        # 提供 STEPFUN_API_KEY
 conda activate rapids-cudf              # cuDF 25.10 / pandas 2.3.3 / py3.11
 
-# 1) Skill self-check: 59 assertions, including GPU-vs-CPU numerical agreement
+# 1) Skill 自检：59 项断言，含 GPU/CPU 数值一致性
 cd skills/cudf-analytics && python scripts/smoke_test.py
 
-# 2) The agent, one question
+# 2) Agent 单问
 cd ../../agent && python agent_main.py --ask "分析 /path/to/data.csv 的异常值"
 
-# 3) The scripted demo (7 steps, ~76 s, each step shows its measured speedup)
+# 3) 脚本化演示（7 步，约 76 秒，每步显示实测加速比）
+export DEMO_DATA=/path/to/sales_demo.csv
 python demo_script.py --prewarm && python demo_script.py
 
-# 4) The judging-criteria suite (7 cases)
+# 4) 评审用例套件（7 项）
 bash run_criteria_tests.sh
 ```
 
-Demo datasets on GB10: `sales_demo_small.csv` (5M rows, 572 MB — use this for live demos) and
-`sales_demo.csv` (20M rows, 3.0 GB — use this to show scale).
+> `--prewarm` 很重要:首次查询某个问题时,Agent 会额外在 CPU 上跑一遍用于测量加速比,约需 15~25 秒。预热把这些对照结果写入 `.gpu_vs_cpu_cache.json`,现场每一步都能立即显示加速比——演示总时长从 **128 秒降至 76 秒**。
+
+### 演示数据从哪来
+
+仓库**不含**数据文件(多 GB)。用自带脚本生成:
+
+```bash
+python skills/cudf-analytics/scripts/memory_ceiling_test.py --sizes 20m --columns 8
+```
+
+⚠️ **演示务必用 2000 万行那份。** 500 万行只有 **1.4×**,2000 万行有 **3.9×**——数据规模不够会让人误以为 GPU 没用。
+
+---
+
+<div align="center">
+<br>
+
+**第三方组件** · RAPIDS cuDF (Apache-2.0) · pandas (BSD-3-Clause) · openai-python (Apache-2.0) · StepFun step-3.7-flash
+
+均为依赖而非打包,仓库不含二进制
+
+<br>
+
+`MIT License` · 详见 [LICENSE](LICENSE)
+
+</div>
