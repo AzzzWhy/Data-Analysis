@@ -1,103 +1,112 @@
-# 创新性差异化方案评估
+# Innovation options, evaluated
 
-目标：在**现有代码基础上做增量**，产出评委能看出"巧思"的东西，不推倒重来。
+Goal: add to the existing code rather than rebuild it, and produce something a reviewer can
+see the point of.
 
-评估维度：
-- **GPU 必要性**：这件事是不是**非 GPU 不可**？如果 CPU 也能做，创新性就站不住（我们已经被归因实验打过一次脸了）
-- **观感**：演示时能不能一句话讲明白、看出价值
-- **成本**：按现有代码估算的增量工作
-- **风险**：可能翻车的点
+Each candidate is scored on four things:
 
----
+- GPU necessity: does this need a GPU at all? If a CPU can do it, the innovation claim is weak,
+  and the attribution experiment in this repository already showed how weak.
+- Demo value: can it be explained in one sentence and understood on sight?
+- Cost: incremental work, estimated against the code that already exists.
+- Risk: what could go wrong on stage.
 
-## 候选 A：异常归因 / 异常值钻取（outlier drill-down）
+## Candidate A: outlier drill-down
 
-发现异常值后，自动回答"**这些异常值集中在哪**"——按各维度交叉组合统计异常占比，找出显著集中的分组。
+After finding outliers, answer where they are concentrated. Cross the dimensions, compute each
+combination's share of outliers, and report the combinations that are significantly
+over-represented.
 
-例：`revenue` 有 10.37% 异常，钻取后发现"异常占 31% 的记录集中在 region=APAC & category=gamma"，而不是均匀分布。
+Example: `revenue` has 10.37% outliers; drilling down shows that 31% of the outliers sit in
+`region=APAC & category=gamma`, rather than being spread evenly.
 
-| 维度 | 评价 |
-| --- | --- |
-| GPU 必要性 | **强**。维度组合数是乘积级增长：5 region × 4 category × N 其他维度，逐组合扫描全量数据。CPU 上做 2-3 维交叉就会很慢，GPU 上直接算。这是**天然适合 GPU 的负载** |
-| 观感 | **强**。"找出异常集中在哪"是业务真正想知道的问题，比"有多少异常值"有用得多 |
-| 成本 | 中。复用现有 groupby 内核 + 新增一个钻取操作 |
-| 风险 | 低。算法直白，结果可核对 |
+| | |
+| :--- | :--- |
+| GPU necessity | High. The number of dimension combinations multiplies: 5 regions by 4 categories by however many other dimensions, each scanned over the full dataset. Two or three dimensions crossed on a CPU is already slow; on a GPU it is direct. This load suits a GPU naturally. |
+| Demo value | High. "Where are the outliers concentrated" is the question the business actually has, and it is far more useful than "how many outliers are there". |
+| Cost | Medium. Reuses the existing group-by kernel plus one new drill-down operation. |
+| Risk | Low. The algorithm is straightforward and the result can be checked by hand. |
 
----
+## Candidate B: data quality audit
 
-## 候选 B：数据质量审计（把工具从"分析"变成"体检"）
+Turn the tool from an analyzer into a checkup. One scan reports missing-value patterns (which
+columns are missing together, suggesting a shared cause), duplicate rows, inconsistent types,
+constant columns, likely primary keys, and outliers, as a severity-ranked problem list.
 
-一次扫描给出：缺失模式（哪些列**同时**缺失，暗示同一原因）、重复行、类型不一致、常量列、疑似主键、离群点。输出带严重度分级的问题清单。
+| | |
+| :--- | :--- |
+| GPU necessity | Medium. Mostly full scans with grouped counts, where a GPU helps but is not required. |
+| Demo value | Medium to high. This is the most practically useful thing in real data work, and it lands with an audience easily. |
+| Cost | Medium. Several independent checks assembled into one report. |
+| Risk | Low, but a feature pile reads as ordinary engineering rather than insight. |
 
-| 维度 | 评价 |
-| --- | --- |
-| GPU 必要性 | 中。主要是全量扫描 + 分组计数，GPU 有优势但不是"非它不可" |
-| 观感 | 中强。真实数据工作里这最实用，很容易引起共鸣 |
-| 成本 | 中。多个独立检查拼成一个报告 |
-| 风险 | 低。但功能偏"堆砌"，容易被看成常规工程而非巧思 |
+## Candidate C: out-of-core analysis at scale
 
----
+Frame the comparison as "pandas cannot do this at all" rather than "this is faster", by picking a
+size at which pandas fails outright.
 
-## 候选 C：大规模外存/分块分析（把 GPU 当"能处理别人处理不了的数据"）
+| | |
+| :--- | :--- |
+| GPU necessity | High. This is the architectural advantage showing directly: unified memory and direct GPU access. |
+| Demo value | High. "pandas died, cuDF is still running" lands harder than any speedup ratio. |
+| Cost | Known. `memory_ceiling_test.py` already does this, but it only reached 60M rows, where pandas had not failed yet. |
+| Risk | High. It requires finding a size where pandas genuinely fails (a 120M-row file is around 18 GB), and GB10 has 121 GB of memory, so the failure point may be very far out. That means generating 50 GB or more of data, which is slow and fills the disk. |
 
-让 pandas 在某个规模上直接失败的对比，从"更快"变成"**能跑 vs 跑不动**"。
+## Candidate D: uncertainty quantification
 
-| 维度 | 评价 |
-| --- | --- |
-| GPU 必要性 | 强。这是架构优势（统一内存 + GPU 直读）的直接体现 |
-| 观感 | **强**。"pandas 崩了，cuDF 还在跑"比任何加速比都有冲击力 |
-| 成本 | 已知。`memory_ceiling_test.py` 已经在做，但只跑到 60M 行（pandas 仍未失败） |
-| 风险 | **高**。需要找到 pandas 真正失败的规模（120M 行文件约 18GB），且 GB10 有 121GB 内存，可能要到很大才失败——意味着要生成 50GB+ 文件，耗时且占磁盘 |
+Report confidence intervals alongside point estimates: bootstrap resampling over several
+thousand draws for means and quantiles, or a significance test for correlations, with an
+explicit warning when the sample is too small for the conclusion to be statistically meaningful.
 
----
+| | |
+| :--- | :--- |
+| GPU necessity | High. Bootstrap is naturally parallel: B resamples, each a full aggregation. On a CPU that is B times the work; on a GPU the resamples run in parallel and it is nearly free. Few workloads are genuinely out of reach for a CPU, and this is one. |
+| Demo value | High, and it addresses a real complaint: nobody knows whether a number an LLM produced is trustworthy. |
+| Cost | High. Needs a resampling kernel and interval computation, plus numeric correctness, where this repository's habit of independent verification helps. |
+| Risk | Medium. Bootstrap over very large data needs care: full resampling is memory-hungry, so it needs a chunked or subsampled strategy, and the strategy has to be stated honestly. |
 
-## 候选 D：用 GPU 把统计结论做"可信"（不确定性量化）
+## Candidate E: natural-language orchestration of an analysis plan
 
-不只给点估计，还给**置信区间**：bootstrap 重采样（几千次）算均值/分位数的置信区间，或者对相关性做显著性检验，并**在数据量不足时明确警告"这个结论统计上不显著"**。
+Have the agent decompose a complex business question into several skill calls: profile for column
+names, filter, group, drill into outliers, summarize.
 
-| 维度 | 评价 |
-| --- | --- |
-| GPU 必要性 | **强**。bootstrap 天然并行：重采样 B 次、每次全量聚合——CPU 上是 B 倍时间，GPU 上批次并行几乎无感。**这是少数"CPU 根本做不动"的负载** |
-| 观感 | **强**。且直接呼应一个真实痛点：LLM 给的数字没人知道可不可信 |
-| 成本 | 高。需要实现重采样内核 + 区间计算，还要保证数值正确性（我们的 59 项自检传统在这里是加分项） |
-| 风险 | 中。bootstrap 对超大数据的实现要谨慎（全量重采样内存开销大，需分块/子样本策略，且要诚实说明用的是子样本） |
+| | |
+| :--- | :--- |
+| GPU necessity | None. This is an agent capability, not a GPU capability. |
+| Demo value | High, but this is autonomy rather than innovation. It should be built, and it serves judging criterion 1 rather than criterion 3. |
+| Cost | Low. The existing loop already supports multiple rounds; it needs a complex task and prompt work. |
+| Risk | Low, but it does not answer criterion 3. |
 
----
+## Recommendation: A, then D
 
-## 候选 E：自然语言 → 分析计划的自动编排
+A (outlier drill-down) has the best return. The GPU need is real, the business value is
+immediate, the cost is controllable, and the risk is low.
 
-让 Agent 把一个复杂业务问题拆成多步 Skill 调用（先画像拿列名 → 过滤 → 分组 → 钻取异常 → 汇总）。
+D (uncertainty quantification) tells the best story, because it gives the tool a new position:
+not "we compute fast" but "we compute fast and the result is checkable". It is also one of the
+few loads a CPU genuinely cannot carry, and the attribution methodology already in this
+repository is what proves it.
 
-| 维度 | 评价 |
-| --- | --- |
-| GPU 必要性 | 无（这是 Agent 能力，不是 GPU 能力） |
-| 观感 | 强。但这是"自主性"而非"创新性"，应该做，但服务于评审标准①而不是③ |
-| 成本 | 低。现有循环已支持多轮，只需设计复杂任务并调提示词 |
-| 风险 | 低。但**不能算作③创新性的答案** |
+Together they support one narrative:
 
----
+> A data analysis agent that reports statistics, tells you how uncertain they are, and attributes
+> outliers to specific dimensions. On a CPU those last two are either tens of times slower or
+> impossible.
 
-## 我的推荐：A + D 组合，A 先做
+That narrative covers criterion 3 and the GPU-necessity question, which is the weakest point of
+this project, since the attribution experiment already showed that most of the end-to-end gain
+comes from parallel I/O. Loads a CPU cannot carry are what close that gap.
 
-**A（异常归因）** 是性价比最高的：GPU 必要性真实、业务价值直观、成本可控、风险低。
+C is not recommended. Generating tens of GB of data and betting that pandas fails at a workable
+scale is a bad trade given the time available.
 
-**D（不确定量化）** 是"故事最漂亮"的：它给工具一个**新的价值定位**——从"我算得快"变成"**我算得又快又可检验**"。而且它是少数 CPU 真的做不动的负载，我们的归因实验方法论刚好能证明这一点。
+E should be built but does not count as innovation. It improves autonomy, costs little, and is
+worth doing alongside the rest: design one or two multi-step tasks and add them to the demo.
 
-**A+D 合起来讲的故事**：
+## Open questions
 
-> 一个数据分析 Agent，不只给出统计量，还能告诉你不确定性有多大，并把异常值归因到具体维度——
-> 而这两件事在 CPU 上分别要慢几十倍和根本做不动。
-
-这个故事**同时照顾了③创新性和"GPU 必要性"这个我们最容易被攻击的点**（因为我们已经承认主要加速来自并行 I/O，这个短板需要用"CPU 做不动的负载"来补）。
-
-**不建议现在做 C**：12 天内生成几十 GB 数据、还要赌 pandas 会在合理规模失败，风险收益比差。
-
-**E 应该做但不算创新性**：它提升的是①自主性，成本低，建议顺手做（设计 1-2 个多步任务加进演示）。
-
----
-
-## 需要你决定
-
-1. 是否按 **A 先做 → 再评估 D** 的顺序推进？
-2. 有没有你自己的业务数据可以套用？异常归因在有业务含义的维度上（地区/品类/渠道）演示效果远好于合成数据
-3. D 如果做，子样本 vs 全量重采样你倾向哪个？（我建议**全量按块重采样**，并在输出里如实说明策略和样本量）
+1. Proceed in the order A first, then reassess D?
+2. Is there real business data this could run on? Outlier attribution demos far better on
+   dimensions that mean something (region, category, channel) than on synthetic data.
+3. If D is built, subsampling or full chunked resampling? Full chunked resampling is the better
+   answer, provided the strategy and the sample count are stated in the output.

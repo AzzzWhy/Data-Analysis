@@ -728,8 +728,9 @@ def build(payload: dict, out_dir: str, title: Optional[str] = None,
         "chart_count": len(charts),
         "engine": engine,
         "rows_scanned": rows_scanned,
-        "note": ("图表由聚合结果绘制，渲染本身没有 GPU 加速；GPU 加速的是产生这些数值的全量聚合。"
-                 "报告里已写明这一点。"),
+        "note": ("Charts are drawn from the aggregated results, so rendering itself has no GPU "
+                 "acceleration; the GPU accelerated the full-dataset aggregation that produced "
+                 "those numbers. The report states this."),
     }
 
 

@@ -111,58 +111,66 @@ def _arg_str(args: Dict[str, Any]) -> str:
 CATALOG: Dict[str, Dict[str, Any]] = {
     # "why are these values odd, and where do they come from" -- the drill-down shape.
     "drill_down": {
-        "triggers": ["异常", "离群", "outlier", "anomal", "为什么", "原因", "来源",
-                     "怎么来", "定位", "下钻", "drill"],
-        "why": "先确认范围，再量化异常，再逐维缩小到具体群体，最后看它是否只是指标间的关联",
+        "triggers": ["outlier", "anomal", "odd", "unusual", "why", "reason", "cause",
+                     "come from", "comes from", "trace", "pinpoint", "drill"],
+        "why": ("Confirm the scope, size the anomaly, narrow it by dimension to a concrete group, "
+                "then check whether it is only an association between metrics"),
         "steps": [
-            {"op": "profile", "reason": "先确认列名与类型，后面每一步都要用真实列名"},
-            {"op": "outliers", "reason": "量化异常规模，后面才知道要解释多大的量",
+            {"op": "profile",
+             "reason": "Confirm the real column names and types; later steps need them"},
+            {"op": "outliers", "reason": "Size the anomaly, so later steps know how much to explain",
              "args": {"top_k": 20}},
-            {"op": "groupby", "reason": "按第一个维度看异常是否集中在某个群体",
+            {"op": "groupby", "reason": "Check whether the anomaly sits in one group",
              "args": {"agg": "auto"}},
-            {"op": "groupby", "reason": "换第二个维度交叉验证，避免把相关当成原因",
+            {"op": "groupby",
+             "reason": "Cross-check on a second dimension, so an association is not read as a cause",
              "args": {"agg": "auto"}},
-            {"op": "corr", "reason": "检查这个维度是否只是与其他指标相关，而非独立原因"},
+            {"op": "corr",
+             "reason": "Check whether this dimension is only correlated with others, not a cause"},
         ],
     },
     # "compare groups on a metric".
     #
-    # Note the deliberate absence of a bare "各": as a single character it matches
-    # "各指标之间的关系" (a relationships question) and would steal it from that plan. The
-    # specific forms below cover the grouping intent without that collision.
+    # Note the deliberate absence of a bare "each" or "every": either one matches
+    # "the relationship between each metric" (a relationships question) and would tie with
+    # that plan, then win on catalog order. The specific forms below cover the grouping
+    # intent without that collision.
     "compare_groups": {
-        "triggers": ["对比", "比较", "哪个", "排名", "分组", "按 ", "按每", "各地区", "各类",
-                     "compare", "rank", "group", "by ", "versus", " vs "],
-        "why": "先看总量差异，再看均值差异，然后检查分布是否可解释，最后看维度间是否独立",
+        "triggers": ["compare", "comparison", "which", "rank", "group", "by ", "per ",
+                     "versus", " vs ", "across", "highest", "lowest", "top "],
+        "why": ("Compare the totals, then the means, then check whether the spread explains the "
+                "gap, and finally whether the dimensions are independent"),
         "steps": [
-            {"op": "profile", "reason": "确认分组列与度量列的真实名字"},
-            {"op": "groupby", "reason": "先比较各组的规模与平均水平",
+            {"op": "profile", "reason": "Confirm the real grouping and metric column names"},
+            {"op": "groupby", "reason": "Compare group sizes and averages first",
              "args": {"agg": "auto"}},
-            {"op": "summary", "reason": "看整体分布与离散度，判断组间差异是否有意义"},
-            {"op": "corr", "reason": "确认分组维度与度量之间是否存在混淆关系"},
+            {"op": "summary", "reason": "Check whether the spread explains the group gap"},
+            {"op": "corr", "reason": "Check for a confound between the dimension and the metric"},
         ],
     },
     # "is this dataset sound"
     "data_quality": {
-        "triggers": ["质量", "缺失", "空值", "重复", "脏", "清洗", "quality", "missing",
-                     "null", "dup", "check"],
-        "why": "先看结构，再看缺失，再看异常，最后看分布形状",
+        "triggers": ["quality", "missing", "empty", "null", "duplicate", "dup", "dirty",
+                     "clean", "check", "integrity"],
+        "why": ("Check the structure, then missing values, then outliers, then the shape of the "
+                "distributions"),
         "steps": [
-            {"op": "profile", "reason": "行数、列类型、缺失情况与内存占用"},
-            {"op": "summary", "reason": "每个数值列的分布与离散度"},
-            {"op": "outliers", "reason": "哪些列的取值超出常规范围"},
+            {"op": "profile", "reason": "Row count, column types, missing values and memory use"},
+            {"op": "summary", "reason": "Distribution and spread of every numeric column"},
+            {"op": "outliers", "reason": "Which columns hold values outside the usual range"},
         ],
     },
     # "how do these columns relate"
     "relationships": {
-        "triggers": ["相关", "关系", "关联", "影响", "因素", "驱动", "correlat", "relation",
-                     "influence", "driver", "drives", "driving", "depends", "associat"],
-        "why": "先拿到相关矩阵，再回到分布确认不是被极值带偏，最后看组间是否一致",
+        "triggers": ["correlat", "relat", "associat", "influence", "driver", "drive",
+                     "drives", "driving", "depend", "affect", "impact", "factor"],
+        "why": ("Get the correlation matrix, then go back to the distributions to confirm that "
+                "extremes are not driving it, then check whether it holds across groups"),
         "steps": [
-            {"op": "profile", "reason": "确定哪些列是数值列，相关分析只对数值列有意义"},
-            {"op": "corr", "reason": "直接回答哪两个指标关联最强"},
-            {"op": "summary", "reason": "确认强相关不是少数极值造成的"},
-            {"op": "groupby", "reason": "检查这个关联在不同群体里是否一致",
+            {"op": "profile", "reason": "Identify the numeric columns a correlation can use"},
+            {"op": "corr", "reason": "Answer which two metrics are most strongly related"},
+            {"op": "summary", "reason": "Confirm a few extremes are not driving the correlation"},
+            {"op": "groupby", "reason": "Check whether the association holds across groups",
              "args": {"agg": "auto"}},
         ],
     },

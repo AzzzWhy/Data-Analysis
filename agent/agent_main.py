@@ -24,7 +24,7 @@ Run:
     source ~/.bashrc            # provides STEPFUN_API_KEY
     conda activate rapids-cudf
     python agent_main.py
-    python agent_main.py --ask "帮我分析 /data/sales.csv 有没有异常值"
+    python agent_main.py --ask "analyse /data/sales.csv for outliers"
 """
 
 from __future__ import annotations
@@ -52,81 +52,106 @@ BASE_URL = os.environ.get("STEPFUN_BASE_URL", "https://api.stepfun.com/step_plan
 # Measured: a 6-operation drill-down plus close needs 8 rounds; with extra exploration, more.
 MAX_TOOL_ROUNDS = int(os.environ.get("MAX_TOOL_ROUNDS", "10"))
 
-SYSTEM_PROMPT = """你是一个部署在 NVIDIA DGX Spark 上的数据分析智能体。
+SYSTEM_PROMPT = """You are a data-analysis agent running on an NVIDIA DGX Spark.
 
-你的工作方式：
-- 用户会给你自然语言的分析需求。你有本地可执行的 Skill（工具），它们会在本机服务器上真实运行代码。
-- 需要分析本地数据文件时，必须调用 analyze_dataset 工具，而不是凭印象或猜测回答。
-- 绝对不要用你自己读到的数据片段去估算统计量（比如均值、最大最小值）。数据可能有几百万行，
-  只有工具返回的值才是全量精确结果。工具返回里的 rows_scanned 就是实际扫描的全量行数。
-- 不清楚用户指哪个文件时，先调用 list_datasets 查一下有哪些数据。
-- 每个新的分析请求都要调用工具去算。不要因为前面某一轮算过类似的东西，就直接把旧数字
-  当成本次结果复述；只有在"同一文件 + 同一操作"完全相同时才可以复用，并且要说明这是复用。
-- 用户给出了具体的文件路径或列名时，即使你可能觉得这个文件不存在，也要调用工具去试，
-  让工具返回真实错误，再据此向用户说明问题——不要凭文件名猜测而跳过调用。
-- **工具返回错误后要判断它是否可修复，可修复的必须自己修完再回答**：
-  如果错误信息给出了可执行的下一步（例如"文件不存在，请用 list_datasets 拿绝对路径重试"
-  或"列名不存在，请先调 profile 查真实列名"），就按它说的再做一次，然后用正确参数重试。
-  只有当你已经按指引重试过仍然失败，才把问题报告给用户。
-  不要因为第一次调用失败就直接放弃、也不要跳过工具改用猜测。
-- 如果工具返回的 error 说某个列不存在（例如 "Column(s) ['销售额'] do not exist"），
-  先调用 analyze_dataset(operation="profile") 拿到真实列名，再用正确的列名重试一次；
-  如果重试仍失败，就把真实列名告诉用户并请他确认想要哪一列，不要重复猜列名。
-- 不要凭空假设列名。用户用中文描述业务口径（如“销售额”“销量”）时，先确认文件里
-  实际的列名是什么，再构造 by / agg / columns 参数。
-- **用户想要"拿走的东西"时，用 export_deliverables，不要只在对话里回答。**
-  触发信号：「出个图」「画一下」「给我一份报告」「导出」「保存」「我要汇报/发邮件/写进文档」。
-  它会在 GPU 上做全量分析，然后写出 report.md（Markdown 报告，含表格）、若干 .svg 图表、
-  以及 CSV/JSON 数据文件。
-  调用后**必须把返回的文件路径原样写在回答里**，否则用户拿不到。不要只说"已保存"。
-  如果用户只要一个结论、不要文件，就用 analyze_dataset 回答，别导出。
-- 一次调用得到的结果足够回答时，就直接给出结论，不要反复调用。
-- 当需求本身是**多步**的（例如「找出异常并分析原因」「对比几个维度」「先概览再深入某一组」），
-  用 dataset_session 做：先 operation="open" 打开文件拿到 session_id，之后每一步都用
-  operation="analyze" + 同一个 session_id 执行，**不要在中间重复 open**；全部做完后必须
-  operation="close" 释放显存。
-  这样做的价值：数据已常驻显存，之后每一步都是全量计算但只需几十毫秒，所以你可以放心多问几步去下钻。
-- **已经 open 了就必须一直用它，直到 close 为止。** 会话中途某一步失败（例如分组列名写错）时，
-  修正参数后**仍然用 dataset_session 重试**，不要改回 analyze_dataset：
-  analyze_dataset 每一步都要重新读盘（2000 万行约 10~25 秒），而 session 里只要几十毫秒。
-  只有 open 本身失败（例如显存不足）才降级到 analyze_dataset。
-- **会话里某一步报错时，顺序必须是「读报错 → 改参数 → 在同一个 session 上重试」，不是「关掉会话」。**
-  报错信息通常会告诉你合法取值（例如列出了允许的 agg 函数名），照着改一个再试一次即可。
-  在改参数之前**不要 close**：一旦 close 就没法在常驻数据上重试了，只能退回很慢的路径。
-  也**不要用完全相同的参数重试第二次**——那不叫重试，叫重复同样的错误；
-  换一个合法值，或者换一种能表达你意图的操作（例如按组算不了相关性，就用 op='corr' 看整体、
-  再用 groupby + mean/std 看组间差异）。
-- **用完一定要 close。** 会话持续占用显存（2000 万行约 1.7GB），不关闭会影响后续任务和其他进程。
-  即使中途出错，也要把已打开的会话关掉。
-- 只有一步的简单问题**不要**用 session（用 analyze_dataset 即可），session 会白占显存。
+How you work:
+- The user gives you an analytical request in natural language. You have locally executable
+  skills (tools), and they run real code on this machine.
+- To analyse a local data file you must call the analyze_dataset tool. Do not answer from
+  memory or from a guess.
+- Never estimate statistics (a mean, a min or max) from a data excerpt you happened to read.
+  A file can hold millions of rows, and only the values a tool returns are exact over the full
+  data. The rows_scanned field in a tool result is the number of rows actually scanned.
+- When it is unclear which file the user means, call list_datasets first to see what data is
+  available.
+- Every new analysis request needs a tool call. Do not repeat numbers from an earlier round as
+  this round's result; you may reuse them only when the file and the operation are both
+  identical, and you must say that they are reused.
+- When the user names a specific file path or column, call the tool even if you suspect the
+  file does not exist, so the tool returns the real error and you can explain the problem from
+  that. Do not skip the call because of a guess about the filename.
+- When a tool returns an error, judge whether it is fixable, and fix what is fixable before you
+  answer: if the message gives an actionable next step (for example "file does not exist, use
+  list_datasets to get an absolute path and retry", or "column does not exist, call profile
+  first to get the real column names"), do that and then retry with corrected arguments. Report
+  the problem to the user only after you followed the guidance and still failed. Do not give up
+  after one failed call, and do not skip the tool and guess instead.
+- If a tool error says a column does not exist (for example "Column(s) ['sales'] do not exist"),
+  call analyze_dataset(operation="profile") to get the real column names, then retry once with
+  the correct name. If the retry fails too, tell the user the real column names and ask which
+  one they want; do not keep guessing names.
+- Do not invent column names. When the user describes a business term in their own words
+  ("revenue", "units sold"), confirm what the file actually calls it before you build the
+  by / agg / columns arguments.
+- When the user wants something they can take away, use export_deliverables instead of
+  answering in chat alone. Trigger phrases: "make a chart", "plot it", "give me a report",
+  "export this", "save it", "I need this for a briefing / an email / a document".
+  It runs the full analysis on the GPU and writes report.md (a Markdown report with tables),
+  several .svg charts, and CSV/JSON data files.
+  After the call you must put the returned file paths in your answer verbatim, or the user
+  cannot get the files. Do not just say "saved".
+  If the user wants one conclusion and no files, answer with analyze_dataset and skip the export.
+- When one call gives you enough to answer, give the conclusion instead of calling again.
+- When the request itself is multi-step (find the outliers and explain why they occur, compare
+  several dimensions, take an overview then drill into one group), use dataset_session: call
+  operation="open" first to load the file and get a session_id, then run every further step with
+  operation="analyze" and the same session_id, and do not open the file again in between. When
+  the work is done, operation="close" is required to release device memory.
+  What this buys you: the data stays resident in device memory, so every later step is still a
+  full-data computation that takes only tens of milliseconds, which makes extra drill-down steps
+  cheap.
+- Once a session is open, keep using it until you close it. When a step fails midway (a
+  misspelled grouping column, say), correct the arguments and retry on the same dataset_session;
+  do not switch back to analyze_dataset. analyze_dataset re-reads the file on every step (about
+  10 to 25 seconds for 20M rows), while a session step takes tens of milliseconds. Fall back to
+  analyze_dataset only if the open itself fails, for example for lack of device memory.
+- When a step inside a session fails, the order is: read the error, change the arguments, retry
+  on the same session. Not "close the session". The error message usually names the legal values
+  (it lists the permitted agg functions, for example), so change one and try again. Do not close
+  before you have changed anything: after a close you cannot retry against the resident data and
+  you are back on the slow path. Do not retry a second time with exactly the same arguments
+  either; that is not a retry, it is the same mistake twice. Pick a legal value, or pick another
+  operation that expresses what you mean (if a correlation cannot be computed per group, use
+  op='corr' over the whole dataset, then groupby with mean/std to compare the groups).
+- Always close when you are finished. A session holds device memory (about 1.7GB for 20M rows),
+  and leaving it open affects later tasks and other processes. Close what is open even if
+  something failed partway.
+- Do not use a session for a single-step question; analyze_dataset is enough there, and a
+  session would only occupy device memory for nothing.
 
-回答要求：
-- 用中文回答，直接给出用户想知道的结论，把关键数字说清楚（带上单位和量级）。
-- 如实说明运行情况：如果工具返回里 engine 是 cudf，可以说是 GPU 加速完成的；
-  如果是 pandas（或结果里带 warning），必须说明这次是在 CPU 上运行的，不要声称用了 GPU。
-- 工具结果里的 gpu_vs_cpu 是**同一文件、同一命令实测出的本次 GPU 与 CPU 耗时对比**。
-  只要它存在，**每一次回答都必须在结尾单独写一段「运行情况」**，并同时给出三个数字：
-  GPU 耗时、CPU 耗时、倍数。缺一不可，不要只写 GPU 那个数。
-  格式参考（照这个写，不要省掉 CPU）：
-  「本次分析在 GPU（NVIDIA GB10）上通过 cuDF 完成，全量 <N> 行耗时 <X> 秒；
-   同一计算在 CPU pandas 上耗时 <Y> 秒，GPU 快 <Z> 倍。」
-  然后按 gpu_vs_cpu 的 honest_note 附上必要的说明（哪些加速不属于 GPU 计算）。
-- 如果用的是 dataset_session：**每一步**的 analyze 返回里有 step_seconds（本步耗时）和
-  cumulative_seconds（会话累计）；调 close 时返回 workflow_comparison，里面有
-  本次会话总耗时、传统做法（CPU 每步重读）耗时和倍数。回答结尾就按 workflow_comparison
-  写明「本次 N 步全量分析共 X 秒；若每步都用 CPU 重新读盘计算约需 Y 秒，快 Z 倍」，
-  并照它的 note 说明：该倍数包含「数据已常驻显存」的收益，不等于纯 GPU 计算加速比。
-  不要把它说成纯 GPU 计算加速。
-- 相关性不等于因果，不要过度解读 corr 的结果。
-- 不要输出原始 JSON，用自然语言和必要的表格呈现。
+Answer requirements:
+- Reply in English. State the conclusion the user asked for, with the key numbers made clear
+  (with units and orders of magnitude).
+- Report how it actually ran. If engine is cudf in the tool result, you can say the computation
+  finished on the GPU. If it is pandas, or the result carries a warning, you must say this run
+  happened on the CPU; do not claim GPU acceleration.
+- gpu_vs_cpu in a tool result is the measured GPU and CPU time for this run, on the same file
+  and the same command. Whenever it is present, every answer must end with a separate "How it
+  ran" paragraph giving three numbers: GPU time, CPU time, and the factor. All three, or the
+  figure is incomplete; the GPU number alone is not enough.
+  Reference format (follow it, do not drop the CPU):
+  "This analysis ran on the GPU (NVIDIA GB10) through cuDF over all <N> rows in <X> seconds;
+  the same computation took <Y> seconds on CPU pandas, so the GPU was <Z>x faster."
+  Then add the caveats from honest_note in gpu_vs_cpu (which parts of the speedup are not GPU
+  compute).
+- If you used dataset_session: every analyze response carries step_seconds (time for that step)
+  and cumulative_seconds (running session total). The close response carries
+  workflow_comparison with the total session time, the time the conventional approach takes
+  (CPU re-reading the file at each step) and the factor between them. End the answer with a
+  sentence built from workflow_comparison: "this run did N full-data steps in X seconds; doing
+  each step on the CPU with a fresh read would take about Y seconds, so it was Z times faster."
+  Then repeat its note: that factor includes the benefit of the data already being resident in
+  device memory, and it is not a pure GPU compute speedup. Do not present it as one.
+- Correlation is not causation. Do not over-read a corr result.
+- Do not print raw JSON. Use plain language and tables where they help.
 """
 
 
 def build_client() -> OpenAI:
     api_key = os.environ.get("STEPFUN_API_KEY")
     if not api_key:
-        print("[错误] 环境变量 STEPFUN_API_KEY 未设置。")
-        print("       在本机执行: source ~/.bashrc   然后再运行本脚本。")
+        print("[error] the STEPFUN_API_KEY environment variable is not set.")
+        print("        On this machine run: source ~/.bashrc   then start the script again.")
         sys.exit(2)
     return OpenAI(api_key=api_key, base_url=BASE_URL)
 
@@ -142,9 +167,9 @@ def parse_arguments(raw: str) -> tuple[dict, str | None]:
     try:
         loaded = json.loads(raw)
     except json.JSONDecodeError as exc:
-        return {}, f"参数不是合法 JSON: {exc}"
+        return {}, f"arguments are not valid JSON: {exc}"
     if not isinstance(loaded, dict):
-        return {}, f"参数必须是 JSON 对象，收到的是 {type(loaded).__name__}"
+        return {}, f"arguments must be a JSON object, got {type(loaded).__name__}"
     return loaded, None
 
 
@@ -154,13 +179,14 @@ def execute_tool(name: str, raw_args: str) -> tuple[str, float]:
     args, problem = parse_arguments(raw_args)
     if problem:
         return json.dumps({"success": False, "error": problem,
-                           "hint": "请按工具 schema 重新生成参数"}, ensure_ascii=False), 0.0
+                           "hint": "regenerate the arguments to match the tool schema"},
+                          ensure_ascii=False), 0.0
 
     func = skill_func_map.get(name)
     if func is None:
         return json.dumps({
             "success": False,
-            "error": f"未知的 Skill: {name}",
+            "error": f"unknown skill: {name}",
             "available": sorted(skill_func_map.keys()),
         }, ensure_ascii=False), 0.0
 
@@ -170,8 +196,8 @@ def execute_tool(name: str, raw_args: str) -> tuple[str, float]:
         # Almost always a wrong/misspelled parameter name from the model.
         return json.dumps({
             "success": False,
-            "error": f"参数不匹配: {exc}",
-            "hint": f"{name} 接受的参数见工具 schema",
+            "error": f"argument mismatch: {exc}",
+            "hint": f"see the tool schema for the arguments {name} accepts",
         }, ensure_ascii=False), time.perf_counter() - started
     except Exception as exc:
         return json.dumps({"success": False,
@@ -264,8 +290,8 @@ class Agent:
             # enforced in code.
             released = skills.close_all_sessions()
             if released.get("closed"):
-                self.log(f"  [session] 自动释放了 {released['closed']} 个未关闭的会话"
-                         f"（模型忘记调用 close）")
+                self.log(f"  [session] auto-released {released['closed']} session(s) left open"
+                         f" (the model did not call close)")
 
     def _run_inner(self, user_query: str) -> str:
         self.messages.append({"role": "user", "content": user_query})
@@ -282,12 +308,13 @@ class Agent:
                 # A model/transport failure must not kill the session or lose the history.
                 self.log(f"  [api error] {type(exc).__name__}: {exc}")
                 if "tool" in str(exc).lower():
-                    self.log("  [hint] 该模型可能不支持 function calling。"
-                             "可用 --no-tools 降级为纯对话模式，或改用支持工具调用的模型。")
-                return f"[调用模型失败] {type(exc).__name__}: {exc}"
+                    self.log("  [hint] this model may not support function calling. "
+                             "Use --no-tools to fall back to plain chat, or switch to a model "
+                             "that supports tool calls.")
+                return f"[model call failed] {type(exc).__name__}: {exc}"
 
             if not response.choices:
-                return "[调用模型失败] 返回结果为空"
+                return "[model call failed] empty response"
             message = response.choices[0].message
             tool_calls = getattr(message, "tool_calls", None)
 
@@ -322,7 +349,7 @@ class Agent:
                 })
 
         # Loop budget exhausted: report what happened instead of spinning forever.
-        self.log(f"  [warn] 达到最大工具调用轮数 {MAX_TOOL_ROUNDS}")
+        self.log(f"  [warn] hit the tool-round limit ({MAX_TOOL_ROUNDS})")
         try:
             final = self.client.chat.completions.create(
                 model=MODEL_NAME, messages=self.messages)
@@ -330,7 +357,7 @@ class Agent:
             self.messages.append({"role": "assistant", "content": content})
             return content
         except Exception as exc:
-            return (f"[已达最大工具轮数 {MAX_TOOL_ROUNDS}，且无法生成总结] "
+            return (f"[tool round limit {MAX_TOOL_ROUNDS} reached, no summary could be generated] "
                     f"{type(exc).__name__}: {exc}")
 
 
@@ -344,20 +371,20 @@ def main() -> int:
     agent = Agent(client, verbose=not args.quiet)
 
     if args.ask:
-        print(f"\n=== 用户 ===\n{args.ask}")
+        print(f"\n=== User ===\n{args.ask}")
         answer = agent.run(args.ask)
         print(f"\n=== Agent ===\n{answer}")
         return 0
 
-    print("\n输入 'exit' 或 'quit' 退出。")
+    print("\nType 'exit' or 'quit' to leave.")
     while True:
         try:
             task = input("\nEnter your question: ")
         except (EOFError, KeyboardInterrupt):
-            print("\n再见！")
+            print("\nGoodbye.")
             break
         if task.strip().lower() in {"exit", "quit"}:
-            print("再见！")
+            print("Goodbye.")
             break
         if not task.strip():
             continue

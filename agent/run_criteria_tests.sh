@@ -105,38 +105,38 @@ echo "===================== criteria test suite ====================="
 
 # (1)+(2) happy path: does it pick the right skill and produce real numbers
 run_case "happy-path-outliers" \
-  "帮我分析 $DATA 里有没有异常值" \
+  "Analyze $DATA and tell me whether it has any outliers" \
   "analyze_dataset" "success.: false"
 
 # (1) argument correctness for groupby (by + agg must both be right)
 run_case "groupby-args" \
-  "按 region 分组，统计 $DATA 的销售额均值和最大值，只看前5组" \
+  "Group $DATA by region and give me the mean and max revenue, top 5 groups only" \
   "groupby"
 
 # (1) relationship question should select corr
 run_case "corr-selection" \
-  "$DATA 里哪些数值列之间相关性最强" \
+  "Which numeric columns in $DATA correlate most strongly with each other" \
   "operation.: .corr"
 
 # (4) missing file must be reported, not crash (path derived so it works anywhere)
 run_case "missing-file" \
-  "分析一下 $AGENT_DIR/this_file_does_not_exist.csv" \
-  "不存在|not exist"
+  "Analyze $AGENT_DIR/this_file_does_not_exist.csv" \
+  "not exist|not found|no such|could not find"
 
 # (4) wrong column name must be reported
 run_case "bad-column" \
-  "分析 $DATA，只看 total_sales 这一列的异常值" \
+  "Analyze $DATA, outliers in the total_sales column only" \
   "total_sales"
 
 # (4) no path given -> should discover what exists
 run_case "discovery" \
-  "这台服务器上有哪些数据文件可以分析" \
+  "Which data files on this server can I analyze" \
   "list_datasets"
 
 # (2) no data file involved -> must NOT call an analysis tool
 run_case "no-tool-needed" \
-  "帮我解释一下什么是 IQR 四分位距" \
-  "四分位|IQR" "analyze_dataset"
+  "Explain what the IQR interquartile range is" \
+  "IQR|interquartile" "analyze_dataset"
 
 # (1)+(3) a genuinely multi-step question must select the stateful session skill and open the
 # file through it, rather than re-loading the file per step.
@@ -145,26 +145,30 @@ run_case "no-tool-needed" \
 # version used "(?=.*x)", which silently never matches and would have failed forever. Keep
 # patterns to plain ERE.
 run_case "multi-step-session" \
-  "先看 $DATA 的整体概览，然后找出 revenue 的异常值，再按 region 分组分析，用同一个会话完成" \
-  "\[round [0-9]+\] -> dataset_session.*operation.: .open" "显存不足"
+  "First give me an overall picture of $DATA, then the revenue outliers, then a by-region breakdown, all in one session" \
+  "\[round [0-9]+\] -> dataset_session.*operation.: .open" \
+  "load refused|device memory|out of memory|insufficient memory"
 
 # (4) the session must be released. Two acceptable outcomes, both checked here: the model
 # calls close itself, or the agent's cleanup backstop releases it and says so. What must not
 # happen is a session left holding ~1.7 GB.
 run_case "session-cleanup" \
-  "用会话方式看 $DATA 的整体概览和 revenue 异常值，完成后释放" \
-  "close|自动释放" "显存不足"
+  "Look at the overall picture of $DATA and its revenue outliers in a session, then release it" \
+  "close|releas" \
+  "load refused|device memory|out of memory|insufficient memory"
 
 # (2)+(3) a request for something the user can take away must produce files, not just prose.
 run_case "deliverables-export" \
-  "分析 $DATA 的 revenue 并给我出一份带图表的报告" \
-  "export_deliverables|report.md" "显存不足"
+  "Analyze revenue in $DATA and give me a report with charts" \
+  "export_deliverables|report.md" \
+  "load refused|device memory|out of memory|insufficient memory"
 
 # (1) the plan must be attached to the session when a multi-step goal is given, so progress
 # is owned by the system rather than recalled by the model.
 run_case "plan-attached" \
-  "用会话方式找出 $DATA 里 revenue 的异常值来源，分析原因后释放" \
-  "goal|plan|dataset_session" "显存不足"
+  "Find where the revenue outliers in $DATA come from, drill down to the cause in a session, then release it" \
+  "goal|plan|dataset_session" \
+  "load refused|device memory|out of memory|insufficient memory"
 
 echo "==============================================================="
 echo "PASS=$PASS  FAIL=$FAIL"

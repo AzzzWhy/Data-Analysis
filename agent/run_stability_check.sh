@@ -39,7 +39,7 @@ if [ ! -f "$DATA" ]; then
   exit 2
 fi
 
-QUESTION="${STABILITY_QUESTION:-$DATA 里 revenue 的异常值是怎么来的？帮我找出来并分析原因，用会话方式做完并释放}"
+QUESTION="${STABILITY_QUESTION:-Where do the revenue outliers in $DATA come from? Find them, drill down to the cause, and do the whole thing in a session that you release at the end}"
 
 # Which plan steps the chosen question is expected to cover. Space-separated operation names;
 # extra steps are fine, and order is not enforced (see the note further down).

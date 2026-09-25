@@ -3,13 +3,13 @@ name: cudf-analytics
 description: >-
   GPU-accelerated statistical analysis for large tabular datasets on NVIDIA GB10 / DGX
   Spark. Use this skill whenever the user asks to analyze, profile, summarize, aggregate,
-  correlate, or find outliers/异常值 in a CSV, Parquet, TSV, JSONL, or Excel dataset —
-  especially when the file is large (hundreds of MB to many GB, or millions of rows) or
-  when the user mentions 大数据集, 统计摘要, 分组聚合, 相关性, 异常值, 数据分析, 算力加速,
-  GPU, cuDF, RAPIDS, or complains that pandas is too slow or runs out of memory. Trigger it
-  for questions like "这个 CSV 里各品类的平均销售额是多少", "帮我分析这份数据的分布和异常值",
-  "算了 5000 万行要多久". Also trigger it when the user wants something they can keep —
-  「出个图表」「画一下」「给我一份报告」「导出」「保存下来」「我要拿去汇报」— because this skill
+  correlate, or find outliers in a CSV, Parquet, TSV, JSONL, or Excel dataset, especially
+  when the file is large (hundreds of MB to many GB, or millions of rows) or when the user
+  mentions GPU, cuDF, RAPIDS, or complains that pandas is too slow or runs out of memory.
+  Trigger it for questions like "what is the average sale per category in this CSV", "analyze
+  the distribution and outliers in this data", or "how long would 50 million rows take".
+  Also trigger it when the user wants something they can keep, such as "make me a chart",
+  "give me a report", "export this" or "I need it for a presentation", because this skill
   writes a Markdown report, SVG charts and CSV exports from the GPU-computed aggregates.
   Do NOT trigger for single-number arithmetic, fetching data from a database/API, training
   ML models, or editing the dataset. When in doubt and a data file is involved, prefer this
@@ -50,10 +50,8 @@ Trigger when the user wants **computed facts about a dataset**, and any of these
 | Anomaly / outlier detection | "find the outliers in amount", "how many records are out of range" |
 | Scale or speed is the point | "50 million rows", "pandas is too slow", "how long will this take" |
 
-**Language:** the table above shows English phrasings, but this skill is language-agnostic.
-Users commonly ask in Chinese (e.g. 「帮我分析这份数据的统计摘要」,「按 region 分组算平均销量」),
-because the frontmatter `description` deliberately carries both English and Chinese trigger
-vocabulary. Match the user's language when answering; the script's flags stay English.
+**Language:** the skill is driven in English. Its flags, operation names, `--agg` syntax, JSON
+keys and trigger vocabulary are English throughout, and so are the example requests above.
 
 Do **not** trigger for: building charts, training models, querying a remote database,
 or any task where no tabular file is involved.
@@ -186,10 +184,11 @@ round budget, one switched tools half-way through. That is not a property a demo
 With the plan attached, the same question completes its steps and closes cleanly.
 
 ```
-{"cmd": "open", "path": "/data/sales.csv", "goal": "找出 revenue 的异常值原因"}
+{"cmd": "open", "path": "/data/sales.csv", "goal": "find the cause of the revenue outliers"}
   -> plan: {kind: "drill_down", total_steps: 5, next_step: 0,
             steps: [profile, outliers, groupby(region), groupby(category), corr],
-            do_next: "operation=analyze, op=profile  # 先确认列名与类型"}
+            do_next: 'operation="analyze", op="profile"'
+                     '  # Confirm the real column names and types; later steps need them'}
 {"cmd": "analyze", "sid": "s1", "op": "profile"}
   -> plan: {completed: 1, next_step: 1, ...}
 ```
@@ -304,8 +303,8 @@ not just the best row.
 | `--by region,category` rejected | `--by` takes one column. The error now names the one-column rule and the valid halves; issue two groupby calls. |
 | `unsupported agg func(s)` | The error names an alternative by intent: `corr` → use `op='corr'` (group-by cannot compute per-group correlation), `var` → `std`, `avg` → `mean`, quantiles → `op='summary'`. Do not repeat the same argument. |
 | An error inside an open session | Read it, change the argument, retry on the **same session**. Do not `close` first: closing leaves only the slow re-reading path. |
-| `显存不足 / memory refused on session open` | Expected guard, raised before loading. Use `analyze_dataset` for a one-off, or pass `columns` to load fewer. |
-| Session says the file "已被修改" | The file changed under the session, so its answers would be stale. Re-`open` it. |
+| `memory refused on session open` | Expected guard, raised before loading. Use `analyze_dataset` for a one-off, or pass `columns` to load fewer. |
+| Session says the file changed on disk | The file changed under the session, so its answers would be stale. Re-`open` it. |
 | Session left open after a run | The agent releases it in a `finally` block; the model is also told to `close`. If a session is ever orphaned, `{"cmd":"close","sid":"all"}` frees it. |
 | A chart has one enormous bar and the rest are slivers | A surrogate key is in the chart. `summary_means.svg` filters these; check the omitted-columns note in its subtitle. |
 

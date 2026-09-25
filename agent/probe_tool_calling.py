@@ -21,11 +21,11 @@ TOOLS = [{
     "type": "function",
     "function": {
         "name": "analyze_dataset",
-        "description": "对本地数据文件做统计分析和异常值检测。",
+        "description": "Run statistical analysis and outlier detection on a local data file.",
         "parameters": {
             "type": "object",
             "properties": {
-                "file_path": {"type": "string", "description": "文件路径"},
+                "file_path": {"type": "string", "description": "path to the data file"},
                 "operation": {"type": "string",
                               "enum": ["auto", "summary", "groupby", "corr", "outliers"]},
             },
@@ -40,7 +40,7 @@ for model in [os.environ.get("STEPFUN_MODEL", "step-3.7-flash")]:
         r = client.chat.completions.create(
             model=model,
             messages=[{"role": "user",
-                       "content": "帮我分析 /data/sales.csv 里有没有异常值"}],
+                       "content": "Analyze /data/sales.csv and tell me whether it has outliers"}],
             tools=TOOLS,
             tool_choice="auto",
         )

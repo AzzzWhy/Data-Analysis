@@ -105,7 +105,8 @@ print("=== staleness guard: touch the file, session must refuse ===")
 try:
     os.utime(DATA, None)
     r = call({"cmd": "analyze", "sid": sid, "op": "summary"})
-    refused = r.get("ok") is False and "已被修改" in str(r.get("error", ""))
+    refused = (r.get("ok") is False
+               and "changed while this session was open" in str(r.get("error", "")))
     check("refuses to answer after the file changed", refused,
           "" if refused else f"got: {r}")
 except Exception as exc:

@@ -45,8 +45,8 @@ users ask in either language.
   the read stage dominates. See the attribution table in `README.md`.
 - Raw evidence: `benchmark/benchmark_results.md`, `benchmark/gb10_run.log`,
   `benchmark/smoke/gb10_smoke_test.log`.
-- The agent application (tool-calling loop, scripted demo, 7-case criteria suite) lives in
-  `agent/`; see "The agent application" in `README.md`. `run_criteria_tests.sh` passes 7/7.
+- The agent application (tool-calling loop, scripted demo, 11-case criteria suite) lives in
+  `agent/`; see "The agent application" in `README.md`. `run_criteria_tests.sh` passes 11/11.
 
 ## Quick start for the agent
 
@@ -57,9 +57,9 @@ source ~/.bashrc                 # provides STEPFUN_API_KEY
 conda activate rapids-cudf
 cd agent
 
-python agent_main.py --ask "分析 /path/to/data.csv 的异常值"
-python demo_script.py --prewarm && python demo_script.py   # 7-step demo, ~76 s
-bash run_criteria_tests.sh       # 7 judging-criteria cases
+python agent_main.py --ask "analyze the outliers in /path/to/data.csv"
+python demo_script.py --prewarm && python demo_script.py   # 9-stage demo, 176.8 s
+bash run_criteria_tests.sh       # 11 judging-criteria cases
 ```
 
 Without a GPU the same code runs on pandas and reports `engine="pandas"` honestly; see the

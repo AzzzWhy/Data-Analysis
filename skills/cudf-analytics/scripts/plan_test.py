@@ -52,18 +52,19 @@ def check(name: str, cond: bool, extra: str = "") -> None:
 def main() -> int:
     print("=== classification is deterministic and covers the four shapes ===")
     cases = [
-        ("找出 revenue 的异常值并分析原因", "drill_down"),
-        ("这些离群点是怎么来的", "drill_down"),
+        ("find the outliers in revenue and explain why", "drill_down"),
+        ("where do these outliers come from", "drill_down"),
         ("why are these outliers so large", "drill_down"),
-        ("按 region 分组对比各地区的销售额", "compare_groups"),
+        ("compare total revenue by region", "compare_groups"),
         ("which category ranks highest", "compare_groups"),
-        ("这份数据的质量怎么样，有没有缺失", "data_quality"),
+        ("how clean is this dataset, are there missing values?", "data_quality"),
         ("check for nulls and duplicates", "data_quality"),
-        ("哪些指标之间相关性最强", "relationships"),
+        ("how strongly do the metrics correlate with one another", "relationships"),
         ("what drives revenue", "relationships"),
-        # Guards against a regression where a broad single-character trigger steals this:
-        # "各" belongs to no plan, but "各指标之间的关系" is a relationships question.
-        ("各指标之间的关系如何", "relationships"),
+        # Guards against a regression where a broad trigger steals this: neither "each" nor
+        # "every" belongs to any plan, but "the relationship between each metric" is a
+        # relationships question.
+        ("what is the relationship between each of these metrics", "relationships"),
     ]
     for goal, want in cases:
         got = AP.choose_kind(goal)
@@ -71,17 +72,17 @@ def main() -> int:
 
     print()
     print("=== the same goal always yields the same plan, not a varying one ===")
-    seen = {AP.choose_kind("找出 revenue 的异常值并分析原因") for _ in range(50)}
+    seen = {AP.choose_kind("why does revenue have outliers") for _ in range(50)}
     check("stable over 50 calls", len(seen) == 1, str(seen))
-    p_again = AP.build_plan("x", "找出 revenue 的异常值并分析原因", group_cols=["region"])
+    p_again = AP.build_plan("x", "why does revenue have outliers", group_cols=["region"])
     ops_a = [s.op for s in p_again.steps]
-    p_again2 = AP.build_plan("x", "找出 revenue 的异常值并分析原因", group_cols=["region"])
+    p_again2 = AP.build_plan("x", "why does revenue have outliers", group_cols=["region"])
     check("plan steps identical across builds", ops_a == [s.op for s in p_again2.steps],
           str(ops_a))
 
     print()
     print("=== a plan is executable, with real column names ===")
-    p = AP.build_plan("p1", "找出 revenue 的异常值并分析原因",
+    p = AP.build_plan("p1", "why does revenue have outliers",
                       group_cols=["region", "category"])
     check("drill_down yields 5 steps", len(p.steps) == 5, f"n={len(p.steps)}")
     check("starts with profile (need real column names first)", p.steps[0].op == "profile")
@@ -129,7 +130,7 @@ def main() -> int:
 
     print()
     print("=== degenerate input drops steps instead of emitting broken ones ===")
-    p2 = AP.build_plan("p2", "按 region 分组对比", "compare_groups", group_cols=[])
+    p2 = AP.build_plan("p2", "compare revenue by region", "compare_groups", group_cols=[])
     check("groupby steps dropped with no known group column",
           all(s.op != "groupby" for s in p2.steps), str([s.op for s in p2.steps]))
     check("remaining plan is still useful", len(p2.steps) >= 3, f"n={len(p2.steps)}")
@@ -138,7 +139,7 @@ def main() -> int:
 
     print()
     print("=== an unrecognised goal still gets a usable plan ===")
-    p3 = AP.build_plan("p3", "帮我随便看看这份数据")
+    p3 = AP.build_plan("p3", "just take a quick look at this data")
     check("fallback plan is non-empty", len(p3.steps) >= 3,
           f"kind={p3.kind} n={len(p3.steps)}")
     check("fallback kind is a catalog entry", p3.kind in AP.CATALOG)

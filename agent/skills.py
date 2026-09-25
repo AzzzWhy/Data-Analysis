@@ -95,27 +95,36 @@ skill_definitions = [
         "function": {
             "name": "dataset_session",
             "description": (
-                "把数据文件一次性载入显存，之后在同一次会话里反复分析，避免每一步都重新读盘。"
-                "适合【多步分析】：先找异常再定位来源、按多个维度对比、由概览逐步下钻。"
-                "\n\n为什么用它：全量数据常驻内存后，后续每一步从数秒降到几十毫秒"
-                "（2000 万行实测：载入约 1.9 秒，之后每步 0.03~0.5 秒）。"
-                "因此多步下钻变得便宜，且每一步仍然是全量数据，不采样。"
-                "\n\n调用方式（三步）："
-                "1) operation='open' + file_path —— 打开文件，返回 session_id；"
-                "2) operation='analyze' + session_id + op —— 反复分析，op 与 analyze_dataset 相同"
-                "(profile/summary/groupby/corr/outliers/auto)，可带 by/agg/columns/top_k；"
-                "3) operation='close' + session_id —— 分析结束必须关闭以释放显存。"
-                "\n\n必须使用的场景：用户的需求需要多步完成，例如「找出异常并分析原因」"
-                "「对比几个维度的表现」「先概览再深入某一组」。"
-                "\n\n不要用于：只有一步的简单问题（直接用 analyze_dataset 更省显存）；"
-                "画图；修改数据文件。单次问题用 session 只会白占显存。"
-                "\n\n注意：会话会持续占用显存（2000 万行约 1.7GB）。分析完请 close。"
-                "如果 open 因显存不足被拒绝，改回 analyze_dataset。"
-                "\n\n**规划托管**：open 时把用户的目标原文传进 goal，系统会立刻返回一份"
-                "针对这个目标的计划（plan），里面是排好序的具体步骤和「下一步该做什么」。"
-                "每一步执行完后，返回里都会带上最新的 plan 进度（已完成几步、还剩几步、"
-                "下一步做什么）。你不必自己记住做到哪里——进度由系统记账。"
-                "计划里的步骤如果判断不合适，可以跳过，系统会把它标成 off-plan。"
+                "Load a data file into device memory once, then analyse it repeatedly in the "
+                "same session so no step re-reads it from disk. Use it for multi-step work: find "
+                "outliers then trace where they come from, compare several dimensions, move from "
+                "an overview into a drill-down."
+                "\n\nWhy: with the full dataset resident, each later step drops from seconds to "
+                "tens of milliseconds (measured on 20M rows: about 1.9 s to load, then 0.03-0.5 s "
+                "per step). Multi-step drill-down becomes cheap, and every step still covers the "
+                "full data, with no sampling."
+                "\n\nCall it in three steps:"
+                "1) operation='open' + file_path: opens the file and returns a session_id; "
+                "2) operation='analyze' + session_id + op: repeated analysis, taking the same op "
+                "values as analyze_dataset (profile/summary/groupby/corr/outliers/auto), plus "
+                "by/agg/columns/top_k; "
+                "3) operation='close' + session_id: required when the analysis ends, to release "
+                "device memory."
+                "\n\nUse it when: the request needs several steps, for example \"find the "
+                "outliers and explain why they occur\", \"compare performance across dimensions\", "
+                "\"take an overview then drill into one group\"."
+                "\n\nDo not use it for: one-step questions (analyze_dataset is enough and holds "
+                "less device memory); charting; editing data files. A one-off question in a "
+                "session only occupies device memory."
+                "\n\nNote: a session keeps holding device memory (about 1.7GB for 20M rows). "
+                "close it when the analysis is done. If open is rejected for lack of device "
+                "memory, go back to analyze_dataset."
+                "\n\nPlanning is hosted: pass the user's goal verbatim in goal at open time and "
+                "the system immediately returns a plan for that goal, an ordered set of concrete "
+                "steps with what to do next. After each step the response carries the current plan "
+                "progress (how many steps are done, how many are left, what comes next). You do "
+                "not have to remember where you got to; the system keeps the books. A plan step "
+                "that looks wrong for the goal can be skipped, and the system marks it off-plan."
             ),
             "parameters": {
                 "type": "object",
@@ -123,40 +132,44 @@ skill_definitions = [
                     "operation": {
                         "type": "string",
                         "enum": ["open", "analyze", "list", "close"],
-                        "description": "open=载入文件并返回 session_id；analyze=在会话上执行分析；"
-                                       "list=查看当前会话；close=释放",
+                        "description": "open=load the file and return a session_id; "
+                                       "analyze=run an analysis on the session; list=show the "
+                                       "open sessions; close=release them",
                     },
                     "file_path": {
                         "type": "string",
-                        "description": "operation='open' 时要载入的文件路径",
+                        "description": "file to load when operation='open'",
                     },
                     "session_id": {
                         "type": "string",
-                        "description": "operation='analyze'/'close' 时 open 返回的会话编号，例如 s1",
+                        "description": "session id returned by open, used with "
+                                       "operation='analyze'/'close', e.g. s1",
                     },
                     "op": {
                         "type": "string",
                         "enum": ["auto", "profile", "summary", "groupby", "corr", "outliers"],
-                        "description": "operation='analyze' 时要执行的分析，含义与 analyze_dataset 一致",
+                        "description": "analysis to run when operation='analyze', same meanings "
+                                       "as in analyze_dataset",
                     },
-                    "by": {"type": "string", "description": "op='groupby' 时的分组列"},
+                    "by": {"type": "string", "description": "grouping column when op='groupby'"},
                     "agg": {
                         "type": "string",
-                        "description": "op='groupby' 时的聚合方式，例如 revenue:sum,mean",
+                        "description": "aggregation when op='groupby', e.g. revenue:sum,mean",
                     },
                     "columns": {
                         "type": "string",
-                        "description": "要分析的列，逗号分隔，例如 revenue,cost",
+                        "description": "columns to analyse, comma-separated, e.g. revenue,cost",
                     },
                     "top_k": {
                         "type": "integer",
-                        "description": "groupby/corr/outliers 返回多少条，默认 20",
+                        "description": "how many rows groupby/corr/outliers return, default 20",
                     },
                     "goal": {
                         "type": "string",
-                        "description": "operation='open' 时用户想达成的目标（原文即可）。"
-                                       "传入后系统会返回一份针对该目标的分解计划并在每一步"
-                                       "自动记账，强烈建议多步需求都传。",
+                        "description": "the goal the user wants to reach when operation='open' "
+                                       "(their own wording is fine). With it, the system returns "
+                                       "a plan for that goal and tracks progress after every "
+                                       "step; recommended for multi-step requests.",
                     },
                 },
                 "required": ["operation"],
@@ -168,56 +181,70 @@ skill_definitions = [
         "function": {
             "name": "analyze_dataset",
             "description": (
-                "对本地表格数据文件做 GPU 加速的真实统计计算，返回精确结果。"
-                "覆盖：整体画像(行列数/类型/缺失)、统计摘要(count/mean/std/min/Q1/中位数/Q3/max)、"
-                "分组聚合、相关性矩阵、IQR 异常值检测。"
-                "\n\n必须在以下场景调用：用户要求分析/统计/汇总/聚合/相关性/找异常值任何本地数据文件"
-                "(CSV、Parquet、TSV、JSONL、Excel)；或用户提到数据量很大、百万行/千万行、"
-                "说 pandas 太慢、担心跑不动。"
-                "\n\n关键约束：不要用你自己读到上下文的样本来估算统计量，必须调用本工具让 GPU 在全量数据上计算。"
-                "返回结果里的 rows_scanned 是全量行数。"
-                "\n\n不要用于：画图、训练模型、查远程数据库、修改数据文件、单次算术运算。"
+                "Run real GPU-accelerated statistics over a local tabular data file and return "
+                "exact results. Covers: a profile (rows, columns, types, missing values), summary "
+                "statistics (count/mean/std/min/Q1/median/Q3/max), grouped aggregation, a "
+                "correlation matrix, and IQR outlier detection."
+                "\n\nCall it when: the user asks to analyse, count, summarise, aggregate, "
+                "correlate or find outliers in any local data file (CSV, Parquet, TSV, JSONL, "
+                "Excel); or mentions a large dataset, millions or tens of millions of rows, says "
+                "pandas is too slow, or worries the job will not finish."
+                "\n\nHard constraint: do not estimate statistics from a sample you read into the "
+                "context. Call this tool so the GPU computes over the full data. rows_scanned in "
+                "the result is the full row count."
+                "\n\nDo not use it for: charting, training models, querying remote databases, "
+                "editing data files, or a single arithmetic operation."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "file_path": {
                         "type": "string",
-                        "description": "服务器上数据文件的绝对或相对路径，例如 /data/sales.csv"
+                        "description": "absolute or relative path to the data file on this "
+                                       "machine, e.g. /data/sales.csv"
                     },
                     "operation": {
                         "type": "string",
                         "enum": ["auto", "profile", "summary", "groupby", "corr", "outliers"],
                         "description": (
-                            "要做的分析。auto=一次返回画像+摘要+异常值(推荐先用它); "
-                            "profile=行列数/类型/缺失/预览; summary=每列统计量; "
-                            "groupby=按某列分组聚合(需要配合 by 和 agg); "
-                            "corr=相关性矩阵; outliers=IQR 异常值检测"
+                            "analysis to run. auto=profile, summary and outliers in one call "
+                            "(start with it); "
+                            "profile=rows/columns/types/missing/preview; summary=per-column "
+                            "statistics; "
+                            "groupby=aggregate grouped by a column (needs by and agg); "
+                            "corr=correlation matrix; outliers=IQR outlier detection"
                         )
                     },
                     "by": {
                         "type": "string",
-                        "description": "groupby 用：分组依据的列名，例如 region。仅 operation=groupby 时需要"
+                        "description": ("for groupby: column to group by, e.g. region. Needed only "
+                                        "with operation=groupby")
                     },
                     "agg": {
                         "type": "string",
                         "description": (
-                            "groupby 用：聚合表达式，格式 '列名:函数1,函数2|列名2:函数3'，"
-                            "例如 'revenue:sum,mean|quantity:max'。"
-                            "可用函数：count,size,sum,mean,min,max,std,median,nunique,first,last"
+                            "for groupby: aggregation expression, format "
+                            "'column:func1,func2|column2:func3', "
+                            "e.g. 'revenue:sum,mean|quantity:max'. "
+                            "Available functions: "
+                            "count,size,sum,mean,min,max,std,median,nunique,first,last"
                         )
                     },
                     "columns": {
                         "type": "string",
-                        "description": "可选：只分析这些数值列，逗号分隔，例如 revenue,cost。留空则分析全部数值列"
+                        "description": "optional: analyse only these numeric columns, "
+                                       "comma-separated, e.g. revenue,cost. Empty means every "
+                                       "numeric column"
                     },
                     "top_k": {
                         "type": "integer",
-                        "description": "可选：groupby 只返回前 K 个分组、corr 只返回关联最强的 K 对。数据量大时建议设置"
+                        "description": "optional: groupby returns only the top K groups, corr only "
+                                       "the K strongest pairs. Worth setting on large data"
                     },
                     "force_cpu": {
                         "type": "boolean",
-                        "description": "可选：强制用 CPU(pandas) 计算，用于与 GPU 结果对照。默认 false"
+                        "description": "optional: force CPU (pandas) so the numbers can be "
+                                       "compared against the GPU. Default false"
                     }
                 },
                 "required": ["file_path", "operation"]
@@ -229,15 +256,16 @@ skill_definitions = [
         "function": {
             "name": "list_datasets",
             "description": (
-                "列出服务器上可分析的数据文件(CSV/Parquet/TSV/JSONL/Excel)及其大小。"
-                "当用户没有给出具体文件路径，或你不确定有哪些数据可用时，先调用这个。"
+                "List the analysable data files on this machine (CSV/Parquet/TSV/JSONL/Excel) "
+                "with their sizes. Call it first when the user gave no file path, or when you are "
+                "unsure which data is available."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "directory": {
                         "type": "string",
-                        "description": "要搜索的目录，默认当前工作目录"
+                        "description": "directory to search, current working directory by default"
                     }
                 },
                 "required": []
@@ -249,31 +277,38 @@ skill_definitions = [
         "function": {
             "name": "export_deliverables",
             "description": (
-                "把分析结果导出成可以直接交付的文件:图表(SVG)和一份 Markdown 报告。"
-                "当用户说「出个图表」「画一下」「给我一份报告」「导出」「保存下来」"
-                "「我要拿去汇报/发邮件」时使用。\n"
-                "会先在 GPU 上做一次全量分析，然后写出:report.md(带表格与图表)、"
-                "若干 .svg 图、以及 CSV/JSON 数据文件。\n"
-                "如果用户要的是「图表」而没指定分析类型，用 operation=auto 即可。\n"
-                "注意:返回里会给出文件路径，回答时必须把这些路径告诉用户。"
+                "Export the analysis as files the user can take away: charts (SVG) and a Markdown "
+                "report. Use it when the user says \"make a chart\", \"plot it\", \"give me a "
+                "report\", \"export this\", \"save it\", \"I need this for a briefing / an "
+                "email\".\n"
+                "It runs the full analysis on the GPU first, then writes: report.md (with tables "
+                "and charts), several .svg charts, and CSV/JSON data files.\n"
+                "If the user wants charts and named no analysis type, operation=auto is enough.\n"
+                "Note: the result carries the file paths, and your answer must give the user those "
+                "paths."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "file_path": {
                         "type": "string",
-                        "description": "要分析的数据文件路径；省略则用最近一次分析过的文件"
+                        "description": "data file to analyse; omit it to reuse the file analysed "
+                                       "last"
                     },
                     "operation": {
                         "type": "string",
-                        "description": "先做哪种分析再出图，默认 auto",
+                        "description": "which analysis to run before charting, auto by default",
                         "enum": ["auto", "profile", "summary", "groupby", "corr", "outliers"]
                     },
-                    "by": {"type": "string", "description": "groupby 的分组列(只能一列)"},
-                    "agg": {"type": "string", "description": "聚合写法 col:func1,func2|col2:func"},
-                    "columns": {"type": "string", "description": "限定参与分析的列，逗号分隔"},
-                    "top_k": {"type": "integer", "description": "返回前多少行/组"},
-                    "out_dir": {"type": "string", "description": "输出目录，默认 deliverables/"}
+                    "by": {"type": "string", "description": "grouping column for groupby (one "
+                                                            "column only)"},
+                    "agg": {"type": "string", "description": "aggregation form "
+                                                             "col:func1,func2|col2:func"},
+                    "columns": {"type": "string", "description": "columns to include in the "
+                                                                 "analysis, comma-separated"},
+                    "top_k": {"type": "integer", "description": "how many rows/groups to return"},
+                    "out_dir": {"type": "string", "description": "output directory, "
+                                                                 "deliverables/ by default"}
                 },
                 "required": []
             }
@@ -520,13 +555,14 @@ def _attach_speedup(out: dict, path: str, operation: str, by, agg, columns, top_
     cpu_rows = cached.get("rows_scanned")
     if gpu_rows is not None and cpu_rows is not None and gpu_rows != cpu_rows:
         out["gpu_vs_cpu_warning"] = (
-            f"对照已跳过：两个引擎扫描的行数不同（GPU {gpu_rows} 行 / CPU {cpu_rows} 行），"
-            "该对比无效。"
+            f"comparison skipped: the two engines scanned different row counts "
+            f"(GPU {gpu_rows} / CPU {cpu_rows}), so the comparison is not valid."
         )
         return
     if gpu_rows is not None and gpu_rows < 1000:
         out["gpu_vs_cpu_warning"] = (
-            f"对照已跳过：本次只扫描了 {gpu_rows} 行，规模太小，加速比没有意义。"
+            f"comparison skipped: this run scanned only {gpu_rows} rows, too small for a "
+            f"meaningful speedup."
         )
         return
 
@@ -539,22 +575,25 @@ def _attach_speedup(out: dict, path: str, operation: str, by, agg, columns, top_
         "speedup_x": round(ratio, 2),
         "rows_compared": gpu_rows,
         "note": (
-            "同一文件、同一命令，GPU 与 CPU 各实际运行一次所得（CPU 侧取两次中最快的一次）。"
-            "CPU 基线是 pandas 默认（C 层基本单线程）。"
+            "same file, same command, one real run on each engine (the CPU side takes the faster "
+            "of two runs). The CPU baseline is default pandas, effectively single-threaded in the "
+            "C layer."
         ),
     }
     # Give the model a ready-made, honest sentence, and the caveat it must repeat when the
     # ratio is unimpressive. Small data legitimately shows little or no GPU advantage.
     if ratio < 1.2:
         out["gpu_vs_cpu"]["honest_note"] = (
-            f"这次 GPU 只快 {ratio:.2f}x，几乎无差别。原因是数据规模偏小、"
-            "读取/解析占了大头。回答时必须如实说明，不要宣称明显加速。"
+            f"the GPU was only {ratio:.2f}x faster here, close to no difference, because the "
+            "data is small and reading/parsing dominates. Say this plainly in the answer; do not "
+            "claim a clear speedup."
         )
     else:
         out["gpu_vs_cpu"]["honest_note"] = (
-            f"GPU 比 CPU 快 {ratio:.2f}x。可以在回答里说明这次计算用了 GPU 加速；"
-            "但要补充：端到端时间里读取 CSV 占比很大，这部分两引擎都在用多核并行，"
-            "加上 pandas 基线只用单核，所以该倍数不等于纯 GPU 计算的优势。"
+            f"the GPU was {ratio:.2f}x faster than the CPU. You can say this computation used GPU "
+            "acceleration, but add that reading the CSV takes a large share of the end-to-end "
+            "time, that both engines use multiple cores for that part, and that the pandas "
+            "baseline uses a single core, so the factor is not a pure GPU compute advantage."
         )
 
 
@@ -573,7 +612,7 @@ def _session_script() -> str:
     engine = _find_engine()
     cand = os.path.join(os.path.dirname(engine), "gpu_session.py")
     if not os.path.exists(cand):
-        raise FileNotFoundError(f"找不到 gpu_session.py（期望在 {cand}）")
+        raise FileNotFoundError(f"gpu_session.py not found (expected at {cand})")
     return cand
 
 
@@ -622,14 +661,16 @@ def _worker_call(payload: dict, timeout: float = 1800.0):
                 _worker = _worker_start()
             except Exception as exc:
                 return {"ok": False,
-                        "error": f"无法启动会话进程: {type(exc).__name__}: {exc}"}
+                        "error": f"could not start the session process: "
+                                 f"{type(exc).__name__}: {exc}"}
         try:
             _worker.stdin.write(json.dumps(payload) + "\n")
             _worker.stdin.flush()
             line = _worker.stdout.readline()
         except (BrokenPipeError, OSError) as exc:
             _worker = None
-            return {"ok": False, "error": f"会话进程通信失败: {exc}。请改用 analyze_dataset。"}
+            return {"ok": False, "error": f"session process communication failed: {exc}. "
+                                           f"Use analyze_dataset instead."}
         if not line:
             err = ""
             try:
@@ -638,12 +679,13 @@ def _worker_call(payload: dict, timeout: float = 1800.0):
                 pass
             _worker = None
             return {"ok": False,
-                    "error": f"会话进程已退出。{('stderr: ' + err) if err else ''}"
-                             f"请改用 analyze_dataset 做单次分析。"}
+                    "error": f"the session process exited. {('stderr: ' + err) if err else ''}"
+                             f"Use analyze_dataset for a one-off analysis."}
         try:
             return json.loads(line)
         except json.JSONDecodeError:
-            return {"ok": False, "error": f"会话进程返回了无法解析的输出: {line[:200]}"}
+            return {"ok": False, "error": f"the session process returned unparseable output: "
+                                          f"{line[:200]}"}
 
 
 def _resolve_data_path(file_path: str) -> str:
@@ -669,17 +711,9 @@ def _resolve_data_path(file_path: str) -> str:
         return expanded
 
     # Search the places a dataset plausibly lives, nearest first. Deliberately a short,
-    # predictable list: a filesystem-wide search would be slow and unpredictable.
-    candidates = []
-    env_dir = os.environ.get("DEMO_DATA_DIR")
-    if env_dir:
-        candidates.append(env_dir)
-    candidates += [
-        os.getcwd(),
-        os.path.dirname(_THIS_DIR),
-        os.path.expanduser("~"),
-        "/data",
-    ]
+    # predictable list: a filesystem-wide search would be slow and unpredictable. The list is
+    # shared with list_datasets so discovery and resolution cannot disagree.
+    candidates = _data_search_dirs()
     for base in candidates:
         cand = os.path.join(base, raw)
         if os.path.isfile(cand):
@@ -730,7 +764,7 @@ def dataset_session(operation: str, file_path: str = None, session_id: str = Non
     try:
         operation = str(operation or "open").strip().lower()
         if operation not in ("open", "analyze", "list", "close"):
-            return _err(f"operation 必须是 open / analyze / list / close，收到: {operation}")
+            return _err(f"operation must be open / analyze / list / close, got: {operation}")
 
         if operation == "open":
             req = {"cmd": "open", "path": _resolve_data_path(file_path),
@@ -746,15 +780,16 @@ def dataset_session(operation: str, file_path: str = None, session_id: str = Non
             req = {"cmd": "list"}
 
         if operation == "analyze" and not session_id:
-            return _err("analyze 需要 session_id（先用 operation='open' 打开文件）")
+            return _err("analyze needs a session_id (open a file first with operation='open')")
 
         resp = _worker_call(req)
         if not resp.get("ok"):
             # Pass the worker's own guidance through: it is written for the model, and
             # dropping it would leave the agent with an unactionable error.
             return _err(
-                resp.get("error") or "会话操作失败",
-                hint=resp.get("hint") or "可以改用 analyze_dataset 做单次无状态分析。",
+                resp.get("error") or "session operation failed",
+                hint=resp.get("hint") or "you can fall back to analyze_dataset for a one-off "
+                                         "stateless analysis.",
                 **{k: v for k, v in resp.items()
                    if k in ("open_sessions", "free_gb", "need_gb", "file_gb")},
             )
@@ -769,12 +804,13 @@ def dataset_session(operation: str, file_path: str = None, session_id: str = Non
                 out[key] = _compact(out[key])
         if operation == "analyze" and out.get("engine") != "cudf":
             out["warning"] = (
-                f"本会话运行在 CPU 上 (engine={out.get('engine')})，回答时不要声称用了 GPU 加速。"
+                f"this session ran on the CPU (engine={out.get('engine')}); do not claim GPU "
+                f"acceleration in the answer."
             )
         return json.dumps(out, ensure_ascii=False, default=str)
     except Exception as exc:  # never let a session failure break the agent loop
         return _err(f"{type(exc).__name__}: {exc}",
-                    hint="可以改用 analyze_dataset 做单次无状态分析。")
+                    hint="you can fall back to analyze_dataset for a one-off stateless analysis.")
 
 
 # --------------------------------------------------------------------------------------
@@ -792,17 +828,18 @@ def analyze_dataset(file_path: str, operation: str, by: str = None, agg: str = N
     """
     try:
         if not file_path or not str(file_path).strip():
-            return _err("必须提供 file_path")
+            return _err("file_path is required")
         path = _resolve_data_path(str(file_path))
         if not os.path.exists(path):
             return _err(
-                f"文件不存在: {path}",
-                hint=("如果这是相对路径或文件名，它相对于 agent 进程的工作目录解析。"
-                      "请调用 list_datasets 拿到该文件的绝对路径，然后用绝对路径重试一次；"
-                      "不要直接放弃，也不要凭空猜测路径。"),
+                f"file does not exist: {path}",
+                hint=("if this is a relative path or a bare filename, it was resolved against the "
+                      "agent process working directory. Call list_datasets to get the absolute "
+                      "path of the file, then retry once with that absolute path; do not give up, "
+                      "and do not guess a path."),
             )
         if os.path.isdir(path):
-            return _err(f"这是一个目录而不是文件: {path}")
+            return _err(f"this is a directory, not a file: {path}")
 
         engine = _find_engine()
         cmd = [_python_bin(), engine, "--input", path, "--op", str(operation or "auto")]
@@ -831,12 +868,12 @@ def analyze_dataset(file_path: str, operation: str, by: str = None, agg: str = N
             payload = json.loads(proc.stdout)
         except json.JSONDecodeError:
             return _err(
-                f"分析引擎返回了无法解析的输出 (exit={proc.returncode})",
+                f"the analysis engine returned unparseable output (exit={proc.returncode})",
                 detail=(proc.stderr or proc.stdout or "")[-600:],
             )
 
         if not payload.get("ok"):
-            return _err(payload.get("error") or "分析失败", detail=note,
+            return _err(payload.get("error") or "analysis failed", detail=note,
                         exit_code=proc.returncode)
 
         # Strip the echo of the input path (the model already knows it) and compact the rest.
@@ -870,8 +907,9 @@ def analyze_dataset(file_path: str, operation: str, by: str = None, agg: str = N
         # Tell the model plainly when it did NOT get GPU speed, so it cannot overclaim.
         if payload.get("engine") != "cudf":
             out["warning"] = (
-                f"本次在 CPU 上运行 (engine={payload.get('engine')})，原因: "
-                f"{payload.get('fallback_reason') or '未知'}。回答时不要声称使用了 GPU 加速。"
+                f"this run used the CPU (engine={payload.get('engine')}), reason: "
+                f"{payload.get('fallback_reason') or 'unknown'}. Do not claim GPU acceleration "
+                f"in the answer."
             )
         if note:
             out["engine_note"] = note
@@ -881,49 +919,117 @@ def analyze_dataset(file_path: str, operation: str, by: str = None, agg: str = N
         return json.dumps(out, ensure_ascii=False, default=str)
 
     except subprocess.TimeoutExpired:
-        return _err("分析超时(超过 30 分钟)，请缩小数据范围或指定更少的列",
-                    hint="用 columns 参数限制分析列，或加 top_k")
+        return _err("analysis timed out (over 30 minutes), narrow the data or name fewer columns",
+                    hint="limit the analysed columns with columns, or set top_k")
     except FileNotFoundError as exc:
-        return _err(f"找不到分析引擎或解释器: {exc}",
-                    hint="检查 GPU_ANALYTICS_SCRIPT / GPU_ANALYTICS_PYTHON 环境变量")
+        return _err(f"analysis engine or interpreter not found: {exc}",
+                    hint="check the GPU_ANALYTICS_SCRIPT / GPU_ANALYTICS_PYTHON environment "
+                         "variables")
     except Exception as exc:  # last-resort guard: the agent loop must never die here
         return _err(f"{type(exc).__name__}: {exc}")
+
+
+def _data_search_dirs() -> list:
+    """Directories worth looking in for a dataset, nearest first.
+
+    Shared by _resolve_data_path and list_datasets so the two cannot disagree. They did
+    disagree, and that asymmetry was a real hole: the resolver searched the parent directory
+    (where the demo data lives) while the discovery tool searched only the current directory.
+    A caller that sensibly asked "what data is here?" got back nothing but a cache file, then
+    invented its own path, failed, and finally asked the user to supply one.
+    """
+    dirs = []
+    env_dir = os.environ.get("DEMO_DATA_DIR")
+    if env_dir:
+        dirs.append(os.path.expanduser(env_dir))
+    dirs += [
+        os.getcwd(),
+        os.path.dirname(_THIS_DIR),
+        os.path.expanduser("~"),
+        "/data",
+    ]
+    seen, out = set(), []
+    for d in dirs:
+        d = os.path.abspath(os.path.expanduser(str(d)))
+        if d not in seen and os.path.isdir(d):
+            seen.add(d)
+            out.append(d)
+    return out
+
+
+def _data_search_roots() -> list:
+    """(directory, max_depth) pairs for dataset discovery.
+
+    Depth matters as much as location. Searching the home directory recursively returned 264
+    "datasets", almost all of them irrelevant files inside tool installations, which would bury
+    the one 3 GB file the caller wanted. The current directory is small and worth a full walk;
+    a parent or home directory is not, so those are bounded.
+    """
+    roots = []
+    cwd = os.path.abspath(os.getcwd())
+    roots.append((cwd, None))                       # workspace: walk it all
+    for d in _data_search_dirs():
+        if d != cwd:
+            roots.append((d, 1))                    # parents and home: top level plus one
+    return roots
 
 
 def list_datasets(directory: str = None) -> str:
     """List analysable data files with sizes, so the agent can pick a target.
 
-    Defaults to $DEMO_DATA_DIR, then the current working directory. Deliberately not a
-    machine-specific absolute path, so the skill works on any checkout.
+    With no argument, searches every directory _data_search_dirs() returns rather than only
+    the current one, so discovery finds the dataset the resolver would also find. Pass an
+    explicit directory to look somewhere else. Deliberately not a machine-specific absolute
+    path, so the skill works on any checkout.
     """
     try:
-        default_dir = os.environ.get("DEMO_DATA_DIR") or os.getcwd()
-        directory = os.path.expanduser(str(directory or default_dir))
-        if not os.path.isdir(directory):
-            return _err(f"目录不存在: {directory}")
         exts = {".csv", ".tsv", ".parquet", ".pq", ".jsonl", ".json", ".xlsx", ".xls"}
+        explicit = str(directory).strip() if directory else ""
+        if explicit:
+            root = os.path.abspath(os.path.expanduser(explicit))
+            if not os.path.isdir(root):
+                return _err(f"directory does not exist: {root}")
+            roots = [(root, None)]
+        else:
+            roots = _data_search_roots()
+            if not roots:
+                return _err("no directory to search; pass directory explicitly")
+
         found = []
-        for root, dirs, files in os.walk(directory):
-            dirs[:] = [d for d in dirs
-                       if d not in {"miniforge3", "node_modules", "__pycache__", ".git",
-                                    "venv", ".cache"} and not d.startswith(".")]
-            for name in files:
-                if os.path.splitext(name)[1].lower() in exts:
+        seen_paths = set()
+        for root_dir, max_depth in roots:
+            base_depth = root_dir.rstrip(os.sep).count(os.sep)
+            for root, dirs, files in os.walk(root_dir):
+                if max_depth is not None:
+                    depth = root.rstrip(os.sep).count(os.sep) - base_depth
+                    if depth >= max_depth:
+                        dirs[:] = []       # stop descending; still list this level
+                dirs[:] = [d for d in dirs
+                           if d not in {"miniforge3", "node_modules", "__pycache__", ".git",
+                                        "venv", ".cache"} and not d.startswith(".")]
+                for name in files:
+                    if os.path.splitext(name)[1].lower() not in exts:
+                        continue
                     full = os.path.join(root, name)
+                    if full in seen_paths:
+                        continue
                     try:
                         size = os.path.getsize(full)
                     except OSError:
                         continue
                     if size < 1024:
                         continue
+                    seen_paths.add(full)
                     found.append({"path": full, "size_mb": round(size / 1e6, 1)})
         found.sort(key=lambda r: -r["size_mb"])
         return json.dumps({
             "success": True,
             "count": len(found),
+            "searched_dirs": [r[0] for r in roots],
             "files": found[:40],
-            "note": ("按大小倒序；数据量越大越能体现 GPU 加速" if found
-                     else f"{directory} 下没有找到可分析的数据文件"),
+            "note": ("largest first; bigger data shows GPU acceleration better" if found
+                     else f"no analysable data files found under "
+                          f"{', '.join(r[0] for r in roots)}"),
         }, ensure_ascii=False)
     except Exception as exc:
         return _err(f"{type(exc).__name__}: {exc}")
@@ -970,13 +1076,14 @@ def export_deliverables(file_path: str = None, operation: str = "auto", by: str 
     try:
         path = _resolve_data_path(file_path) if file_path else (_last_file() or "")
         if not path:
-            return _err("没有指定文件，也没有可复用的上一次分析文件。",
-                        hint="先调用 list_datasets 找到数据文件，再把路径传给本工具。")
+            return _err("no file was given and there is no previous analysis file to reuse.",
+                        hint="call list_datasets to find a data file, then pass its path to this "
+                             "tool.")
         if not os.path.exists(path):
-            return _err(f"文件不存在: {path}",
-                        hint="用 list_datasets 取绝对路径后重试。")
+            return _err(f"file does not exist: {path}",
+                        hint="get the absolute path with list_datasets, then retry.")
         if os.path.isdir(path):
-            return _err(f"这是一个目录而不是文件: {path}")
+            return _err(f"this is a directory, not a file: {path}")
 
         engine = _find_engine()
         cmd = [_python_bin(), engine, "--input", path, "--op", str(operation or "auto")]
@@ -992,17 +1099,20 @@ def export_deliverables(file_path: str = None, operation: str = "auto", by: str 
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
         if proc.returncode != 0:
             detail = (proc.stderr or proc.stdout or "").strip().splitlines()
-            return _err(f"分析失败(exit {proc.returncode}): {detail[-1] if detail else '未知错误'}",
-                        hint="先用 analyze_dataset 确认参数正确(例如列名是否存在)，再重试导出。",
+            return _err(f"analysis failed (exit {proc.returncode}): "
+                        f"{detail[-1] if detail else 'unknown error'}",
+                        hint="use analyze_dataset first to confirm the arguments (that the column "
+                             "names exist, for example), then export again.",
                         exit_code=proc.returncode)
         try:
             payload = json.loads(proc.stdout)
         except json.JSONDecodeError:
-            return _err("分析脚本没有返回合法 JSON。", detail=proc.stdout[:400])
+            return _err("the analysis script did not return valid JSON.",
+                        detail=proc.stdout[:400])
 
         if payload.get("ok") is False:
-            return _err(payload.get("error") or "分析未成功",
-                        hint="检查文件路径与列名。")
+            return _err(payload.get("error") or "analysis did not succeed",
+                        hint="check the file path and the column names.")
 
         target = os.path.expanduser(str(out_dir)) if out_dir else os.path.join(
             os.path.dirname(os.path.abspath(path)), "deliverables")
@@ -1016,8 +1126,10 @@ def export_deliverables(file_path: str = None, operation: str = "auto", by: str 
             input=proc.stdout, capture_output=True, text=True, timeout=600)
         if proc2.returncode != 0:
             detail = (proc2.stderr or "").strip().splitlines()
-            return _err(f"生成交付物失败: {detail[-1] if detail else '未知错误'}",
-                        hint="数据本身仍是可用的，可以先在对话里给出结论。")
+            return _err(f"could not generate the deliverables: "
+                        f"{detail[-1] if detail else 'unknown error'}",
+                        hint="the data itself is still usable, so you can give the conclusion in "
+                             "chat first.")
 
         manifest = json.loads(proc2.stdout)
         _remember_last_file(path)
@@ -1032,15 +1144,17 @@ def export_deliverables(file_path: str = None, operation: str = "auto", by: str 
             "total_seconds": payload.get("total_seconds"),
             "note": manifest["note"],
             "how_to_answer": (
-                "把这些文件路径原样告诉用户(report.md 是主交付物)，"
-                "再在回答里概括报告里的关键数字。不要说文件已保存却不给路径。"
+                "Give the user these file paths verbatim (report.md is the main deliverable), "
+                "then summarise the key numbers from the report in your answer. Do not say the "
+                "files were saved without giving the paths."
             ),
         }
         return json.dumps(_compact(out), ensure_ascii=False)
 
     except subprocess.TimeoutExpired:
-        return _err("生成交付物超时。",
-                    hint="数据量过大时可以先用 columns 限定列，或改用 analyze_dataset。")
+        return _err("generating the deliverables timed out.",
+                    hint="on very large data, limit the columns with columns first, or use "
+                         "analyze_dataset instead.")
     except FileNotFoundError as exc:
         return _err(str(exc))
     except Exception as exc:
@@ -1062,7 +1176,8 @@ def load_csv_dataset(file_path: str) -> str:
         }
         return json.dumps({"success": True, "data": info}, ensure_ascii=False)
     except FileNotFoundError:
-        return json.dumps({"success": False, "error": "文件不存在，请检查路径"}, ensure_ascii=False)
+        return json.dumps({"success": False, "error": "file does not exist, check the path"},
+                          ensure_ascii=False)
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 

@@ -172,17 +172,18 @@ def _err(msg: str, **extra) -> dict:
 def do_open(req: dict) -> dict:
     path = req.get("path")
     if not path or not str(path).strip():
-        return _err("必须提供 path")
+        return _err("path is required")
     path = os.path.abspath(os.path.expanduser(str(path)))
     if not os.path.isfile(path):
         return _err(
-            f"文件不存在: {path}",
-            hint=("相对路径按 agent 进程的工作目录解析。请用 list_datasets 取绝对路径后重试；"
-                  "如果只是想单次分析，也可以改用 analyze_dataset。"),
+            f"file not found: {path}",
+            hint=("Relative paths resolve against the working directory of the agent process. "
+                  "Call list_datasets, take the absolute path and retry; if you only need a "
+                  "single analysis, analyze_dataset is the other option."),
         )
     if len(SESSIONS) >= MAX_SESSIONS:
         return _err(
-            f"同时打开的会话已达上限 {MAX_SESSIONS}。请先 close 一个不再需要的会话。",
+            f"session limit reached, {MAX_SESSIONS} are already open. Close one first.",
             open_sessions=sorted(SESSIONS),
         )
 
@@ -208,9 +209,9 @@ def do_open(req: dict) -> dict:
                 "reused_existing_session": True,
                 "already_loaded": True,
                 "note": (
-                    f"这个文件已经加载过了，直接复用会话 {existing.sid}，"
-                    "没有重复占用显存。**后续请一律用 session_id="
-                    f"{existing.sid}**，并用 close 释放它。"
+                    f"This file is already loaded, so session {existing.sid} is reused and no "
+                    "second copy took device memory. **Use session_id="
+                    f"{existing.sid}** for every later call, and release it with close."
                 ),
             }
 
@@ -221,9 +222,10 @@ def do_open(req: dict) -> dict:
     need_gb = size_gb * MEM_HEADROOM + MEM_FLOOR_GB
     if free_gb is not None and free_gb < need_gb:
         return _err(
-            f"显存不足，已拒绝载入：该文件约 {size_gb:.2f}GB，"
-            f"预计需要 {need_gb:.1f}GB 空闲显存，当前只有 {free_gb:.1f}GB。"
-            f"建议改用 analyze_dataset 单次分析，或先用 columns 参数只读需要的列。",
+            f"Not enough free device memory, load refused: the file is about {size_gb:.2f}GB, "
+            f"which needs roughly {need_gb:.1f}GB free and only {free_gb:.1f}GB is available. "
+            f"Use analyze_dataset for a single analysis, or pass columns to read only the "
+            "columns you need.",
             file_gb=round(size_gb, 2), free_gb=round(free_gb, 1), need_gb=round(need_gb, 1),
         )
 
@@ -231,7 +233,7 @@ def do_open(req: dict) -> dict:
     try:
         eng = GA.detect_engine(force_cpu=force_cpu)
     except Exception as exc:
-        return _err(f"引擎初始化失败: {type(exc).__name__}: {exc}")
+        return _err(f"engine init failed: {type(exc).__name__}: {exc}")
 
     usecols = req.get("usecols")
     cols = None
@@ -242,20 +244,20 @@ def do_open(req: dict) -> dict:
     try:
         frame = eng.read(path, usecols=cols)
     except Exception as exc:
-        reason = ("读取失败: " + str(exc)) if eng.is_gpu else None
+        reason = ("read failed: " + str(exc)) if eng.is_gpu else None
         if eng.is_gpu:
             # Same fallback rule as the stateless path: if cuDF cannot read it, retry pandas.
             try:
                 eng = GA.detect_engine(force_cpu=True)
                 frame = eng.read(path, usecols=cols)
             except Exception as exc2:
-                return _err(f"读取失败: {type(exc2).__name__}: {exc2}")
+                return _err(f"read failed: {type(exc2).__name__}: {exc2}")
         else:
-            return _err(f"读取失败: {type(exc).__name__}: {exc}", reason=reason)
+            return _err(f"read failed: {type(exc).__name__}: {exc}", reason=reason)
     load_seconds = time.perf_counter() - started
 
     if not hasattr(frame, "columns") or len(frame.columns) == 0:
-        return _err(f"无法从 {path} 读出任何列")
+        return _err(f"no columns could be read from {path}")
 
     _COUNTER["n"] += 1
     sid = f"s{_COUNTER['n']}"
@@ -297,8 +299,9 @@ def do_open(req: dict) -> dict:
         "cpu_load_seconds": round(sess.cpu_load_seconds, 3) if sess.cpu_load_seconds else None,
         "resident_mb": resident_mb,
         "contract": (
-            f"数据已常驻内存({eng.name})，共 {sess.rows:,} 行。之后每个 analyze 都在全量数据上执行，"
-            "不会重新读盘、不会采样。分析完请调用 close 释放内存。"
+            f"The frame is resident in memory ({eng.name}), {sess.rows:,} rows. Every later "
+            "analyze runs on all of it: nothing is re-read from disk and nothing is sampled. "
+            "Call close when the analysis is done."
         ),
     }
 
@@ -315,9 +318,9 @@ def do_open(req: dict) -> dict:
         sess.plan = plan
         out["plan"] = plan.as_dict()
         out["plan_note"] = (
-            "计划是会话的状态：每执行一步系统会自动记账，你随时可以继续下一步，"
-            "不需要自己记住做到哪了。如果发现计划里的某一步不合理，也可以跳过它，"
-            "系统会把跳过的步骤标出来。"
+            "The plan is session state: the system records each step as it runs, so you can "
+            "always continue from the next one without tracking progress yourself. If a step "
+            "looks wrong you can skip it, and the system marks skipped steps."
         )
     return out
 
@@ -343,7 +346,7 @@ def do_analyze(req: dict) -> dict:
     sid = req.get("sid")
     sess = SESSIONS.get(sid)
     if sess is None:
-        return _err(f"会话不存在: {sid}。可用会话: {sorted(SESSIONS) or '无'}",
+        return _err(f"no such session: {sid}. Open sessions: {sorted(SESSIONS) or 'none'}",
                     open_sessions=sorted(SESSIONS))
 
     # Staleness guard: answering from a snapshot whose underlying file changed would be a
@@ -351,15 +354,16 @@ def do_analyze(req: dict) -> dict:
     try:
         if _file_identity(sess.path) != sess.identity:
             return _err(
-                "文件在会话期间已被修改（大小或修改时间发生变化）。为避免用旧数据算出错误结果，"
-                "本会话已失效，请重新 open。"
+                "The file changed while this session was open (size or modification time). "
+                "Rather than answer from the old snapshot, the session is invalidated: open "
+                "the file again."
             )
     except OSError as exc:
-        return _err(f"无法校验文件状态，会话失效: {exc}")
+        return _err(f"could not verify the file state, session invalidated: {exc}")
 
     op = str(req.get("op") or "auto")
     if op not in GA.VALID_OPS:
-        return _err(f"不支持的操作: {op}。可用: {', '.join(GA.VALID_OPS)}")
+        return _err(f"unsupported op: {op}. Valid ops: {', '.join(GA.VALID_OPS)}")
 
     args = _build_args(req)
     args.input = sess.path
@@ -372,7 +376,7 @@ def do_analyze(req: dict) -> dict:
             sess.engine, lambda _eng: sess.frame, op, args
         )
     except Exception as exc:
-        return _err(f"{op} 执行失败: {type(exc).__name__}: {exc}")
+        return _err(f"{op} failed: {type(exc).__name__}: {exc}")
 
     step_seconds = time.perf_counter() - started
     sess.steps += 1
@@ -396,9 +400,9 @@ def do_analyze(req: dict) -> dict:
     # Restate the invariant every time: the model should never drift into describing a
     # session step as a sample.
     out["note"] = (
-        f"本步在常驻内存的全量 {rows:,} 行上执行，未重新读盘。"
-        f"会话累计 {out['cumulative_seconds']:.2f}s（载入 {sess.load_seconds:.2f}s + "
-        f"{sess.steps} 步计算 {sess.analysis_seconds:.2f}s）。"
+        f"This step ran on all {rows:,} resident rows, with no read from disk. "
+        f"Session total {out['cumulative_seconds']:.2f}s (load {sess.load_seconds:.2f}s + "
+        f"{sess.steps} steps of compute {sess.analysis_seconds:.2f}s)."
     )
 
     # --- plan bookkeeping -------------------------------------------------------------
@@ -414,8 +418,9 @@ def do_analyze(req: dict) -> dict:
         elif hit.get("off_plan"):
             out["plan"]["off_plan_step"] = hit["off_plan"]
             out["plan"]["off_plan_note"] = (
-                "这一步不在计划里。已经记下来了，不会算进计划进度；"
-                "如果它比计划里的下一步更有价值，就继续按你的判断走。"
+                "This step is not in the plan. It is recorded but does not count towards plan "
+                "progress; if it was worth more than the planned next step, keep going with "
+                "your own judgement."
             )
     return out
 
@@ -437,7 +442,7 @@ def _step_summary(op: str, payload: Any) -> Optional[str]:
                         worst = (name, info["count"], info.get("pct"))
             if worst:
                 pct = f" ({worst[2]}%)" if worst[2] is not None else ""
-                return f"{len(res)} 列中有异常，最多的是 {worst[0]}: {worst[1]:,}{pct}"
+                return f"{len(res)} columns have outliers, worst {worst[0]}: {worst[1]:,}{pct}"
         if op == "groupby" and isinstance(payload, dict):
             rows = payload.get("top_k") or []
             if rows:
@@ -445,20 +450,20 @@ def _step_summary(op: str, payload: Any) -> Optional[str]:
                 first = rows[0]
                 metric = next((k for k in first if k != by), None)
                 if metric:
-                    return (f"按 {by} 分 {payload.get('groups')} 组，"
-                            f"{metric} 最高是 {first.get(by)}={first.get(metric)}")
+                    return (f"grouped by {by} into {payload.get('groups')} groups, "
+                            f"highest {metric}: {first.get(by)}={first.get(metric)}")
         if op == "corr" and isinstance(payload, dict):
             pairs = payload.get("pairs") or []
             if pairs:
                 p = pairs[0]
-                return f"最强相关: {p.get('a')} ~ {p.get('b')} r={p.get('corr')}"
+                return f"strongest correlation: {p.get('a')} ~ {p.get('b')} r={p.get('corr')}"
         if op == "summary" and isinstance(payload, dict):
             st = payload.get("stats") or {}
-            return f"{len(st)} 个数值列完成分布统计"
+            return f"distribution stats for {len(st)} numeric columns"
         if op == "profile" and isinstance(payload, dict):
-            return f"{payload.get('rows')} 行 x {payload.get('columns_count')} 列"
+            return f"{payload.get('rows')} rows x {payload.get('columns_count')} columns"
         if op == "auto" and isinstance(payload, dict):
-            return f"概览完成，扫描 {payload.get('rows_scanned')} 行"
+            return f"overview complete, {payload.get('rows_scanned')} rows scanned"
     except Exception:
         return None
     return None
@@ -489,10 +494,10 @@ def do_close(req: dict) -> dict:
     if sid in (None, "", "all"):
         n = len(SESSIONS)
         SESSIONS.clear()
-        return {"ok": True, "closed": n, "note": "已释放所有会话占用的内存。"}
+        return {"ok": True, "closed": n, "note": "released the memory held by all sessions."}
     sess = SESSIONS.pop(sid, None)
     if sess is None:
-        return _err(f"会话不存在: {sid}")
+        return _err(f"no such session: {sid}")
 
     total = sess.load_seconds + sess.analysis_seconds
     out = {
@@ -513,10 +518,11 @@ def do_close(req: dict) -> dict:
             "naive_cpu_seconds": round(naive_cpu, 3),
             "speedup_x": round(naive_cpu / total, 2) if total > 0 else None,
             "note": (
-                f"本次会话 {sess.steps} 步全量分析共 {total:.2f}s；"
-                f"若每一步都像传统做法那样用 CPU 重新读盘计算，"
-                f"约需 {naive_cpu:.1f}s（单次读盘 {sess.cpu_load_seconds:.2f}s × {sess.steps} 步）。"
-                f"注意：该倍数包含「数据已常驻内存」带来的收益，不等于纯 GPU 计算加速比。"
+                f"{sess.steps} full-data steps in this session took {total:.2f}s. Re-reading "
+                f"the file from disk and computing on the CPU at every step, the usual way, "
+                f"would take about {naive_cpu:.1f}s (one read {sess.cpu_load_seconds:.2f}s x "
+                f"{sess.steps} steps). The factor includes the gain from keeping the frame "
+                f"resident, so it is not a pure GPU compute speedup."
             ),
         }
     # Free device memory deterministically rather than waiting for the next collection.
@@ -554,7 +560,7 @@ def handle(req: dict) -> dict:
         }
     fn = HANDLERS.get(cmd)
     if fn is None:
-        return _err(f"未知命令: {cmd}。可用: ping, {', '.join(HANDLERS)}")
+        return _err(f"unknown command: {cmd}. Available: ping, {', '.join(HANDLERS)}")
     return fn(req)
 
 
@@ -567,12 +573,12 @@ def main() -> int:
         try:
             req = json.loads(line)
         except json.JSONDecodeError as exc:
-            resp = _err(f"请求不是合法 JSON: {exc}")
+            resp = _err(f"request is not valid JSON: {exc}")
         else:
             try:
                 resp = handle(req)
             except Exception as exc:  # a worker must outlive any single bad request
-                resp = _err(f"内部错误: {type(exc).__name__}: {exc}")
+                resp = _err(f"internal error: {type(exc).__name__}: {exc}")
         sys.stdout.write(json.dumps(resp, ensure_ascii=False, default=str) + "\n")
         sys.stdout.flush()
     return 0

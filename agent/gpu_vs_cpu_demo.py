@@ -99,15 +99,16 @@ def ops_payload(payload: dict, op: str) -> dict:
 
 def show_read_breakdown(data: str) -> None:
     """The read stage is most of end-to-end time; show it explicitly."""
-    banner("为什么端到端加速比看起来不大：读取阶段占了大头", "-")
+    banner("Why the end-to-end speedup looks small: reading the CSV dominates", "-")
     for name, extra in (("GPU", []), ("CPU", ["--force-cpu"])):
         p = run(extra, data, "summary", [])
         block = ops_payload(p, "summary")
         secs = block.get("compute_seconds")
-        print(f"  {name:>4}: 总 {p['_wall']:6.2f}s   其中纯计算 {secs}s"
-              if secs is not None else f"  {name:>4}: 总 {p['_wall']:6.2f}s")
-    print("\n  读取/解析 CSV 占了端到端的大部分时间，而这部分两个引擎都在用多核并行；")
-    print("  把它算进「GPU 加速」会夸大 GPU 计算的作用，所以下面单独看纯计算。")
+        print(f"  {name:>4}: total {p['_wall']:6.2f}s   of which compute {secs}s"
+              if secs is not None else f"  {name:>4}: total {p['_wall']:6.2f}s")
+    print("\n  Reading and parsing the CSV is most of the end-to-end time, and both engines")
+    print("  do it with multiple cores. Counting that as GPU acceleration would overstate what")
+    print("  the GPU contributes to computation, so the compute-only figure is shown below.")
 
 
 def main() -> int:
@@ -129,48 +130,56 @@ def main() -> int:
     except Exception:
         pass
 
-    banner("GPU 加速演示 — 同一份数据、同一个查询，两个引擎各跑一遍")
-    print(f"  数据: {data}")
-    print(f"  大小: {size_gb:.2f} GB" + (f"   行数: {rows:,}" if rows else ""))
-    print(f"  GPU:  cuDF (RAPIDS)        基线: pandas 默认（C 层单线程）")
-    print(f"  每个引擎跑 {args.repeats} 次，取最快的一次")
-    print("  （pandas 只用 1 个核心，机器有 20 个；所以数字里包含核数差距，不只是 GPU）")
+    banner("GPU acceleration demo — same data, same query, run once on each engine")
+    print(f"  data: {data}")
+    print(f"  size: {size_gb:.2f} GB" + (f"   rows: {rows:,}" if rows else ""))
+    print(f"  GPU:  cuDF (RAPIDS)        baseline: default pandas (single-threaded in C)")
+    print(f"  {args.repeats} runs per engine, the fastest is reported")
+    print("  (pandas uses one core and this machine has 20, so the figures include the "
+          "core-count gap, not only the GPU)")
 
     outcomes = []
 
-    banner("① 分组聚合 — GPU 优势最明显的一类操作", "-")
-    o = compare("按 region 分组，算 revenue 的 sum / mean / std", data, "groupby",
+    banner("① Group-by aggregation — where the GPU gains most", "-")
+    o = compare("group by region, sum / mean / std of revenue", data, "groupby",
                 ["--by", "region", "--agg", "revenue:sum,mean,std"], args.repeats)
     if o:
         outcomes.append(o)
 
-    banner("② 多重聚合 — 分组维度更多、聚合函数更多", "-")
-    o = compare("按 region + category 双重分组，多列多函数聚合", data, "groupby",
+    banner("② Multiple aggregations — more dimensions, more aggregate functions", "-")
+    o = compare("two-level grouping by region + category, several columns and functions",
+                data, "groupby",
                 ["--by", "region", "--agg",
                  "revenue:sum,mean,std|cost:sum,mean|quantity:sum,max,median"],
                 args.repeats)
     if o:
         outcomes.append(o)
 
-    banner("③ 分位数 — pandas 本身已是向量化 C，差距较小（如实展示）", "-")
-    o = compare("summary（含 Q1/中位数/Q3 与标准差）", data, "summary", [], args.repeats)
+    banner("③ Quantiles — pandas is already vectorised C here, so the gap is small "
+           "(reported as measured)", "-")
+    o = compare("summary (Q1/median/Q3 and standard deviation)", data, "summary", [], args.repeats)
     if o:
         outcomes.append(o)
 
     show_read_breakdown(data)
 
-    banner("结论")
+    banner("Conclusion")
     if outcomes:
         best = max(outcomes, key=lambda r: r["speedup"])
-        print(f"  分组聚合类操作：GPU 最快 {best['speedup']:.1f}x（{best['label']}）")
+        print(f"  Group-by operations: best GPU speedup {best['speedup']:.1f}x "
+              f"({best['label']})")
         for r in outcomes:
             print(f"    {r['speedup']:5.2f}x   {r['label']}")
-    print("\n  诚实说明（被问到时照这个讲）：")
-    print("   1. 端到端时间里读取 CSV 占大头，而读取两个引擎都在用多核并行，")
-    print("      所以「GPU 加速」主要体现在计算环节，而不是整条流水线。")
-    print("   2. pandas 基线只用 1 个核心，20 核机器上这个差距属于核数差距，不是 GPU。")
-    print("   3. 纯计算（数据已在内存）的加速比约 3x，这才是真正归因于 GPU 的部分。")
-    print("   4. 数据越大优势越明显：500 万行时几乎看不出差别，2000 万行以上才拉开。")
+    print("\n  What to say when asked:")
+    print("   1. Reading the CSV is most of the end-to-end time, and both engines read with")
+    print("      multiple cores, so GPU acceleration shows up in the compute stage rather")
+    print("      than across the whole pipeline.")
+    print("   2. The pandas baseline uses one core, so on a 20-core machine that gap is a")
+    print("      core-count gap, not the GPU.")
+    print("   3. Compute-only speedup, with the data already in memory, is about 3x, which is")
+    print("      what is attributable to the GPU.")
+    print("   4. The advantage grows with data size: at 5 million rows there is almost no")
+    print("      difference, and it opens up past 20 million rows.")
     return 0
 
 
