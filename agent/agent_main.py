@@ -264,16 +264,45 @@ def summarize_tool_result(result_json: str) -> str:
 # The agent loop
 # --------------------------------------------------------------------------------------
 
+def _system_prompt() -> str:
+    """The system prompt, adjusted for the control run.
+
+    Without this the control arm is not a control: the model's training makes it emit a
+    tool call as plain text when no tools are supplied, so it never actually answers and the
+    comparison measures nothing. Telling it plainly that it has no tools turns the question into
+    the one worth asking -- what does the same model say about a dataset it cannot open?
+    """
+    if not os.environ.get("NO_TOOLS"):
+        return SYSTEM_PROMPT
+    return (
+        "You have no tools, no file access and no ability to read data. Answer from your own "
+        "knowledge only.\n"
+        "- Never write a tool call, a function call or an XML tag resembling one. Any call you "
+        "write will not be executed, so it is not an answer.\n"
+        "- If the question requires data you do not have, say so directly and explain what would "
+        "be needed.\n"
+        "- Do not invent numbers. State plainly that you cannot know them."
+    )
+
+
 class Agent:
     def __init__(self, client: OpenAI, verbose: bool = True):
         self.client = client
         self.verbose = verbose
-        self.messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
-        self.tools = load_skill_definitions()
+        self.messages: list[dict] = [{"role": "system", "content": _system_prompt()}]
+        # Control condition for the comparison experiment: the same model, same prompt, no skills.
+        # Nothing else changes, so any difference in the answer is attributable to the tools rather
+        # than to a different question or a different system prompt. Without this the project has
+        # no evidence that the Skill changes an answer -- only that behaviour matches expectation.
+        self.no_tools = bool(os.environ.get("NO_TOOLS"))
+        self.tools = [] if self.no_tools else load_skill_definitions()
         if self.verbose:
             names = [t["function"]["name"] for t in self.tools]
             print(f"[agent] model={MODEL_NAME}")
-            print(f"[agent] skills available to the model: {', '.join(names)}")
+            if self.no_tools:
+                print("[agent] CONTROL RUN: no skills are available to the model")
+            else:
+                print(f"[agent] skills available to the model: {', '.join(names)}")
 
     def log(self, msg: str) -> None:
         if self.verbose:
@@ -301,11 +330,14 @@ class Agent:
 
         for round_index in range(1, MAX_TOOL_ROUNDS + 1):
             try:
+                # Omit the tools parameter entirely in the control run: an empty list is rejected
+                # by some OpenAI-compatible providers, and passing nothing is the honest form of
+                # "this model has no skills here".
+                kwargs = {} if self.no_tools else {"tools": self.tools, "tool_choice": "auto"}
                 response = self.client.chat.completions.create(
                     model=MODEL_NAME,
                     messages=self.messages,
-                    tools=self.tools,
-                    tool_choice="auto",
+                    **kwargs,
                 )
             except Exception as exc:
                 # A model/transport failure must not kill the session or lose the history.
