@@ -245,6 +245,17 @@ skill_definitions = [
                         "type": "boolean",
                         "description": "optional: force CPU (pandas) so the numbers can be "
                                        "compared against the GPU. Default false"
+                    },
+                    "force_gpu": {
+                        "type": "boolean",
+                        "description": "optional: open a resident GPU session even for a small "
+                                       "file. Default false, because for a ONE-OFF analysis the "
+                                       "GPU is slower below ~6.5M rows (its startup cost is about "
+                                       "1.5s and does not shrink with the data). Set this only "
+                                       "when SEVERAL analyses will run over the same file: the "
+                                       "session pays that cost once and then reuses the loaded "
+                                       "data, while each stateless call re-reads the file. "
+                                       "Measured on 20M rows at 0.058-0.187s per step after open."
                     }
                 },
                 "required": ["file_path", "operation"]
@@ -767,7 +778,8 @@ def close_all_sessions() -> dict:
 def dataset_session(operation: str, file_path: str = None, session_id: str = None,
                     op: str = None, by: str = None, agg: str = None,
                     columns: str = None, top_k: int = None,
-                    force_cpu: bool = False, goal: str = None) -> str:
+                    force_cpu: bool = False, force_gpu: bool = False,
+                    goal: str = None) -> str:
     """
     Load a dataset into memory once, then run several analyses against that copy.
 
@@ -785,7 +797,7 @@ def dataset_session(operation: str, file_path: str = None, session_id: str = Non
 
         if operation == "open":
             req = {"cmd": "open", "path": _resolve_data_path(file_path),
-                   "force_cpu": bool(force_cpu)}
+                   "force_cpu": bool(force_cpu), "force_gpu": bool(force_gpu)}
             if goal and str(goal).strip():
                 req["goal"] = str(goal).strip()
         elif operation == "analyze":
@@ -808,7 +820,11 @@ def dataset_session(operation: str, file_path: str = None, session_id: str = Non
                 hint=resp.get("hint") or "you can fall back to analyze_dataset for a one-off "
                                          "stateless analysis.",
                 **{k: v for k, v in resp.items()
-                   if k in ("open_sessions", "free_gb", "need_gb", "file_gb")},
+                   if k in ("open_sessions", "free_gb", "need_gb", "file_gb",
+                            # The routing refusal tells the model which engine to use instead
+                            # and, when the file is small, that force_gpu exists for repeated
+                            # work. Filtering these out made the escape hatch undiscoverable.
+                            "suggest_engine", "route_threshold_rows", "session_worth_it_if")},
             )
 
         out = dict(resp)
@@ -820,10 +836,20 @@ def dataset_session(operation: str, file_path: str = None, session_id: str = Non
             if key in out:
                 out[key] = _compact(out[key])
         if operation == "analyze" and out.get("engine") != "cudf":
-            out["warning"] = (
-                f"this session ran on the CPU (engine={out.get('engine')}); do not claim GPU "
-                f"acceleration in the answer."
-            )
+            route = out.get("routing_reason")
+            if route:
+                # Same distinction as the stateless path: a deliberately CPU-backed session is
+                # normal when the caller opened it that way, so it must not read as a failure.
+                out["engine_note"] = (
+                    f"this session is running on the CPU by choice (engine={out.get('engine')}): "
+                    f"{route}. Do not claim GPU acceleration, but do not present this as an error "
+                    f"either."
+                )
+            else:
+                out["warning"] = (
+                    f"this session ran on the CPU (engine={out.get('engine')}); do not claim GPU "
+                    f"acceleration in the answer."
+                )
         return json.dumps(out, ensure_ascii=False, default=str)
     except Exception as exc:  # never let a session failure break the agent loop
         return _err(f"{type(exc).__name__}: {exc}",

@@ -65,6 +65,38 @@ files of 200k rows, and the estimate is density-independent, which matters becau
 threshold got this wrong — the demo file is 152 bytes per row, so its 20M rows occupy only 881 MB
 and a 950 MB byte threshold sent the main demo to the CPU and threw away its speedup.
 
+### Small data: when the GPU still wins, and it is not about rows
+
+The crossover above is the verdict for a **one-off** analysis. It is not the verdict for repeated
+work over the same file, and conflating the two got this wrong once. The stateless CPU path
+re-reads and re-parses the whole file on every call, while a resident session reads it once. So a
+small file can win on the GPU as soon as several analyses are wanted.
+
+Measured on the GB10, opening a native GPU session on a small file and running 5 operations
+(`profile`, `summary`, `groupby`, `outliers`, `corr`), against the same 5 operations run as 5
+stateless CPU calls that each re-read the file:
+
+| Rows | GPU open | GPU per step | CPU, 1 round | CPU, 5 rounds | GPU, 5 rounds | Speedup |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,000,000 | 1.499 s | 0.058 s | 2.26 s | 11.17 s | 2.95 s | **3.79×** |
+| 2,000,000 | 1.658 s | 0.093 s | 3.45 s | 17.11 s | 3.98 s | **4.29×** |
+| 5,000,000 | 2.284 s | 0.187 s | 7.11 s | 35.51 s | 6.95 s | **5.11×** |
+
+Two consequences, and they pull in opposite directions on purpose:
+
+- **One query at 1M rows stays on the CPU.** A single operation pays the ~1.5 s GPU startup
+  against 0.57 s of pandas work, so the GPU loses (1.83 s vs 0.57 s). This is what `--engine auto`
+  decides, and it is why the default is the CPU.
+- **Several queries over that same file belong on the GPU.** The startup is paid once, and each
+  later step costs 0.058 s instead of a full re-read. That is what `force_gpu` opens up, and it is
+  the reason the session tool exists rather than being a convenience wrapper.
+
+Because of this, `dataset_session` open refuses a small file by default but names the escape
+hatch: the refusal carries `suggest_engine`, `route_threshold_rows` and `session_worth_it_if`, and
+its hint says to pass `force_gpu=true` when several analyses are planned. A refusal that does not
+say how to proceed is a dead end, and the first version of the guard was one — it told the caller
+to switch to `analyze_dataset` even when a session was the better answer.
+
 ### Report language
 
 `make_deliverables.py` writes the report in the caller's language and defaults to **Chinese**.

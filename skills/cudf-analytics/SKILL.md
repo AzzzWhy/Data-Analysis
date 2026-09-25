@@ -317,12 +317,30 @@ both are correct. The 7.16x is compute-only with a 20-core pandas baseline; the 
 whole process including CSV parsing and startup, against the single-core pandas path the engine
 actually falls back to. Quote whichever one matches the question being asked, and say which it is.
 
+### Small data does get GPU speedup, but only when the fixed cost is amortised
+
+The crossover above is the verdict for one operation. For several operations over the same file
+the answer flips, because the stateless CPU path re-reads the whole file on every call while a
+resident session reads it once. Measured with 5 operations on a small file:
+
+| Rows | GPU per step after open | CPU, 5 rounds | GPU, 5 rounds | Speedup |
+| ---: | ---: | ---: | ---: | ---: |
+| 1,000,000 | 0.058 s | 11.17 s | 2.95 s | **3.79x** |
+| 5,000,000 | 0.187 s | 35.51 s | 6.95 s | **5.11x** |
+
+So on a file below the crossover, pass `force_gpu=true` when you intend to run several analyses
+over it, and let it route to pandas when it is a single question. `dataset_session` says exactly
+this when it refuses a small file: the refusal carries the threshold and the advice to use
+`force_gpu` for repeated work, rather than just telling you to use a different tool.
+
 ## Failure handling
 
 | Symptom | Action |
 | --- | --- |
 | `error: input file not found` | Verify the path; try again with the absolute path. |
 | `engine` is `pandas` with a `fallback_reason` | Tell the user plainly that it ran on CPU, then fix the GPU env (see below). |
+| `engine` is `pandas` with a `routing_reason` and no `fallback_reason` | Nothing is broken: this size is faster on the CPU, and the reason quotes the measurement. Do not report it as a failure. Use `--force-gpu` if a GPU comparison is wanted. |
+| Several analyses over the same small file | Open a session with `force_gpu=true`: the GPU's ~1.5 s startup is paid once and later steps cost ~0.06 s instead of a full re-read (3.79x at 1M rows). |
 | Out-of-memory on a huge file | Add `--columns` to analyze fewer columns, or `--usecols` to load fewer. |
 | Need a CPU-vs-GPU comparison of one command | Add `--force-cpu` and compare against the normal run. |
 | `--op corr --method spearman` runs on CPU | Expected: cuDF only does pearson, so that request falls back and reports why. |
