@@ -186,6 +186,34 @@ def do_open(req: dict) -> dict:
             open_sessions=sorted(SESSIONS),
         )
 
+    # Reuse an existing session for the same file instead of loading the dataset again.
+    #
+    # Why: a caller that loses track of the session id it was handed opens a second session
+    # on the same file. Measured on 20M rows, that doubled the resident footprint (~3.4 GB)
+    # and left the first session stranded until a cleanup backstop ran -- real device memory
+    # held for no benefit. Returning the existing handle costs nothing and cannot be worse
+    # than a second full load, so it is the right default rather than an optimisation.
+    for existing in SESSIONS.values():
+        if existing.path == path:
+            return {
+                "ok": True,
+                "session_id": existing.sid,
+                "file": os.path.basename(path),
+                "rows": existing.rows,
+                "columns": [str(c) for c in existing.frame.columns],
+                "engine": existing.engine.name,
+                "gpu": existing.engine.gpu_name,
+                "accelerated": existing.engine.is_gpu,
+                "load_seconds": round(existing.load_seconds, 3),
+                "reused_existing_session": True,
+                "already_loaded": True,
+                "note": (
+                    f"这个文件已经加载过了，直接复用会话 {existing.sid}，"
+                    "没有重复占用显存。**后续请一律用 session_id="
+                    f"{existing.sid}**，并用 close 释放它。"
+                ),
+            }
+
     # Refuse before loading rather than after: once the parse starts, a failure surfaces as
     # an opaque OOM in the middle of the read.
     size_gb = os.path.getsize(path) / (1024 ** 3)

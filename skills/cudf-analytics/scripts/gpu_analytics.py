@@ -536,7 +536,29 @@ def _parse_agg(agg: Optional[str], numeric: Sequence[str]) -> Dict[str, List[str
         fns = [f.strip().lower() for f in funcs.split(",") if f.strip()]
         bad = [f for f in fns if f not in AGG_FUNCS]
         if bad:
-            raise ValueError(f"unsupported agg func(s) {bad}; choose from {sorted(AGG_FUNCS)}")
+            # Name the offending functions precisely, and say what to do instead when the
+            # caller is reaching for something group-by cannot express. Without the second
+            # part a caller sees only a list of valid function names, concludes it mis-typed,
+            # and repeats the same request -- observed: a caller asked for revenue:corr three
+            # times across two tools, then exhausted its turn budget with no answer.
+            hint = ""
+            if any(b in ("corr", "correlation", "pearson", "spearman", "kendall")
+                   for b in bad):
+                hint = (" Per-group correlation is not something groupby can compute. Use "
+                        "op='corr' for the correlation across the whole dataset, and use "
+                        "groupby with mean/std to compare how columns differ between groups.")
+            elif any(b in ("var", "variance") for b in bad):
+                hint = " 'var' is not available; use 'std'."
+            elif any(b in ("avg", "average") for b in bad):
+                hint = " 'avg' is not available; use 'mean'."
+            elif any(b in ("q1", "q3", "quantile", "percentile") for b in bad):
+                hint = (" Quantiles are not available in groupby; use op='summary' for "
+                        "quartiles across the dataset.")
+            raise ValueError(
+                f"unsupported agg func(s) {sorted(set(bad))} for column(s) "
+                f"{sorted({c for c in spec} | {col})}; "
+                f"choose from {sorted(AGG_FUNCS)}. Syntax is col:func[,func]|col2:func -- "
+                f"the function comes after the colon.{hint}")
         if not fns:
             raise ValueError(f"no functions given for column {col!r}")
         spec[col] = fns

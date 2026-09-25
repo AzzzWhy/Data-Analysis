@@ -44,10 +44,13 @@ MODEL_NAME = os.environ.get("STEPFUN_MODEL", "step-3.7-flash")
 BASE_URL = os.environ.get("STEPFUN_BASE_URL", "https://api.stepfun.com/step_plan/v1")
 
 # A tool loop that never ends is worse than one that stops and explains itself.
-# 8 rather than 6: a genuine drill-down needs open + several analyze steps + close, and
-# running out mid-analysis costs more (a half-finished answer) than one extra round does.
-# Measured: a real multi-step question used 6 rounds and had no budget left to close.
-MAX_TOOL_ROUNDS = int(os.environ.get("MAX_TOOL_ROUNDS", "8"))
+#
+# Raised to 10 after measurement, not by taste: a real drill-down run took an extra grouping
+# dimension (legitimate, and better analysis), which consumed the budget before it could call
+# close -- leaving 1.7 GB of device memory resident. The cleanup backstop released it, but
+# spending one more round is far cheaper than a leaked session or a truncated answer.
+# Measured: a 6-operation drill-down plus close needs 8 rounds; with extra exploration, more.
+MAX_TOOL_ROUNDS = int(os.environ.get("MAX_TOOL_ROUNDS", "10"))
 
 SYSTEM_PROMPT = """你是一个部署在 NVIDIA DGX Spark 上的数据分析智能体。
 
@@ -87,6 +90,12 @@ SYSTEM_PROMPT = """你是一个部署在 NVIDIA DGX Spark 上的数据分析智�
   修正参数后**仍然用 dataset_session 重试**，不要改回 analyze_dataset：
   analyze_dataset 每一步都要重新读盘（2000 万行约 10~25 秒），而 session 里只要几十毫秒。
   只有 open 本身失败（例如显存不足）才降级到 analyze_dataset。
+- **会话里某一步报错时，顺序必须是「读报错 → 改参数 → 在同一个 session 上重试」，不是「关掉会话」。**
+  报错信息通常会告诉你合法取值（例如列出了允许的 agg 函数名），照着改一个再试一次即可。
+  在改参数之前**不要 close**：一旦 close 就没法在常驻数据上重试了，只能退回很慢的路径。
+  也**不要用完全相同的参数重试第二次**——那不叫重试，叫重复同样的错误；
+  换一个合法值，或者换一种能表达你意图的操作（例如按组算不了相关性，就用 op='corr' 看整体、
+  再用 groupby + mean/std 看组间差异）。
 - **用完一定要 close。** 会话持续占用显存（2000 万行约 1.7GB），不关闭会影响后续任务和其他进程。
   即使中途出错，也要把已打开的会话关掉。
 - 只有一步的简单问题**不要**用 session（用 analyze_dataset 即可），session 会白占显存。
