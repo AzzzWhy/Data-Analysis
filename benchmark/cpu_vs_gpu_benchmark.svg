@@ -1,0 +1,200 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1116" viewBox="0 0 1920 1116">
+<rect x="0.00" y="0.00" width="1920.00" height="1116.00" rx="0" fill="#f7f8fa" stroke="none" stroke-width="1.0"/>
+<text x="34.00" y="58.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="30" fill="#1a1a1a" text-anchor="start" font-weight="700">GB10 上 CPU 与 GPU 的实测对比</text>
+<text x="34.00" y="86.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="13.5" fill="#6b6b6b" text-anchor="start" font-weight="400">cuDF 25.10 vs pandas 2.3.3  ·  两个引擎都是全新进程  ·  全部数字为 GB10 实测,无估算、无平滑</text>
+<text x="1886.00" y="58.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="16" fill="#1f77b4" text-anchor="end" font-weight="600">NVIDIA DGX Spark GB10</text>
+<text x="1886.00" y="80.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" fill="#6b6b6b" text-anchor="end" font-weight="400">20 核 · 121 GB 统一内存 · cuDF 25.10.00</text>
+<line x1="34.00" y1="100.00" x2="1886.00" y2="100.00" stroke="#d9d9d9" stroke-width="1.2" stroke-linecap="butt"/>
+<rect x="34.00" y="112.00" width="917.00" height="432.00" rx="10" fill="#ffffff" stroke="#d9d9d9" stroke-width="1.2"/>
+<rect x="34.00" y="112.00" width="5.00" height="432.00" rx="3" fill="#1f77b4" stroke="none" stroke-width="1.0"/>
+<text x="54.00" y="141.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="17" fill="#1a1a1a" text-anchor="start" font-weight="600">① 时间 vs 数据量 — 交叉点与渐近线</text>
+<text x="54.00" y="161.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" fill="#6b6b6b" text-anchor="start" font-weight="400">双引擎全新进程,单次 op,端到端实测。横轴 数据量,纵轴 耗时</text>
+<rect x="112.00" y="208.00" width="350.14" height="274.00" rx="0" fill="#d95f02" stroke="none" stroke-width="1.0" opacity="0.055"/>
+<text x="120.00" y="223.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#d95f02" text-anchor="start" font-weight="600">CPU 更快区</text>
+<text x="454.14" y="223.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#1f77b4" text-anchor="end" font-weight="600">GPU 更快区 →</text>
+<line x1="226.04" y1="208.00" x2="226.04" y2="482.00" stroke="#d9d9d9" stroke-width="0.8" stroke-linecap="butt" stroke-dasharray="3,4"/>
+<text x="226.04" y="501.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#6b6b6b" text-anchor="middle" font-weight="400">0.1</text>
+<line x1="376.79" y1="208.00" x2="376.79" y2="482.00" stroke="#d9d9d9" stroke-width="0.8" stroke-linecap="butt" stroke-dasharray="3,4"/>
+<text x="376.79" y="501.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#6b6b6b" text-anchor="middle" font-weight="400">0.25</text>
+<line x1="490.82" y1="208.00" x2="490.82" y2="482.00" stroke="#d9d9d9" stroke-width="0.8" stroke-linecap="butt" stroke-dasharray="3,4"/>
+<text x="490.82" y="501.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#6b6b6b" text-anchor="middle" font-weight="400">0.5</text>
+<line x1="604.86" y1="208.00" x2="604.86" y2="482.00" stroke="#d9d9d9" stroke-width="0.8" stroke-linecap="butt" stroke-dasharray="3,4"/>
+<text x="604.86" y="501.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#6b6b6b" text-anchor="middle" font-weight="400">1</text>
+<line x1="718.90" y1="208.00" x2="718.90" y2="482.00" stroke="#d9d9d9" stroke-width="0.8" stroke-linecap="butt" stroke-dasharray="3,4"/>
+<text x="718.90" y="501.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#6b6b6b" text-anchor="middle" font-weight="400">2</text>
+<line x1="832.93" y1="208.00" x2="832.93" y2="482.00" stroke="#d9d9d9" stroke-width="0.8" stroke-linecap="butt" stroke-dasharray="3,4"/>
+<text x="832.93" y="501.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#6b6b6b" text-anchor="middle" font-weight="400">4</text>
+<line x1="925.00" y1="208.00" x2="925.00" y2="482.00" stroke="#d9d9d9" stroke-width="0.8" stroke-linecap="butt" stroke-dasharray="3,4"/>
+<text x="925.00" y="501.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#6b6b6b" text-anchor="middle" font-weight="400">7</text>
+<text x="518.50" y="524.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" fill="#6b6b6b" text-anchor="middle" font-weight="400">文件大小 (GB, CSV)</text>
+<line x1="112.00" y1="482.00" x2="925.00" y2="482.00" stroke="#d9d9d9" stroke-width="0.8" stroke-linecap="butt" stroke-dasharray="3,4"/>
+<text x="102.00" y="486.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#6b6b6b" text-anchor="end" font-weight="400">0</text>
+<line x1="112.00" y1="424.87" x2="925.00" y2="424.87" stroke="#d9d9d9" stroke-width="0.8" stroke-linecap="butt" stroke-dasharray="3,4"/>
+<text x="102.00" y="428.87" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#6b6b6b" text-anchor="end" font-weight="400">2</text>
+<line x1="112.00" y1="391.66" x2="925.00" y2="391.66" stroke="#d9d9d9" stroke-width="0.8" stroke-linecap="butt" stroke-dasharray="3,4"/>
+<text x="102.00" y="395.66" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#6b6b6b" text-anchor="end" font-weight="400">5</text>
+<line x1="112.00" y1="354.25" x2="925.00" y2="354.25" stroke="#d9d9d9" stroke-width="0.8" stroke-linecap="butt" stroke-dasharray="3,4"/>
+<text x="102.00" y="358.25" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#6b6b6b" text-anchor="end" font-weight="400">10</text>
+<line x1="112.00" y1="301.33" x2="925.00" y2="301.33" stroke="#d9d9d9" stroke-width="0.8" stroke-linecap="butt" stroke-dasharray="3,4"/>
+<text x="102.00" y="305.33" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#6b6b6b" text-anchor="end" font-weight="400">20</text>
+<line x1="112.00" y1="260.73" x2="925.00" y2="260.73" stroke="#d9d9d9" stroke-width="0.8" stroke-linecap="butt" stroke-dasharray="3,4"/>
+<text x="102.00" y="264.73" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#6b6b6b" text-anchor="end" font-weight="400">30</text>
+<line x1="112.00" y1="226.49" x2="925.00" y2="226.49" stroke="#d9d9d9" stroke-width="0.8" stroke-linecap="butt" stroke-dasharray="3,4"/>
+<text x="102.00" y="230.49" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#6b6b6b" text-anchor="end" font-weight="400">40</text>
+<text x="54.00" y="345.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" fill="#6b6b6b" text-anchor="middle" font-weight="400" transform="rotate(-90 54.00 345.00)">耗时 (秒)</text>
+<path d="M 292.74 426.90 L 301.88 426.60 L 311.02 426.28 L 320.15 425.94 L 329.29 425.59 L 338.43 425.22 L 347.57 424.83 L 356.70 424.43 L 365.84 424.00 L 374.98 423.55 L 384.11 423.08 L 393.25 422.58 L 402.39 422.06 L 411.52 421.52 L 420.66 420.95 L 429.80 420.36 L 438.93 419.74 L 448.07 419.08 L 457.21 418.40 L 466.35 417.69 L 475.48 416.94 L 484.62 416.17 L 493.76 415.35 L 502.89 414.50 L 512.03 413.62 L 521.17 412.69 L 530.30 411.73 L 539.44 410.73 L 548.58 409.68 L 557.71 408.59 L 566.85 407.45 L 575.99 406.27 L 585.13 405.04 L 594.26 403.76 L 603.40 402.44 L 612.54 401.05 L 621.67 399.62 L 630.81 398.13 L 639.95 396.58 L 649.08 394.98 L 658.22 393.31 L 667.36 391.58 L 676.49 389.79 L 685.63 387.94 L 694.77 386.01 L 703.91 384.02 L 713.04 381.96 L 722.18 379.82 L 731.32 377.61 L 740.45 375.33 L 749.59 372.96 L 758.73 370.52 L 767.86 367.99 L 777.00 365.38 L 786.14 362.68 L 795.27 359.89 L 804.41 357.01 L 813.55 354.04 L 822.69 350.97 L 831.82 347.80 L 840.96 344.52" fill="none" stroke="#1f77b4" stroke-width="2.0" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6,4" opacity="0.85"/>
+<path d="M 292.74 429.17 L 301.88 427.84 L 311.02 426.46 L 320.15 425.05 L 329.29 423.59 L 338.43 422.08 L 347.57 420.53 L 356.70 418.93 L 365.84 417.29 L 374.98 415.59 L 384.11 413.84 L 393.25 412.05 L 402.39 410.19 L 411.52 408.28 L 420.66 406.32 L 429.80 404.30 L 438.93 402.21 L 448.07 400.07 L 457.21 397.86 L 466.35 395.59 L 475.48 393.25 L 484.62 390.84 L 493.76 388.37 L 502.89 385.82 L 512.03 383.19 L 521.17 380.49 L 530.30 377.72 L 539.44 374.86 L 548.58 371.92 L 557.71 368.89 L 566.85 365.78 L 575.99 362.58 L 585.13 359.28 L 594.26 355.89 L 603.40 352.41 L 612.54 348.82 L 621.67 345.13 L 630.81 341.34 L 639.95 337.44 L 649.08 333.42 L 658.22 329.29 L 667.36 325.05 L 676.49 320.68 L 685.63 316.19 L 694.77 311.57 L 703.91 306.82 L 713.04 301.93 L 722.18 296.91 L 731.32 291.74 L 740.45 286.42 L 749.59 280.96 L 758.73 275.34 L 767.86 269.56 L 777.00 263.62 L 786.14 257.50 L 795.27 251.22 L 804.41 244.76 L 813.55 238.11 L 822.69 231.28 L 831.82 224.25 L 840.96 217.02" fill="none" stroke="#d95f02" stroke-width="2.0" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6,4" opacity="0.85"/>
+<path d="M 454.11 423.46 L 461.71 423.06 L 469.32 422.65 L 476.92 422.23 L 484.52 421.78 L 492.12 421.32 L 499.72 420.84 L 507.33 420.34 L 514.93 419.83 L 522.53 419.29 L 530.13 418.73 L 537.74 418.16 L 545.34 417.56 L 552.94 416.93 L 560.54 416.29 L 568.15 415.62 L 575.75 414.92 L 583.35 414.20 L 590.95 413.46 L 598.56 412.69 L 606.16 411.89 L 613.76 411.06 L 621.36 410.20 L 628.97 409.32 L 636.57 408.40 L 644.17 407.45 L 651.77 406.47 L 659.38 405.46 L 666.98 404.42 L 674.58 403.33 L 682.18 402.22 L 689.79 401.07 L 697.39 399.88 L 704.99 398.65 L 712.59 397.38 L 720.20 396.07 L 727.80 394.73 L 735.40 393.34 L 743.00 391.91 L 750.61 390.43 L 758.21 388.91 L 765.81 387.34 L 773.41 385.73 L 781.02 384.07 L 788.62 382.36 L 796.22 380.60 L 803.82 378.79 L 811.43 376.93 L 819.03 375.01 L 826.63 373.04 L 834.23 371.01 L 841.83 368.93 L 849.44 366.79 L 857.04 364.59 L 864.64 362.32 L 872.24 360.00 L 879.85 357.61 L 887.45 355.16 L 895.05 352.64 L 902.65 350.06 L 910.26 347.40" fill="none" stroke="#1f77b4" stroke-width="2.0" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6,4" opacity="0.85"/>
+<path d="M 454.11 411.33 L 461.71 409.77 L 469.32 408.18 L 476.92 406.55 L 484.52 404.87 L 492.12 403.16 L 499.72 401.40 L 507.33 399.60 L 514.93 397.76 L 522.53 395.87 L 530.13 393.94 L 537.74 391.96 L 545.34 389.93 L 552.94 387.85 L 560.54 385.72 L 568.15 383.54 L 575.75 381.31 L 583.35 379.02 L 590.95 376.68 L 598.56 374.28 L 606.16 371.83 L 613.76 369.31 L 621.36 366.74 L 628.97 364.10 L 636.57 361.41 L 644.17 358.64 L 651.77 355.82 L 659.38 352.92 L 666.98 349.96 L 674.58 346.92 L 682.18 343.81 L 689.79 340.63 L 697.39 337.38 L 704.99 334.04 L 712.59 330.63 L 720.20 327.14 L 727.80 323.56 L 735.40 319.90 L 743.00 316.15 L 750.61 312.32 L 758.21 308.39 L 765.81 304.37 L 773.41 300.26 L 781.02 296.05 L 788.62 291.74 L 796.22 287.33 L 803.82 282.81 L 811.43 278.19 L 819.03 273.46 L 826.63 268.62 L 834.23 263.66 L 841.83 258.59 L 849.44 253.40 L 857.04 248.09 L 864.64 242.65 L 872.24 237.08 L 879.85 231.38 L 887.45 225.55 L 895.05 219.59 L 902.65 213.48 L 910.26 207.23" fill="none" stroke="#d95f02" stroke-width="2.0" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6,4" opacity="0.85"/>
+<circle cx="201.22" cy="441.40" r="5.60" fill="#d95f02" stroke="#ffffff" stroke-width="1.6"/>
+<circle cx="201.22" cy="423.74" r="5.60" fill="#1f77b4" stroke="#ffffff" stroke-width="1.6"/>
+<circle cx="521.91" cy="394.79" r="5.60" fill="#d95f02" stroke="#ffffff" stroke-width="1.6"/>
+<circle cx="521.91" cy="404.61" r="5.60" fill="#1f77b4" stroke="#ffffff" stroke-width="1.6"/>
+<circle cx="521.91" cy="394.79" r="10.40" fill="none" stroke="#d95f02" stroke-width="1.3" opacity="0.5"/>
+<circle cx="521.91" cy="404.61" r="10.40" fill="none" stroke="#1f77b4" stroke-width="1.3" opacity="0.5"/>
+<circle cx="353.49" cy="421.94" r="5.60" fill="#d95f02" stroke="#ffffff" stroke-width="1.6"/>
+<circle cx="353.49" cy="413.80" r="5.60" fill="#1f77b4" stroke="#ffffff" stroke-width="1.6"/>
+<circle cx="431.20" cy="408.06" r="5.60" fill="#d95f02" stroke="#ffffff" stroke-width="1.6"/>
+<circle cx="431.20" cy="409.17" r="5.60" fill="#1f77b4" stroke="#ffffff" stroke-width="1.6"/>
+<circle cx="584.01" cy="366.39" r="5.60" fill="#d95f02" stroke="#ffffff" stroke-width="1.6"/>
+<circle cx="584.01" cy="388.12" r="5.60" fill="#1f77b4" stroke="#ffffff" stroke-width="1.6"/>
+<circle cx="787.67" cy="294.20" r="5.60" fill="#d95f02" stroke="#ffffff" stroke-width="1.6"/>
+<circle cx="787.67" cy="354.76" r="5.60" fill="#1f77b4" stroke="#ffffff" stroke-width="1.6"/>
+<circle cx="787.67" cy="294.20" r="10.40" fill="none" stroke="#d95f02" stroke-width="1.3" opacity="0.5"/>
+<circle cx="787.67" cy="354.76" r="10.40" fill="none" stroke="#1f77b4" stroke-width="1.3" opacity="0.5"/>
+<circle cx="670.47" cy="323.10" r="5.60" fill="#d95f02" stroke="#ffffff" stroke-width="1.6"/>
+<circle cx="670.47" cy="374.73" r="5.60" fill="#1f77b4" stroke="#ffffff" stroke-width="1.6"/>
+<circle cx="901.87" cy="212.23" r="5.60" fill="#d95f02" stroke="#ffffff" stroke-width="1.6"/>
+<circle cx="901.87" cy="316.22" r="5.60" fill="#1f77b4" stroke="#ffffff" stroke-width="1.6"/>
+<circle cx="901.87" cy="212.23" r="10.40" fill="none" stroke="#d95f02" stroke-width="1.3" opacity="0.5"/>
+<circle cx="901.87" cy="316.22" r="10.40" fill="none" stroke="#1f77b4" stroke-width="1.3" opacity="0.5"/>
+<circle cx="755.61" cy="279.08" r="5.60" fill="#d95f02" stroke="#ffffff" stroke-width="1.6"/>
+<circle cx="755.61" cy="350.53" r="5.60" fill="#1f77b4" stroke="#ffffff" stroke-width="1.6"/>
+<circle cx="832.93" cy="225.86" r="5.60" fill="#d95f02" stroke="#ffffff" stroke-width="1.6"/>
+<circle cx="832.93" cy="304.89" r="5.60" fill="#1f77b4" stroke="#ffffff" stroke-width="1.6"/>
+<line x1="584.01" y1="366.39" x2="584.01" y2="388.12" stroke="#6b6b6b" stroke-width="1.2" stroke-linecap="butt" stroke-dasharray="2,3"/>
+<line x1="787.67" y1="294.20" x2="787.67" y2="354.76" stroke="#6b6b6b" stroke-width="1.2" stroke-linecap="butt" stroke-dasharray="2,3"/>
+<text x="588.01" y="354.39" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#6b6b6b" text-anchor="middle" font-weight="400">2000万行 窄 = 1.52×</text>
+<text x="793.67" y="280.20" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#6b6b6b" text-anchor="middle" font-weight="400">2000万行 宽 = 2.18×</text>
+<line x1="406.78" y1="432.52" x2="710.46" y2="432.52" stroke="#1f77b4" stroke-width="1.2" stroke-linecap="butt" stroke-dasharray="2,3" opacity="0.8"/>
+<text x="714.73" y="436.52" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#1f77b4" text-anchor="start" font-weight="400">GPU 固定开销 ≈ 1.5 s(与数据量无关)</text>
+<circle cx="126.00" cy="458.00" r="5.60" fill="#d95f02" stroke="#ffffff" stroke-width="1.6"/>
+<text x="138.00" y="462.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="12" fill="#6b6b6b" text-anchor="start" font-weight="400">CPU (pandas, 单线程)</text>
+<circle cx="304.00" cy="458.00" r="5.60" fill="#1f77b4" stroke="#ffffff" stroke-width="1.6"/>
+<text x="316.00" y="462.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="12" fill="#6b6b6b" text-anchor="start" font-weight="400">GPU (cuDF)</text>
+<line x1="418.00" y1="458.00" x2="446.00" y2="458.00" stroke="#6b6b6b" stroke-width="1.8" stroke-linecap="butt" stroke-dasharray="6,4"/>
+<text x="452.00" y="462.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="12" fill="#6b6b6b" text-anchor="start" font-weight="400">拟合速率(实测斜率)</text>
+<rect x="969.00" y="112.00" width="917.00" height="432.00" rx="10" fill="#ffffff" stroke="#d9d9d9" stroke-width="1.2"/>
+<rect x="969.00" y="112.00" width="5.00" height="432.00" rx="3" fill="#d95f02" stroke="none" stroke-width="1.0"/>
+<text x="989.00" y="141.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="17" fill="#1a1a1a" text-anchor="start" font-weight="600">② 加速比 — 何时 GPU 才划得来</text>
+<text x="989.00" y="161.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" fill="#6b6b6b" text-anchor="start" font-weight="400">同一批实测点。1.0× 以下 GPU 更慢;虚线为拟合渐近上限</text>
+<line x1="1267.59" y1="208.00" x2="1267.59" y2="482.00" stroke="#d9d9d9" stroke-width="0.8" stroke-linecap="butt" stroke-dasharray="3,4"/>
+<text x="1267.59" y="501.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#6b6b6b" text-anchor="middle" font-weight="400">0.5×</text>
+<line x1="1390.17" y1="208.00" x2="1390.17" y2="482.00" stroke="#d9d9d9" stroke-width="0.8" stroke-linecap="butt" stroke-dasharray="3,4"/>
+<text x="1390.17" y="501.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#6b6b6b" text-anchor="middle" font-weight="400">1.0×</text>
+<line x1="1512.76" y1="208.00" x2="1512.76" y2="482.00" stroke="#d9d9d9" stroke-width="0.8" stroke-linecap="butt" stroke-dasharray="3,4"/>
+<text x="1512.76" y="501.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#6b6b6b" text-anchor="middle" font-weight="400">1.5×</text>
+<line x1="1635.34" y1="208.00" x2="1635.34" y2="482.00" stroke="#d9d9d9" stroke-width="0.8" stroke-linecap="butt" stroke-dasharray="3,4"/>
+<text x="1635.34" y="501.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#6b6b6b" text-anchor="middle" font-weight="400">2.0×</text>
+<line x1="1757.93" y1="208.00" x2="1757.93" y2="482.00" stroke="#d9d9d9" stroke-width="0.8" stroke-linecap="butt" stroke-dasharray="3,4"/>
+<text x="1757.93" y="501.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#6b6b6b" text-anchor="middle" font-weight="400">2.5×</text>
+<text x="1133.00" y="231.80" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#1a1a1a" text-anchor="end" font-weight="400">2M narrow  ·  86000000.00 GB</text>
+<rect x="1145.00" y="218.00" width="119.05" height="19.60" rx="3" fill="#d95f02" stroke="none" stroke-width="1.0" opacity="0.88"/>
+<text x="1271.05" y="231.80" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#d95f02" text-anchor="start" font-weight="600">0.49×</text>
+<text x="1133.00" y="258.40" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#1a1a1a" text-anchor="end" font-weight="400">5M narrow  ·  217000000.00 GB</text>
+<rect x="1145.00" y="244.60" width="190.12" height="19.60" rx="3" fill="#d95f02" stroke="none" stroke-width="1.0" opacity="0.88"/>
+<text x="1342.12" y="258.40" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#d95f02" text-anchor="start" font-weight="600">0.78×</text>
+<text x="1133.00" y="285.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#1a1a1a" text-anchor="end" font-weight="400">8M narrow  ·  348000000.00 GB</text>
+<rect x="1145.00" y="271.20" width="252.72" height="19.60" rx="3" fill="#1f77b4" stroke="none" stroke-width="1.0" opacity="0.88"/>
+<text x="1404.72" y="285.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#1f77b4" text-anchor="start" font-weight="600">1.03×</text>
+<text x="1133.00" y="311.60" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#1a1a1a" text-anchor="end" font-weight="400">4M wide  ·  604000000.00 GB</text>
+<rect x="1145.00" y="297.80" width="311.31" height="19.60" rx="3" fill="#1f77b4" stroke="none" stroke-width="1.0" opacity="0.88"/>
+<text x="1463.31" y="311.60" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#1f77b4" text-anchor="start" font-weight="600">1.27×</text>
+<text x="1133.00" y="338.20" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#1a1a1a" text-anchor="end" font-weight="400">20M narrow  ·  881000000.00 GB</text>
+<rect x="1145.00" y="324.40" width="371.84" height="19.60" rx="3" fill="#1f77b4" stroke="none" stroke-width="1.0" opacity="0.88"/>
+<text x="1523.84" y="338.20" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#1f77b4" text-anchor="start" font-weight="600">1.52×</text>
+<text x="1133.00" y="364.80" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#1a1a1a" text-anchor="end" font-weight="400">30M narrow  ·  1490000000.00 GB</text>
+<rect x="1145.00" y="351.00" width="537.99" height="19.60" rx="3" fill="#1f77b4" stroke="none" stroke-width="1.0" opacity="0.88"/>
+<text x="1689.99" y="364.80" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#1f77b4" text-anchor="start" font-weight="600">2.19×</text>
+<text x="1133.00" y="391.40" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#1a1a1a" text-anchor="end" font-weight="400">50M narrow  ·  2500000000.00 GB</text>
+<rect x="1145.00" y="377.60" width="584.11" height="19.60" rx="3" fill="#1f77b4" stroke="none" stroke-width="1.0" opacity="0.88"/>
+<text x="1736.11" y="391.40" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#1f77b4" text-anchor="start" font-weight="600">2.38×</text>
+<text x="1133.00" y="418.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#1a1a1a" text-anchor="end" font-weight="400">20M wide  ·  3038000000.00 GB</text>
+<rect x="1145.00" y="404.20" width="534.09" height="19.60" rx="3" fill="#1f77b4" stroke="none" stroke-width="1.0" opacity="0.88"/>
+<text x="1686.09" y="418.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#1f77b4" text-anchor="start" font-weight="600">2.18×</text>
+<text x="1133.00" y="444.60" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#1a1a1a" text-anchor="end" font-weight="400">80M narrow  ·  4000000000.00 GB</text>
+<rect x="1145.00" y="430.80" width="512.80" height="19.60" rx="3" fill="#1f77b4" stroke="none" stroke-width="1.0" opacity="0.88"/>
+<text x="1664.80" y="444.60" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#1f77b4" text-anchor="start" font-weight="600">2.09×</text>
+<text x="1133.00" y="471.20" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#1a1a1a" text-anchor="end" font-weight="400">40M wide  ·  6082000000.00 GB</text>
+<rect x="1145.00" y="457.40" width="649.18" height="19.60" rx="3" fill="#1f77b4" stroke="none" stroke-width="1.0" opacity="0.88"/>
+<text x="1801.18" y="471.20" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#1f77b4" text-anchor="start" font-weight="600">2.65×</text>
+<line x1="1390.17" y1="208.00" x2="1390.17" y2="482.00" stroke="#1a1a1a" stroke-width="1.6" stroke-linecap="butt"/>
+<text x="1390.17" y="200.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#1a1a1a" text-anchor="middle" font-weight="600">1.0× 收支平衡</text>
+<text x="1500.50" y="524.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" fill="#6b6b6b" text-anchor="middle" font-weight="400">GPU 相对 CPU 的加速倍数</text>
+<text x="1151.00" y="444.60" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#ffffff" text-anchor="start" font-weight="600">4.0 GB 反而低于 2.5 GB(复测确认)→</text>
+<rect x="34.00" y="562.00" width="917.00" height="432.00" rx="10" fill="#ffffff" stroke="#d9d9d9" stroke-width="1.2"/>
+<rect x="34.00" y="562.00" width="5.00" height="432.00" rx="3" fill="#1f77b4" stroke="none" stroke-width="1.0"/>
+<text x="54.00" y="591.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="17" fill="#1a1a1a" text-anchor="start" font-weight="600">③ 控制实验 — 决定因素是字节,不是行数</text>
+<text x="54.00" y="611.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" fill="#6b6b6b" text-anchor="start" font-weight="400">总字节固定 ≈600 MB,只变行/列结构;字节/行跨度 13×</text>
+<line x1="618.88" y1="662.00" x2="618.88" y2="928.00" stroke="#d9d9d9" stroke-width="0.8" stroke-linecap="butt" stroke-dasharray="3,4"/>
+<text x="618.88" y="947.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#6b6b6b" text-anchor="middle" font-weight="400">1.0×</text>
+<line x1="718.25" y1="662.00" x2="718.25" y2="928.00" stroke="#d9d9d9" stroke-width="0.8" stroke-linecap="butt" stroke-dasharray="3,4"/>
+<text x="718.25" y="947.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#6b6b6b" text-anchor="middle" font-weight="400">1.2×</text>
+<line x1="817.62" y1="662.00" x2="817.62" y2="928.00" stroke="#d9d9d9" stroke-width="0.8" stroke-linecap="butt" stroke-dasharray="3,4"/>
+<text x="817.62" y="947.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#6b6b6b" text-anchor="middle" font-weight="400">1.4×</text>
+<text x="110.00" y="689.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#1a1a1a" text-anchor="end" font-weight="400">66 B/行 · 4 列</text>
+<rect x="122.00" y="675.00" width="690.66" height="18.00" rx="3" fill="#1f77b4" stroke="none" stroke-width="1.0" opacity="0.88"/>
+<text x="819.66" y="689.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#1f77b4" text-anchor="start" font-weight="600">1.39×</text>
+<text x="110.00" y="748.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#1a1a1a" text-anchor="end" font-weight="400">220 B/行 · 12 列</text>
+<rect x="122.00" y="734.00" width="591.28" height="18.00" rx="3" fill="#1f77b4" stroke="none" stroke-width="1.0" opacity="0.88"/>
+<text x="720.28" y="748.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#1f77b4" text-anchor="start" font-weight="600">1.19×</text>
+<text x="110.00" y="807.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#1a1a1a" text-anchor="end" font-weight="400">449 B/行 · 24 列</text>
+<rect x="122.00" y="793.00" width="586.31" height="18.00" rx="3" fill="#1f77b4" stroke="none" stroke-width="1.0" opacity="0.88"/>
+<text x="715.31" y="807.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#1f77b4" text-anchor="start" font-weight="600">1.18×</text>
+<text x="110.00" y="866.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#1a1a1a" text-anchor="end" font-weight="400">880 B/行 · 48 列</text>
+<rect x="122.00" y="852.00" width="586.31" height="18.00" rx="3" fill="#1f77b4" stroke="none" stroke-width="1.0" opacity="0.88"/>
+<text x="715.31" y="866.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#1f77b4" text-anchor="start" font-weight="600">1.18×</text>
+<line x1="618.88" y1="662.00" x2="618.88" y2="928.00" stroke="#1a1a1a" stroke-width="1.6" stroke-linecap="butt"/>
+<text x="519.50" y="970.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" fill="#6b6b6b" text-anchor="middle" font-weight="400">GPU 加速倍数</text>
+<rect x="128.00" y="882.00" width="783.00" height="38.00" rx="6" fill="#1f77b4" stroke="none" stroke-width="1.0" opacity="0.07"/>
+<text x="138.00" y="907.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="12" fill="#1f77b4" text-anchor="start" font-weight="600">字节/行跨度 13×,加速比仅 1.39× → 1.18×:形状改变幅度,不改变结论</text>
+<rect x="969.00" y="562.00" width="917.00" height="432.00" rx="10" fill="#ffffff" stroke="#d9d9d9" stroke-width="1.2"/>
+<rect x="969.00" y="562.00" width="5.00" height="432.00" rx="3" fill="#1f77b4" stroke="none" stroke-width="1.0"/>
+<text x="989.00" y="591.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="17" fill="#1a1a1a" text-anchor="start" font-weight="600">④ 同一小文件反复分析 — 摊薄固定开销</text>
+<text x="989.00" y="611.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" fill="#6b6b6b" text-anchor="start" font-weight="400">5 个 op。CPU 每次重读全文件;GPU 会话 open 一次后复用驻留数据</text>
+<line x1="1073.00" y1="918.00" x2="1852.00" y2="918.00" stroke="#d9d9d9" stroke-width="0.8" stroke-linecap="butt" stroke-dasharray="3,4"/>
+<text x="1063.00" y="922.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#6b6b6b" text-anchor="end" font-weight="400">0</text>
+<line x1="1073.00" y1="845.78" x2="1852.00" y2="845.78" stroke="#d9d9d9" stroke-width="0.8" stroke-linecap="butt" stroke-dasharray="3,4"/>
+<text x="1063.00" y="849.78" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#6b6b6b" text-anchor="end" font-weight="400">10</text>
+<line x1="1073.00" y1="773.56" x2="1852.00" y2="773.56" stroke="#d9d9d9" stroke-width="0.8" stroke-linecap="butt" stroke-dasharray="3,4"/>
+<text x="1063.00" y="777.56" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#6b6b6b" text-anchor="end" font-weight="400">20</text>
+<line x1="1073.00" y1="701.33" x2="1852.00" y2="701.33" stroke="#d9d9d9" stroke-width="0.8" stroke-linecap="butt" stroke-dasharray="3,4"/>
+<text x="1063.00" y="705.33" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#6b6b6b" text-anchor="end" font-weight="400">30</text>
+<text x="1017.00" y="788.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" fill="#6b6b6b" text-anchor="middle" font-weight="400" transform="rotate(-90 1017.00 788.00)">耗时 (秒)</text>
+<rect x="1135.32" y="837.33" width="67.51" height="80.67" rx="3" fill="#d95f02" stroke="none" stroke-width="1.0" opacity="0.88"/>
+<rect x="1202.83" y="896.69" width="67.51" height="21.31" rx="3" fill="#1f77b4" stroke="none" stroke-width="1.0" opacity="0.88"/>
+<text x="1169.08" y="830.33" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#d95f02" text-anchor="middle" font-weight="600">11.2</text>
+<text x="1236.59" y="889.69" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#1f77b4" text-anchor="middle" font-weight="600">3.0</text>
+<text x="1202.83" y="938.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="12" fill="#1a1a1a" text-anchor="middle" font-weight="600">1M 行</text>
+<text x="1202.83" y="906.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="15" fill="#1f77b4" text-anchor="middle" font-weight="700">3.79×</text>
+<rect x="1394.99" y="794.43" width="67.51" height="123.57" rx="3" fill="#d95f02" stroke="none" stroke-width="1.0" opacity="0.88"/>
+<rect x="1462.50" y="889.26" width="67.51" height="28.74" rx="3" fill="#1f77b4" stroke="none" stroke-width="1.0" opacity="0.88"/>
+<text x="1428.74" y="787.43" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#d95f02" text-anchor="middle" font-weight="600">17.1</text>
+<text x="1496.26" y="882.26" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#1f77b4" text-anchor="middle" font-weight="600">4.0</text>
+<text x="1462.50" y="938.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="12" fill="#1a1a1a" text-anchor="middle" font-weight="600">2M 行</text>
+<text x="1462.50" y="906.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="15" fill="#1f77b4" text-anchor="middle" font-weight="700">4.29×</text>
+<rect x="1654.65" y="661.54" width="67.51" height="256.46" rx="3" fill="#d95f02" stroke="none" stroke-width="1.0" opacity="0.88"/>
+<rect x="1722.17" y="867.81" width="67.51" height="50.19" rx="3" fill="#1f77b4" stroke="none" stroke-width="1.0" opacity="0.88"/>
+<text x="1688.41" y="654.54" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#d95f02" text-anchor="middle" font-weight="600">35.5</text>
+<text x="1755.92" y="860.81" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#1f77b4" text-anchor="middle" font-weight="600">7.0</text>
+<text x="1722.17" y="938.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="12" fill="#1a1a1a" text-anchor="middle" font-weight="600">5M 行</text>
+<text x="1722.17" y="906.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="15" fill="#1f77b4" text-anchor="middle" font-weight="700">5.11×</text>
+<text x="1462.50" y="960.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" fill="#6b6b6b" text-anchor="middle" font-weight="400">同一文件上运行的 op 组数 × 5</text>
+<rect x="1077.00" y="970.00" width="12.00" height="12.00" rx="2" fill="#d95f02" stroke="none" stroke-width="1.0" opacity="0.88"/>
+<text x="1095.00" y="981.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="12" fill="#6b6b6b" text-anchor="start" font-weight="400">CPU 5 次独立调用(每次重读)</text>
+<rect x="1305.00" y="970.00" width="12.00" height="12.00" rx="2" fill="#1f77b4" stroke="none" stroke-width="1.0" opacity="0.88"/>
+<text x="1323.00" y="981.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="12" fill="#6b6b6b" text-anchor="start" font-weight="400">GPU 驻留会话(open 一次)</text>
+<line x1="34.00" y1="1070.00" x2="1886.00" y2="1070.00" stroke="#d9d9d9" stroke-width="1.0" stroke-linecap="butt"/>
+<text x="34.00" y="1089.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" fill="#6b6b6b" text-anchor="start" font-weight="400">结论:小数据上 GPU 输在固定开销(≈1.5 s)而非算力;数据量增大后加速比趋近斜率上限(窄 ~4.3×,宽 ~4.6×+)。</text>
+<text x="34.00" y="1106.00" font-family="-apple-system, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" fill="#6b6b6b" text-anchor="start" font-weight="400">但 4.0 GB 处加速比已回落(best-of-3 复测确认),且内存容量是可行性悬崖而非效率曲线 —— 上限是天花板,不是地板。</text>
+</svg>
