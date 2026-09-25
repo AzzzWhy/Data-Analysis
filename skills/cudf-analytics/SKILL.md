@@ -210,6 +210,24 @@ Design decisions worth stating:
 Four catalogued shapes cover the common questions: `drill_down` (anomaly → cause),
 `compare_groups`, `data_quality`, `relationships`.
 
+**What a plan does and does not guarantee.** It guarantees that progress is not lost, that the
+session is not abandoned mid-way for the slow stateless path, and that memory is released. It
+does **not** guarantee the same step count every run: measured over three runs of one
+question, coverage was 3/3 for a `relationships` goal but 2/3 for a `drill_down` goal, where
+one run closed after three steps instead of five. The answer was valid; it was just less
+thorough. That residual variation is the model's judgement, and adding more prompt rules to
+suppress it is not obviously an improvement.
+
+Reproducibility is checked by a script in the agent directory rather than asserted:
+
+```bash
+bash agent/run_stability_check.sh 3 /path/to/data.csv
+```
+
+It gates on staying in the session and closing it, and reports ordering and extra steps as
+information rather than failures — exploring one more grouping dimension, or covering the plan
+steps in a different order, is legitimate analysis rather than divergence.
+
 ## Deliverables: charts and a report
 
 `make_deliverables.py` turns an engine result into files a user can keep: `report.md`, one or
@@ -284,6 +302,8 @@ not just the best row.
 | Need a CPU-vs-GPU comparison of one command | Add `--force-cpu` and compare against the normal run. |
 | `--op corr --method spearman` runs on CPU | Expected: cuDF only does pearson, so that request falls back and reports why. |
 | `--by region,category` rejected | `--by` takes one column. The error now names the one-column rule and the valid halves; issue two groupby calls. |
+| `unsupported agg func(s)` | The error names an alternative by intent: `corr` → use `op='corr'` (group-by cannot compute per-group correlation), `var` → `std`, `avg` → `mean`, quantiles → `op='summary'`. Do not repeat the same argument. |
+| An error inside an open session | Read it, change the argument, retry on the **same session**. Do not `close` first: closing leaves only the slow re-reading path. |
 | `显存不足 / memory refused on session open` | Expected guard, raised before loading. Use `analyze_dataset` for a one-off, or pass `columns` to load fewer. |
 | Session says the file "已被修改" | The file changed under the session, so its answers would be stale. Re-`open` it. |
 | Session left open after a run | The agent releases it in a `finally` block; the model is also told to `close`. If a session is ever orphaned, `{"cmd":"close","sid":"all"}` frees it. |
