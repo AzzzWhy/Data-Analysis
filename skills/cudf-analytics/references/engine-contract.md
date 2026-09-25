@@ -135,6 +135,33 @@ its hint says to pass `force_gpu=true` when several analyses are planned. A refu
 say how to proceed is a dead end, and the first version of the guard was one — it told the caller
 to switch to `analyze_dataset` even when a session was the better answer.
 
+### Why size, and not memory capacity, is the signal
+
+Two different quantities are easy to confuse here, and only one of them is a routing signal:
+
+- **Data size** — how much work there is. This decides whether the GPU's throughput advantage
+  outweighs its fixed cost. It is the axis used above.
+- **Memory capacity** — whether the working set fits. This is a *feasibility* constraint, not an
+  efficiency curve. It is a cliff: while the data fits, capacity changes nothing, and once it does
+  not fit, the fallback is out-of-core chunking with transfers and the advantage collapses. The
+  GB10 has 121 GB of unified memory, so nothing measured here came near this cliff.
+
+A controlled experiment confirms which one governs. Holding total bytes at ~600 MB and varying
+only the row and cell structure, so that bytes-per-row spans 13x:
+
+| Rows | Cols | B/row | CPU s | GPU s | Speedup |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 12,000,000 | 4 | 66 | 2.73 | 1.97 | **1.39×** |
+| 3,000,000 | 12 | 221 | 2.22 | 1.86 | 1.19× |
+| 1,500,000 | 24 | 449 | 2.22 | 1.88 | 1.18× |
+| 750,000 | 48 | 880 | 2.21 | 1.87 | 1.18× |
+
+At a fixed size the GPU wins by 1.18× to 1.39× across shapes that differ by 13x in row width, and
+what shape changes is the *margin*, not the verdict. Also note the GPU total barely moves
+(1.97 → 1.86 → 1.88 → 1.87 s) while the CPU gets relatively faster with fewer, longer rows: a wide
+row of floats costs the CPU more per byte than a short integer row, which is the small width term
+already in the thresholds, and it is a term of a few percent rather than the dominant effect.
+
 ### Report language
 
 `make_deliverables.py` writes the report in the caller's language and defaults to **Chinese**.
