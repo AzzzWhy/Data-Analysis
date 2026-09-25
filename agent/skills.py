@@ -921,15 +921,29 @@ def analyze_dataset(file_path: str, operation: str, by: str = None, agg: str = N
             "seconds": payload.get("total_seconds"),
             "result": _compact(result),
         }
-        # Tell the model plainly when it did NOT get GPU speed, so it cannot overclaim.
+        # Tell the model plainly when it did NOT get GPU speed, so it cannot overclaim. The two cases
+        # must be worded differently, because they mean different things: a deliberate routing choice
+        # is normal behaviour with a measured justification, while a fallback means the GPU was tried
+        # and failed. Calling the first one "reason: unknown" would have the model report a healthy
+        # run as a defect -- which is what happened before this distinction existed.
         if payload.get("engine") != "cudf":
-            out["warning"] = (
-                f"this run used the CPU (engine={payload.get('engine')}), reason: "
-                f"{payload.get('fallback_reason') or 'unknown'}. Do not claim GPU acceleration "
-                f"in the answer."
-            )
+            route = payload.get("routing_reason")
+            if route:
+                out["engine_note"] = (
+                    f"this run used the CPU deliberately (engine={payload.get('engine')}): {route}. "
+                    f"This is the faster path at this data size, not a failure. Explain it that way "
+                    f"if the user asks about GPU usage; do not claim GPU acceleration."
+                )
+            else:
+                out["warning"] = (
+                    f"this run used the CPU (engine={payload.get('engine')}), reason: "
+                    f"{payload.get('fallback_reason') or 'unknown'}. Do not claim GPU acceleration "
+                    f"in the answer."
+                )
         if note:
-            out["engine_note"] = note
+            # Do not overwrite the routing explanation: that one tells the model the CPU path was
+            # a deliberate choice, and losing it would put the run back to reading as a defect.
+            out.setdefault("engine_note", note)
 
         # Attach the measured GPU-vs-CPU comparison for this exact query.
         _attach_speedup(out, path, str(operation or "auto"), by, agg, columns, top_k, payload)
