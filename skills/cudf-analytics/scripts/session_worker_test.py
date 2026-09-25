@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 
-DATA = sys.argv[1] if len(sys.argv) > 1 else "/home/Developer/sales_demo.csv"
+DATA = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("DEMO_DATA", "sales_demo.csv")
 HERE = os.path.dirname(os.path.abspath(__file__))
 FAILS = []
 

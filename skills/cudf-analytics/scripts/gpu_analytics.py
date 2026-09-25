@@ -432,7 +432,22 @@ def op_groupby(df: Any, eng: Engine, args: argparse.Namespace) -> Dict[str, Any]
     if not by:
         raise ValueError("--op groupby requires --by")
     if by not in [str(c) for c in df.columns]:
-        raise ValueError(f"--by column {by!r} not found; available: {[str(c) for c in df.columns]}")
+        # Name the one-column limitation explicitly. Without it the caller sees a list of
+        # real columns that contains both halves of what it asked for, concludes it must have
+        # made a typo, and retries the same comma-joined value. Observed repeatedly.
+        hint = ""
+        if "," in str(by):
+            parts = [p.strip() for p in str(by).split(",") if p.strip()]
+            known = [p for p in parts if p in [str(c) for c in df.columns]]
+            if len(known) >= 2:
+                hint = (f" --by takes exactly ONE column, but {known} were joined with a comma."
+                        f" Run one groupby per column instead: "
+                        + " then ".join(f'--by {k}' for k in known) + ".")
+            elif known:
+                hint = (f" --by takes exactly ONE column; {known} is valid but "
+                        f"{[p for p in parts if p not in known]} is not.")
+        raise ValueError(
+            f"--by column {by!r} not found; available: {[str(c) for c in df.columns]}.{hint}")
     spec = _parse_agg(args.agg, _numeric_cols(df))
 
     g = df.groupby(by, dropna=False, as_index=False)

@@ -155,6 +155,17 @@ run_case "session-cleanup" \
   "用会话方式看 $DATA 的整体概览和 revenue 异常值，完成后释放" \
   "close|自动释放" "显存不足"
 
+# (2)+(3) a request for something the user can take away must produce files, not just prose.
+run_case "deliverables-export" \
+  "分析 $DATA 的 revenue 并给我出一份带图表的报告" \
+  "export_deliverables|report.md" "显存不足"
+
+# (1) the plan must be attached to the session when a multi-step goal is given, so progress
+# is owned by the system rather than recalled by the model.
+run_case "plan-attached" \
+  "用会话方式找出 $DATA 里 revenue 的异常值来源，分析原因后释放" \
+  "goal|plan|dataset_session" "显存不足"
+
 echo "==============================================================="
 echo "PASS=$PASS  FAIL=$FAIL"
 if [ -n "$FAILED_CASES" ]; then

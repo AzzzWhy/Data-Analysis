@@ -15,7 +15,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import skills  # noqa: E402
 
-DATA = sys.argv[1] if len(sys.argv) > 1 else "/home/Developer/sales_demo.csv"
+DATA = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("DEMO_DATA", "sales_demo.csv")
 FAILS = []
 
 

@@ -8,14 +8,17 @@ description: >-
   when the user mentions 大数据集, 统计摘要, 分组聚合, 相关性, 异常值, 数据分析, 算力加速,
   GPU, cuDF, RAPIDS, or complains that pandas is too slow or runs out of memory. Trigger it
   for questions like "这个 CSV 里各品类的平均销售额是多少", "帮我分析这份数据的分布和异常值",
-  "算了 5000 万行要多久". Do NOT trigger for single-number arithmetic, fetching data from a
-  database/API, building charts or dashboards, training ML models, or editing the dataset.
-  When in doubt and a data file is involved, prefer this skill — it falls back to pandas
-  automatically when no GPU is present, so it is always safe to call.
+  "算了 5000 万行要多久". Also trigger it when the user wants something they can keep —
+  「出个图表」「画一下」「给我一份报告」「导出」「保存下来」「我要拿去汇报」— because this skill
+  writes a Markdown report, SVG charts and CSV exports from the GPU-computed aggregates.
+  Do NOT trigger for single-number arithmetic, fetching data from a database/API, training
+  ML models, or editing the dataset. When in doubt and a data file is involved, prefer this
+  skill — it falls back to pandas automatically when no GPU is present, so it is always safe
+  to call.
 whenToUse: >-
   Analyzing a local tabular data file (CSV/Parquet/TSV/JSONL/Excel) for statistics,
   group-by aggregation, correlation, or outlier detection, especially at million-row scale
-  where pandas is slow.
+  where pandas is slow; and producing a shareable report or charts from those results.
 metadata:
   version: "0.1.0"
   author: NVIDIA DGX Spark Hackathon submission
@@ -172,6 +175,65 @@ not re-reading the file, which is not the same as GPU compute throughput. `close
 `workflow_comparison` block whose `note` says exactly that, and the reported ratio should be
 presented with it.
 
+## Plans: multi-step analysis that does not drift
+
+A session can be given a `goal`. The worker then materialises a strategy for that goal from a
+fixed catalog (`analysis_plan.py`) and records each step's completion as it runs.
+
+The reason this is state and not a prompt instruction: the same question asked three times
+produced three different tool paths — one abandoned the session mid-way, one exhausted the
+round budget, one switched tools half-way through. That is not a property a demo can rely on.
+With the plan attached, the same question completes its steps and closes cleanly.
+
+```
+{"cmd": "open", "path": "/data/sales.csv", "goal": "找出 revenue 的异常值原因"}
+  -> plan: {kind: "drill_down", total_steps: 5, next_step: 0,
+            steps: [profile, outliers, groupby(region), groupby(category), corr],
+            do_next: "operation=analyze, op=profile  # 先确认列名与类型"}
+{"cmd": "analyze", "sid": "s1", "op": "profile"}
+  -> plan: {completed: 1, next_step: 1, ...}
+```
+
+Design decisions worth stating:
+
+- **Classification is a pure function of the user's words**, by keyword score, not a model
+  call. A classifier the model invokes is a classifier that can change between runs; this one
+  is asserted stable over 50 consecutive calls in `plan_test.py`.
+- **Steps carry real arguments.** Group-by steps are filled with categorical columns read from
+  the frame at open time. A step that says "group it" without naming the column is a template.
+- **Off-plan work is recorded, not rejected.** The model may investigate something the plan
+  did not anticipate; that is marked `off_plan` and does not count toward progress. Hiding it
+  would make the progress report lie.
+- **Impossible steps are dropped.** With no categorical column known, group-by steps are
+  omitted rather than emitted as calls that would immediately fail.
+
+Four catalogued shapes cover the common questions: `drill_down` (anomaly → cause),
+`compare_groups`, `data_quality`, `relationships`.
+
+## Deliverables: charts and a report
+
+`make_deliverables.py` turns an engine result into files a user can keep: `report.md`, one or
+more `.svg` charts, and CSV/JSON of the underlying numbers.
+
+It imports **only the standard library**. That is a deliberate choice over matplotlib:
+
+- matplotlib is not present on GB10 and pulling it onto aarch64 drags in a wheel stack;
+- hand-rolled SVG renders identically everywhere — no font discovery, no backend, no DPI
+  differences, so a chart looks the same on a reviewer's laptop as in the browser;
+- SVG is text, so a chart change is reviewable in a diff.
+
+**State this plainly when reporting it:** chart *rendering* is not GPU-accelerated. The GPU
+accelerated the aggregation that produced the plotted values. Claiming a GPU speedup for
+drawing a handful of bars would be meaningless, and the generated report says so in its own
+text rather than leaving it to the narrator.
+
+Value charts automatically omit surrogate keys (`row_id` and anything matching an id pattern,
+or spanning exactly 0..N-1). Without that filter one sequence column with a mean of 10,000,000
+stretches the axis and flattens every real column into an invisible sliver — which happened on
+the demo data before the filter existed.
+
+Chart types: grouped bar, multi-series line, scatter, histogram, correlation heatmap.
+
 ## Performance reporting
 
 Before quoting any number, confirm the harness is green:
@@ -221,10 +283,11 @@ not just the best row.
 | Out-of-memory on a huge file | Add `--columns` to analyze fewer columns, or `--usecols` to load fewer. |
 | Need a CPU-vs-GPU comparison of one command | Add `--force-cpu` and compare against the normal run. |
 | `--op corr --method spearman` runs on CPU | Expected: cuDF only does pearson, so that request falls back and reports why. |
-| `--by region,category` rejected | `--by` takes one column. Issue two groupby calls instead. |
+| `--by region,category` rejected | `--by` takes one column. The error now names the one-column rule and the valid halves; issue two groupby calls. |
 | `显存不足 / memory refused on session open` | Expected guard, raised before loading. Use `analyze_dataset` for a one-off, or pass `columns` to load fewer. |
 | Session says the file "已被修改" | The file changed under the session, so its answers would be stale. Re-`open` it. |
 | Session left open after a run | The agent releases it in a `finally` block; the model is also told to `close`. If a session is ever orphaned, `{"cmd":"close","sid":"all"}` frees it. |
+| A chart has one enormous bar and the rest are slivers | A surrogate key is in the chart. `summary_means.svg` filters these; check the omitted-columns note in its subtitle. |
 
 **Restoring the GPU path on GB10:**
 
@@ -239,11 +302,13 @@ before making any speed claims.
 ## Boundaries
 
 - Read-only: this skill never writes to or mutates the user's dataset.
-- It computes statistics; it does not plot, model, or fetch remote data.
+- It computes statistics and renders charts; it does not model or fetch remote data.
 - Correlation is not causation — do not present `corr` output as a causal finding.
 - `--by` groups by a single column only.
 - A session holds the dataset in device memory for its whole lifetime (about 1.7 GB per 20M
   rows), so sessions are capped at 4 and refused outright when memory is short. For one-off
   questions use the stateless path, which holds nothing between calls.
+- Chart rendering is CPU-only and cheap. Never report a GPU speedup for producing a chart;
+  the GPU speedup belongs to the aggregation behind it.
 - Always surface `rows_scanned` so the user knows the numbers came from the whole file,
   not a sample.

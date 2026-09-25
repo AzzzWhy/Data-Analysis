@@ -68,7 +68,15 @@ def _import_engine():
     return ga
 
 
+def _import_plans():
+    if _HERE not in sys.path:
+        sys.path.insert(0, _HERE)
+    import analysis_plan as ap  # noqa: E402
+    return ap
+
+
 GA = _import_engine()
+PLANS_MODULE = _import_plans()
 
 # Sessions hold a full dataset in GPU memory, so they are capped. Each open session on a
 # 20M-row file costs roughly 1-2 GB of device memory; refusing the 5th is better than
@@ -111,6 +119,9 @@ class Session:
     analysis_seconds: float = 0.0
     cpu_load_seconds: Optional[float] = None
     reason: Optional[str] = None
+    # The strategy this session is following, if a goal was supplied at open time. Held on
+    # the session so progress survives across analyze calls without the model tracking it.
+    plan: Any = None
 
 
 SESSIONS: Dict[str, Session] = {}
@@ -245,7 +256,7 @@ def do_open(req: dict) -> dict:
         except Exception:
             resident_mb = None
 
-    return {
+    out = {
         "ok": True,
         "session_id": sid,
         "file": os.path.basename(path),
@@ -262,6 +273,42 @@ def do_open(req: dict) -> dict:
             "不会重新读盘、不会采样。分析完请调用 close 释放内存。"
         ),
     }
+
+    # Build a plan when a goal was given, or when the caller asked for one. The plan is
+    # filled in with real column names discovered right here, so the model receives an
+    # executable sequence instead of a template.
+    want_plan = req.get("goal") or req.get("plan")
+    if want_plan:
+        group_cols = _pick_group_columns(frame)
+        plan = PLANS_MODULE.build_plan(
+            plan_id=f"p{sid}", goal=str(req.get("goal") or ""),
+            kind=req.get("plan_kind"), group_cols=group_cols,
+        )
+        sess.plan = plan
+        out["plan"] = plan.as_dict()
+        out["plan_note"] = (
+            "计划是会话的状态：每执行一步系统会自动记账，你随时可以继续下一步，"
+            "不需要自己记住做到哪了。如果发现计划里的某一步不合理，也可以跳过它，"
+            "系统会把跳过的步骤标出来。"
+        )
+    return out
+
+
+def _pick_group_columns(frame) -> list:
+    """The frame's categorical columns, for use as the group-by axes of a plan."""
+    names = [str(c) for c in frame.columns]
+    dtypes = {}
+    try:
+        for c in frame.columns:
+            dtypes[str(c)] = str(frame[c].dtype)
+    except Exception:
+        dtypes = {}
+    out = []
+    for c in names:
+        dt = dtypes.get(c, "")
+        if dt in ("object", "category", "string") or "str" in dt:
+            out.append(c)
+    return out
 
 
 def do_analyze(req: dict) -> dict:
@@ -325,7 +372,68 @@ def do_analyze(req: dict) -> dict:
         f"会话累计 {out['cumulative_seconds']:.2f}s（载入 {sess.load_seconds:.2f}s + "
         f"{sess.steps} 步计算 {sess.analysis_seconds:.2f}s）。"
     )
+
+    # --- plan bookkeeping -------------------------------------------------------------
+    # The executor records progress, not the model. This is what turns a plan from a
+    # suggestion in the prompt into state the system owns: "what is left" is answered from
+    # the session, so it cannot drift as the conversation grows.
+    if sess.plan is not None:
+        hit = PLANS_MODULE.record(sess.plan, op, req, step_seconds,
+                                 summary=_step_summary(op, payload))
+        out["plan"] = hit["plan"]
+        if hit.get("matched"):
+            out["plan"]["recorded_step"] = hit["step"]
+        elif hit.get("off_plan"):
+            out["plan"]["off_plan_step"] = hit["off_plan"]
+            out["plan"]["off_plan_note"] = (
+                "这一步不在计划里。已经记下来了，不会算进计划进度；"
+                "如果它比计划里的下一步更有价值，就继续按你的判断走。"
+            )
     return out
+
+
+def _step_summary(op: str, payload: Any) -> Optional[str]:
+    """
+    One short, factual line about what a step found.
+
+    Deliberately terse and derived only from the payload: this is what the plan's completed
+    steps display, so it must be checkable rather than a narration of the step.
+    """
+    try:
+        if op == "outliers" and isinstance(payload, dict):
+            res = payload.get("results") or {}
+            worst = None
+            for name, info in res.items():
+                if isinstance(info, dict) and isinstance(info.get("count"), (int, float)):
+                    if worst is None or info["count"] > worst[1]:
+                        worst = (name, info["count"], info.get("pct"))
+            if worst:
+                pct = f" ({worst[2]}%)" if worst[2] is not None else ""
+                return f"{len(res)} 列中有异常，最多的是 {worst[0]}: {worst[1]:,}{pct}"
+        if op == "groupby" and isinstance(payload, dict):
+            rows = payload.get("top_k") or []
+            if rows:
+                by = payload.get("by")
+                first = rows[0]
+                metric = next((k for k in first if k != by), None)
+                if metric:
+                    return (f"按 {by} 分 {payload.get('groups')} 组，"
+                            f"{metric} 最高是 {first.get(by)}={first.get(metric)}")
+        if op == "corr" and isinstance(payload, dict):
+            pairs = payload.get("pairs") or []
+            if pairs:
+                p = pairs[0]
+                return f"最强相关: {p.get('a')} ~ {p.get('b')} r={p.get('corr')}"
+        if op == "summary" and isinstance(payload, dict):
+            st = payload.get("stats") or {}
+            return f"{len(st)} 个数值列完成分布统计"
+        if op == "profile" and isinstance(payload, dict):
+            return f"{payload.get('rows')} 行 x {payload.get('columns_count')} 列"
+        if op == "auto" and isinstance(payload, dict):
+            return f"概览完成，扫描 {payload.get('rows_scanned')} 行"
+    except Exception:
+        return None
+    return None
 
 
 def do_list(_req: dict) -> dict:

@@ -42,6 +42,10 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _default_data = os.path.join(os.path.dirname(_HERE), "benchmark", "demo", "sales_demo.csv")
 DATA = os.environ.get("DEMO_DATA", _default_data)
 
+# The deliverable step writes here, so a rehearsal never litters the checkout.
+DELIVERABLES_DIR = os.environ.get(
+    "DEMO_DELIVERABLES_DIR", os.path.join(_HERE, "deliverables"))
+
 # (title, what the audience should notice, question)
 STEPS = [
     (
@@ -79,6 +83,22 @@ STEPS = [
         "⑦ 不该调用工具时就不调用",
         "概念性问题不该触发数据分析工具，验证触发边界",
         "解释一下什么是四分位距 IQR，以及它为什么能用来找异常值",
+    ),
+    (
+        "⑧ 交付物：把结果变成能带走的文件",
+        "前面几环节的产物都是对话里的文字。这一环 Agent 调 export_deliverables，"
+        "在 GPU 上做全量分析后写出报告(.md)、图表(.svg)和 CSV。"
+        "看它有没有把文件路径告诉你——只回答不出文件，就等于没交付。",
+        "按 region 和 category 分析 {data} 的 revenue，然后给我出一份带图表的报告",
+    ),
+    (
+        "⑨ 多步下钻：一次会话里连做 5 步全量分析",
+        "本场最有说服力的一环。Agent 用 dataset_session 打开会话（数据常驻显存）后，"
+        "在同一个会话里连续下钻：先看异常规模，再按两个维度缩小范围，最后检查是否只是相关。"
+        "关键看两点：①每一步的 step 耗时是零点几秒（因为没有重新读盘）；"
+        "②收尾时 close 会给出整个工作流的对比——同样的 5 步若在 CPU 上每步重读要多久。"
+        "进度由系统记账（plan），所以它不会中途迷路或忘记收尾。",
+        "{data} 里 revenue 的异常值是怎么来的？帮我找出来并分析原因，用会话方式做完并释放",
     ),
 ]
 
@@ -118,6 +138,34 @@ def prewarm(data_path: str) -> None:
                   f"{measured['baseline_seconds']:.2f}s")
     print("\n预热完成。")
     print(f"缓存条目数: {len(skills._COMPARISON_CACHE)}")
+
+    # Warm the session path too: the drill-down step should not pause to measure a CPU
+    # baseline on stage. Opening once and closing measures the whole workflow in one go.
+    banner("预热会话工作流（第⑨环节的 5 步下钻）")
+    t0 = time.perf_counter()
+    opened = json.loads(skills.dataset_session(operation="open", file_path=data_path,
+                                               goal="找出 revenue 的异常值并分析原因"))
+    if not opened.get("success"):
+        print(f"  会话打开失败: {opened.get('error')}  (第⑨环节将较慢，但不影响演示)")
+        return
+    sid = opened.get("session_id")
+    plan = opened.get("plan") or {}
+    print(f"  会话 {sid} 已打开：{opened.get('rows'):,} 行，"
+          f"常驻 {opened.get('resident_mb')}MB，计划 {plan.get('total_steps')} 步"
+          f" (类型 {plan.get('kind')})")
+    for s in plan.get("steps", []):
+        args = s.get("args") or {}
+        extra = "  " + " ".join(f"{k}={v}" for k, v in args.items()) if args else ""
+        print(f"    {s['step']+1}. {s['op']}{extra}")
+    for step in plan.get("steps", []):
+        skills.dataset_session(operation="analyze", session_id=sid, op=step["op"], **{
+            k: v for k, v in (step.get("args") or {}).items()
+            if k in ("by", "agg", "columns", "top_k")})
+    closed = json.loads(skills.dataset_session(operation="close", session_id=sid))
+    wc = closed.get("workflow_comparison") or {}
+    print(f"  工作流对比已缓存: {wc.get('session_total_seconds')}s vs "
+          f"CPU {wc.get('naive_cpu_seconds')}s = {wc.get('speedup_x')}x"
+          f"  ({time.perf_counter() - t0:.1f}s wall)")
 
 
 def main() -> int:

@@ -35,15 +35,35 @@ import pandas as pd
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Candidate locations for gpu_analytics.py, tried in order.
-_ENGINE_CANDIDATES = [
-    os.path.join(_THIS_DIR, "cudf-analytics-skill", "scripts", "gpu_analytics.py"),
-    os.path.join(_THIS_DIR, "skills", "cudf-analytics", "scripts", "gpu_analytics.py"),
-    os.path.join(_THIS_DIR, "scripts", "gpu_analytics.py"),
-    os.path.join(os.path.dirname(_THIS_DIR), "skills", "cudf-analytics", "scripts",
-                 "gpu_analytics.py"),
-    os.path.expanduser("~/cudf-analytics-skill/scripts/gpu_analytics.py"),
+# Candidate directories holding the skill's scripts, tried in order.
+#
+# This is a list of DIRECTORIES, not files, so that adding a script to the skill needs no
+# change here. An earlier version listed full file paths, and a second helper joined a
+# filename onto those file paths -- which silently found nothing. One source of truth.
+_SKILL_SCRIPT_DIRS = [
+    os.path.join(_THIS_DIR, "cudf-analytics-skill", "scripts"),
+    os.path.join(_THIS_DIR, "skills", "cudf-analytics", "scripts"),
+    os.path.join(_THIS_DIR, "scripts"),
+    os.path.join(os.path.dirname(_THIS_DIR), "skills", "cudf-analytics", "scripts"),
+    os.path.expanduser("~/cudf-analytics-skill/scripts"),
 ]
+
+# Standalone deployments can point at a specific engine file instead.
+_ENV_ENGINE = os.environ.get("GPU_ANALYTICS_SCRIPT")
+
+
+def _find_script(basename: str) -> str:
+    """Locate a script belonging to the skill, or raise naming everywhere we looked."""
+    if _ENV_ENGINE and basename == "gpu_analytics.py" and os.path.isfile(_ENV_ENGINE):
+        return _ENV_ENGINE
+    tried = []
+    for d in _SKILL_SCRIPT_DIRS:
+        cand = os.path.join(d, basename)
+        tried.append(cand)
+        if os.path.isfile(cand):
+            return cand
+    raise FileNotFoundError(f"{basename} not found. Set GPU_ANALYTICS_SCRIPT or place the "
+                            f"skill at one of: {tried}")
 
 
 def find_engine() -> str:
@@ -57,16 +77,7 @@ def find_engine() -> str:
 
 def _find_engine() -> str:
     """Resolve the analytics engine path, or raise with somewhere useful to look."""
-    env = os.environ.get("GPU_ANALYTICS_SCRIPT")
-    if env and os.path.isfile(env):
-        return env
-    for cand in _ENGINE_CANDIDATES:
-        if os.path.isfile(cand):
-            return cand
-    raise FileNotFoundError(
-        "gpu_analytics.py not found. Set GPU_ANALYTICS_SCRIPT or place the skill at one of: "
-        + ", ".join(_ENGINE_CANDIDATES)
-    )
+    return _find_script("gpu_analytics.py")
 
 
 # Interpreter that has pandas/cuDF. Defaults to the running interpreter.
@@ -100,6 +111,11 @@ skill_definitions = [
                 "画图；修改数据文件。单次问题用 session 只会白占显存。"
                 "\n\n注意：会话会持续占用显存（2000 万行约 1.7GB）。分析完请 close。"
                 "如果 open 因显存不足被拒绝，改回 analyze_dataset。"
+                "\n\n**规划托管**：open 时把用户的目标原文传进 goal，系统会立刻返回一份"
+                "针对这个目标的计划（plan），里面是排好序的具体步骤和「下一步该做什么」。"
+                "每一步执行完后，返回里都会带上最新的 plan 进度（已完成几步、还剩几步、"
+                "下一步做什么）。你不必自己记住做到哪里——进度由系统记账。"
+                "计划里的步骤如果判断不合适，可以跳过，系统会把它标成 off-plan。"
             ),
             "parameters": {
                 "type": "object",
@@ -135,6 +151,12 @@ skill_definitions = [
                     "top_k": {
                         "type": "integer",
                         "description": "groupby/corr/outliers 返回多少条，默认 20",
+                    },
+                    "goal": {
+                        "type": "string",
+                        "description": "operation='open' 时用户想达成的目标（原文即可）。"
+                                       "传入后系统会返回一份针对该目标的分解计划并在每一步"
+                                       "自动记账，强烈建议多步需求都传。",
                     },
                 },
                 "required": ["operation"],
@@ -222,6 +244,41 @@ skill_definitions = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "export_deliverables",
+            "description": (
+                "把分析结果导出成可以直接交付的文件:图表(SVG)和一份 Markdown 报告。"
+                "当用户说「出个图表」「画一下」「给我一份报告」「导出」「保存下来」"
+                "「我要拿去汇报/发邮件」时使用。\n"
+                "会先在 GPU 上做一次全量分析，然后写出:report.md(带表格与图表)、"
+                "若干 .svg 图、以及 CSV/JSON 数据文件。\n"
+                "如果用户要的是「图表」而没指定分析类型，用 operation=auto 即可。\n"
+                "注意:返回里会给出文件路径，回答时必须把这些路径告诉用户。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "要分析的数据文件路径；省略则用最近一次分析过的文件"
+                    },
+                    "operation": {
+                        "type": "string",
+                        "description": "先做哪种分析再出图，默认 auto",
+                        "enum": ["auto", "profile", "summary", "groupby", "corr", "outliers"]
+                    },
+                    "by": {"type": "string", "description": "groupby 的分组列(只能一列)"},
+                    "agg": {"type": "string", "description": "聚合写法 col:func1,func2|col2:func"},
+                    "columns": {"type": "string", "description": "限定参与分析的列，逗号分隔"},
+                    "top_k": {"type": "integer", "description": "返回前多少行/组"},
+                    "out_dir": {"type": "string", "description": "输出目录，默认 deliverables/"}
+                },
+                "required": []
+            }
+        }
+    },
 ]
 
 
@@ -279,6 +336,7 @@ def _trim_matrix(matrix: dict, max_cols: int = 8) -> dict:
 # a later live run will display. Keys include file size and mtime, so editing the dataset
 # invalidates its entries rather than serving a stale ratio.
 _COMPARISON_CACHE_PATH = os.path.join(_THIS_DIR, ".gpu_vs_cpu_cache.json")
+_LAST_FILE_PATH = os.path.join(_THIS_DIR, ".last_dataset_path")
 
 
 def _cache_load() -> dict:
@@ -658,9 +716,13 @@ def close_all_sessions() -> dict:
 def dataset_session(operation: str, file_path: str = None, session_id: str = None,
                     op: str = None, by: str = None, agg: str = None,
                     columns: str = None, top_k: int = None,
-                    force_cpu: bool = False) -> str:
+                    force_cpu: bool = False, goal: str = None) -> str:
     """
     Load a dataset into memory once, then run several analyses against that copy.
+
+    Passing `goal` makes the session plan-bearing: a deterministic strategy for that goal is
+    materialised and attached to the session, and every analyze records its own progress
+    against it. The model therefore does not have to hold the plan in its head across turns.
 
     Never raises — failures come back as {"success": false, "error": ...} so the agent can
     fall back to the stateless tool or explain the problem.
@@ -673,6 +735,8 @@ def dataset_session(operation: str, file_path: str = None, session_id: str = Non
         if operation == "open":
             req = {"cmd": "open", "path": _resolve_data_path(file_path),
                    "force_cpu": bool(force_cpu)}
+            if goal and str(goal).strip():
+                req["goal"] = str(goal).strip()
         elif operation == "analyze":
             req = {"cmd": "analyze", "sid": session_id, "op": op or "auto", "by": by,
                    "agg": agg, "columns": columns, "top_k": top_k}
@@ -777,6 +841,8 @@ def analyze_dataset(file_path: str, operation: str, by: str = None, agg: str = N
 
         # Strip the echo of the input path (the model already knows it) and compact the rest.
         result = {k: v for k, v in payload.items() if k != "input"}
+        # Remember the target so a follow-up "now chart that" needs no path from the user.
+        _remember_last_file(path)
         if isinstance(result.get("corr"), dict) and "matrix" in result["corr"]:
             result["corr"]["matrix"] = _trim_matrix(result["corr"]["matrix"])
         if "note" in result and not result["note"]:
@@ -864,6 +930,124 @@ def list_datasets(directory: str = None) -> str:
 
 
 # --------------------------------------------------------------------------------------
+# Deliverables: charts + report
+# --------------------------------------------------------------------------------------
+
+def _deliverables_script() -> str:
+    return _find_script("make_deliverables.py")
+
+
+def _remember_last_file(path: str) -> None:
+    """Remember the most recent dataset so a follow-up 'now chart it' needs no path."""
+    try:
+        with open(_LAST_FILE_PATH, "w", encoding="utf-8") as fh:
+            fh.write(os.path.abspath(path))
+    except OSError:
+        pass
+
+
+def _last_file() -> str | None:
+    try:
+        with open(_LAST_FILE_PATH, encoding="utf-8") as fh:
+            p = fh.read().strip()
+        return p if p and os.path.isfile(p) else None
+    except OSError:
+        return None
+
+
+def export_deliverables(file_path: str = None, operation: str = "auto", by: str = None,
+                        agg: str = None, columns: str = None, top_k: int = None,
+                        out_dir: str = None) -> str:
+    """
+    Analyse on the GPU, then write charts, CSV exports and a Markdown report.
+
+    Reuses the exact same engine invocation as `analyze_dataset`, so the numbers in the
+    report are the same numbers the agent would otherwise have quoted in chat -- there is no
+    second, subtly different code path that could disagree with the answer.
+
+    Never raises: every failure comes back as a structured error the model can act on.
+    """
+    try:
+        path = _resolve_data_path(file_path) if file_path else (_last_file() or "")
+        if not path:
+            return _err("没有指定文件，也没有可复用的上一次分析文件。",
+                        hint="先调用 list_datasets 找到数据文件，再把路径传给本工具。")
+        if not os.path.exists(path):
+            return _err(f"文件不存在: {path}",
+                        hint="用 list_datasets 取绝对路径后重试。")
+        if os.path.isdir(path):
+            return _err(f"这是一个目录而不是文件: {path}")
+
+        engine = _find_engine()
+        cmd = [_python_bin(), engine, "--input", path, "--op", str(operation or "auto")]
+        if by:
+            cmd += ["--by", str(by)]
+        if agg:
+            cmd += ["--agg", str(agg)]
+        if columns:
+            cmd += ["--columns", str(columns)]
+        if top_k:
+            cmd += ["--top-k", str(top_k)]
+
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout or "").strip().splitlines()
+            return _err(f"分析失败(exit {proc.returncode}): {detail[-1] if detail else '未知错误'}",
+                        hint="先用 analyze_dataset 确认参数正确(例如列名是否存在)，再重试导出。",
+                        exit_code=proc.returncode)
+        try:
+            payload = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            return _err("分析脚本没有返回合法 JSON。", detail=proc.stdout[:400])
+
+        if payload.get("ok") is False:
+            return _err(payload.get("error") or "分析未成功",
+                        hint="检查文件路径与列名。")
+
+        target = os.path.expanduser(str(out_dir)) if out_dir else os.path.join(
+            os.path.dirname(os.path.abspath(path)), "deliverables")
+        script = _deliverables_script()
+
+        # One subprocess rather than importing: keeps this module dependency-free of the
+        # skill's internals and means a failure here cannot corrupt the agent process.
+        proc2 = subprocess.run(
+            [_python_bin(), script, "--input", "/dev/stdin", "--out-dir", target,
+             "--source-file", path],
+            input=proc.stdout, capture_output=True, text=True, timeout=600)
+        if proc2.returncode != 0:
+            detail = (proc2.stderr or "").strip().splitlines()
+            return _err(f"生成交付物失败: {detail[-1] if detail else '未知错误'}",
+                        hint="数据本身仍是可用的，可以先在对话里给出结论。")
+
+        manifest = json.loads(proc2.stdout)
+        _remember_last_file(path)
+        out = {
+            "success": True,
+            "report": manifest["report"],
+            "charts": manifest["charts"],
+            "data_files": manifest["data_files"],
+            "chart_count": manifest["chart_count"],
+            "engine": (payload.get("engine") or "unknown"),
+            "rows_scanned": manifest.get("rows_scanned"),
+            "total_seconds": payload.get("total_seconds"),
+            "note": manifest["note"],
+            "how_to_answer": (
+                "把这些文件路径原样告诉用户(report.md 是主交付物)，"
+                "再在回答里概括报告里的关键数字。不要说文件已保存却不给路径。"
+            ),
+        }
+        return json.dumps(_compact(out), ensure_ascii=False)
+
+    except subprocess.TimeoutExpired:
+        return _err("生成交付物超时。",
+                    hint="数据量过大时可以先用 columns 限定列，或改用 analyze_dataset。")
+    except FileNotFoundError as exc:
+        return _err(str(exc))
+    except Exception as exc:
+        return _err(f"{type(exc).__name__}: {exc}")
+
+
+# --------------------------------------------------------------------------------------
 # Legacy skill (unchanged behaviour, kept so the earlier agent still works)
 # --------------------------------------------------------------------------------------
 
@@ -905,6 +1089,7 @@ def _err(message: str, hint: str = None, detail: str = None, exit_code: int = No
 skill_func_map = {
     "analyze_dataset": analyze_dataset,
     "dataset_session": dataset_session,
+    "export_deliverables": export_deliverables,
     "list_datasets": list_datasets,
     "load_csv_dataset": load_csv_dataset,
 }

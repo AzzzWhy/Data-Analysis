@@ -71,6 +71,12 @@ SYSTEM_PROMPT = """你是一个部署在 NVIDIA DGX Spark 上的数据分析智�
   如果重试仍失败，就把真实列名告诉用户并请他确认想要哪一列，不要重复猜列名。
 - 不要凭空假设列名。用户用中文描述业务口径（如“销售额”“销量”）时，先确认文件里
   实际的列名是什么，再构造 by / agg / columns 参数。
+- **用户想要"拿走的东西"时，用 export_deliverables，不要只在对话里回答。**
+  触发信号：「出个图」「画一下」「给我一份报告」「导出」「保存」「我要汇报/发邮件/写进文档」。
+  它会在 GPU 上做全量分析，然后写出 report.md（Markdown 报告，含表格）、若干 .svg 图表、
+  以及 CSV/JSON 数据文件。
+  调用后**必须把返回的文件路径原样写在回答里**，否则用户拿不到。不要只说"已保存"。
+  如果用户只要一个结论、不要文件，就用 analyze_dataset 回答，别导出。
 - 一次调用得到的结果足够回答时，就直接给出结论，不要反复调用。
 - 当需求本身是**多步**的（例如「找出异常并分析原因」「对比几个维度」「先概览再深入某一组」），
   用 dataset_session 做：先 operation="open" 打开文件拿到 session_id，之后每一步都用
@@ -200,6 +206,12 @@ def summarize_tool_result(result_json: str) -> str:
     if isinstance(wc, dict) and isinstance(wc.get("speedup_x"), (int, float)):
         bits.append(f"| WORKFLOW: session {wc['session_total_seconds']}s vs "
                     f"naive-CPU {wc['naive_cpu_seconds']}s = {wc['speedup_x']:.1f}x")
+        return "OK  " + "  ".join(b for b in bits if b)
+
+    # Deliverables: show what was actually written, so the demo audience sees files appear.
+    if payload.get("report"):
+        bits.append(f"| wrote {payload.get('chart_count', 0)} charts + report -> "
+                    f"{payload['report']}")
         return "OK  " + "  ".join(b for b in bits if b)
 
     # Surface the measured GPU-vs-CPU comparison in the trace: this is the line that shows
