@@ -84,6 +84,17 @@ class Engine:
 
 _ENGINE: Optional[Engine] = None
 
+# Where the GPU stops losing. Measured on the GB10, not guessed: see pick_engine_for for the
+# full table. 5M rows was 0.85x and 8M rows 1.11x, so the crossover sits between them.
+SMALL_ROWS = 6_500_000
+
+# A byte threshold is a poor primary signal because CSV density varies by more than 2x -- the
+# demo file is 152 bytes per row, so its 20M rows occupy only 881 MB, and a 950 MB threshold
+# sent the main demo to the CPU and threw away its GPU speedup. Row count is authoritative and
+# cheap to estimate; the byte check only short-circuits files so small that no plausible row
+# count could reach the crossover.
+TINY_FILE_BYTES = int(64e6)         # 64 MB
+
 
 def _read_table(mod: Any, path: str, usecols: Optional[Sequence[str]] = None,
                 nrows: Optional[int] = None) -> Any:
@@ -181,6 +192,87 @@ def detect_engine(force_cpu: bool = False, verbose: bool = False) -> Engine:
     if not force_cpu:
         _ENGINE = engine
     return engine
+
+
+def pick_engine_for(path: str, op: str, force_cpu: bool = False,
+                    force_gpu: bool = False, verbose: bool = False) -> Tuple[bool, Optional[str]]:
+    """Decide whether the GPU is worth using for this file, from measured numbers.
+
+    Returns (use_gpu, reason). reason is set when the CPU was chosen deliberately, so the
+    caller can explain the choice instead of appearing to have silently given up on the GPU.
+
+    Why this exists: on the GPU path a large part of the runtime is fixed cost, not compute.
+    Measured on the GB10 by decomposing it: 0.03 s bare Python start, 0.55 s to import cudf,
+    0.95 s to import cudf and build one DataFrame. A 10,000-row file therefore costs 1.58 s on
+    the GPU against 0.19 s on the CPU -- 8x SLOWER, and the ratio is entirely startup. The
+    crossover, measured on real files of one to twenty million rows:
+
+        rows      GPU s    CPU s   ratio
+       5,000,000   2.62    2.23    0.85x   CPU
+       8,000,000   3.09    3.44    1.11x   GPU
+      10,000,000   3.60    4.10    1.14x   GPU
+      15,000,000   4.38    6.11    1.40x   GPU
+      20,000,000   5.36    8.09    1.51x   GPU
+
+    So below roughly eight million rows the honest answer is that pandas wins, and using the
+    GPU there would be slower while looking more impressive. The thresholds below are the
+    measured crossover with margin on the CPU side, because being slower is a real cost while
+    giving up a little headroom on the GPU side is not.
+
+    Row count is read from a prefix of the file rather than counted, and file size is the
+    backstop when no newline is found in that prefix.
+    """
+    if force_cpu:
+        return False, "CPU forced by --force-cpu"
+    if force_gpu:
+        return True, None
+
+    size = None
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        pass
+
+    if size is not None and size < TINY_FILE_BYTES:
+        # Too small for the fixed cost to amortise under any plausible row density.
+        return False, (f"file is {size / 1e6:.1f} MB, far below the size at which the GPU's "
+                       f"fixed startup cost can amortise")
+
+    rows = _estimate_rows(path)
+    if rows is not None and rows < SMALL_ROWS:
+        return False, (f"about {rows:,} rows, below the {SMALL_ROWS:,}-row crossover measured "
+                       f"on this hardware: the GPU is slower at this size because most of its "
+                       f"runtime is fixed startup cost, not compute")
+    if verbose and rows is not None:
+        _log(f"row estimate {rows:,} >= {SMALL_ROWS:,}; using the GPU")
+    return True, None
+
+
+def _estimate_rows(path: str, sample_bytes: int = 1 << 20) -> Optional[int]:
+    """Estimate a CSV's row count from a prefix of the file.
+
+    Deliberately an estimate: counting rows exactly would cost a full read, which is the very
+    thing the engine is trying to avoid paying twice. A prefix is enough to place a file on
+    either side of the crossover, and file size is checked first as a cheaper and more reliable
+    signal.
+    """
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(sample_bytes)
+            if not head:
+                return 0
+            total = os.fstat(fh.fileno()).st_size
+    except OSError:
+        return None
+
+    newlines = head.count(b"\n")
+    if newlines < 2:
+        return None                     # single-line or exotic file; let the size check decide
+    # Lines in the prefix, minus the header, extrapolated by byte ratio.
+    mean_line = len(head) / newlines
+    if mean_line <= 0:
+        return None
+    return int((total / mean_line) - 1)
 
 
 def sync_device(eng: Engine) -> None:
@@ -812,6 +904,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="read at most N rows (use only when the user asked for a sample)")
     p.add_argument("--usecols", default=None, help="comma-separated columns to read from the file")
     p.add_argument("--force-cpu", action="store_true", help="ignore the GPU (for A/B comparison)")
+    p.add_argument("--force-gpu", action="store_true",
+                   help="use the GPU even below the measured crossover (for A/B comparison)")
+    p.add_argument("--engine", default="auto", choices=["auto", "cpu", "gpu"],
+                   help="auto (default) routes small files to the CPU, where the GPU's fixed "
+                        "startup cost makes it slower; cpu/gpu force one path")
     p.add_argument("--pretty", action="store_true", help="pretty-print the JSON output")
     p.add_argument("--verbose", action="store_true", help="log engine/fallback decisions to stderr")
     return p
@@ -840,8 +937,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return df
 
     try:
-        eng = detect_engine(force_cpu=args.force_cpu, verbose=args.verbose)
+        force_cpu = bool(args.force_cpu) or (args.engine == "cpu")
+        force_gpu = bool(args.force_gpu) or (args.engine == "gpu")
+        route_reason: Optional[str] = None
+        if not force_cpu and not force_gpu:
+            use_gpu, route_reason = pick_engine_for(path, args.op, verbose=args.verbose)
+            force_cpu = not use_gpu
+            if args.verbose and route_reason:
+                _log(f"CPU chosen: {route_reason}")
+        elif force_cpu:
+            route_reason = "CPU forced by the caller"
+        eng = detect_engine(force_cpu=force_cpu, verbose=args.verbose)
         payload, used, elapsed, fallback, rows = execute(eng, load, args.op, args)
+        # A deliberate CPU choice is not a fallback. Keeping them separate matters: a fallback
+        # means the GPU failed, and reporting a routing decision as a failure would both
+        # confuse the caller and make an intentional choice look like a defect.
+        if route_reason and not used.is_gpu:
+            fallback = None
     except (ValueError, KeyError) as exc:
         print(json.dumps({"error": str(exc), "input": path, "op": args.op}), flush=True)
         return 2
@@ -864,6 +976,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "gpu": used.gpu_name or ("none (CPU run)" if not used.is_gpu else "CUDA device"),
         "accelerated": used.is_gpu,
         "fallback_reason": fallback or (None if used.is_gpu else used.reason),
+        "routing_reason": route_reason,
         "rows_scanned": rows,
         "op_seconds": round(elapsed, 6),
         "total_seconds": round(time.perf_counter() - t_start, 6),

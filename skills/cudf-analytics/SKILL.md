@@ -261,7 +261,7 @@ python skills/cudf-analytics/scripts/smoke_test.py
 
 That runs every operation against ground truth computed independently in pandas and
 exits non-zero on any mismatch. On a GPU host it also checks that cuDF and pandas agree.
-Verified on GB10 (cuDF 25.10.00 / pandas 2.3.3): all 59 checks pass, with cuDF and
+Verified on GB10 (cuDF 25.10.00 / pandas 2.3.3): all 76 checks pass, with cuDF and
 pandas agreeing exactly on mean, median and max.
 
 To substantiate a CPU vs GPU claim, run the benchmark instead of asserting one:
@@ -290,6 +290,32 @@ synchronized before every timed region, engines agreeing to `rel_diff=0.00e+00`)
 I/O and groupby show the largest gains (8x-12x); `corr` and `quantile` are only
 about 2x because pandas already runs those in vectorized C. Quote the honest spread,
 not just the best row.
+
+### When the GPU is not worth using, and the engine says so
+
+The table above times **compute phases with the library already loaded**. Those numbers are real
+but they leave out the part that decides small-file cases: the GPU path carries about 1.5 seconds
+of fixed cost (0.03 s Python start, 0.55 s `import cudf`, 0.95 s import plus first DataFrame).
+On a small file that fixed cost is the whole runtime.
+
+Measured end-to-end, both engines fresh, same file, `--op auto`:
+
+| Rows | GPU | CPU | Ratio | Winner |
+| ---: | ---: | ---: | ---: | :--- |
+| 10,000 | 1.58 s | 0.20 s | 0.13x | CPU |
+| 1,000,000 | 1.83 s | 0.57 s | 0.31x | CPU |
+| 5,000,000 | 2.62 s | 2.23 s | 0.85x | CPU |
+| 8,000,000 | 3.09 s | 3.44 s | 1.11x | GPU |
+| 20,000,000 | 5.36 s | 8.09 s | 1.51x | GPU |
+
+So the honest position is: **below roughly 6.5 million rows the GPU is slower, and the engine
+routes to pandas on its own** rather than reporting a speedup that is a slowdown. Use
+`--force-gpu` to override when you want the comparison instead of the fastest path.
+
+Note the gap between 7.16x in the table above and 1.51x here: they measure different things, and
+both are correct. The 7.16x is compute-only with a 20-core pandas baseline; the 1.51x is the
+whole process including CSV parsing and startup, against the single-core pandas path the engine
+actually falls back to. Quote whichever one matches the question being asked, and say which it is.
 
 ## Failure handling
 

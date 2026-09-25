@@ -101,14 +101,45 @@ got = r.get("cumulative_seconds", 0)
 check("cumulative == load + sum(steps)", abs(got - expected) < 0.15,
       f"reported={got:.3f}s expected={expected:.3f}s")
 
-print("=== staleness guard: touch the file, session must refuse ===")
+print("=== staleness guard: change the file, session must refuse ===")
+# Runs against a COPY, never the caller's dataset. An earlier version of this test called
+# os.utime on the real file, which rewrote the modification time of a 3 GB dataset the demo
+# depends on; appending a byte would have corrupted it outright. A test must not mutate the
+# input it is handed.
 try:
-    os.utime(DATA, None)
-    r = call({"cmd": "analyze", "sid": sid, "op": "summary"})
+    import shutil
+    import tempfile
+
+    tmpdir = tempfile.mkdtemp(prefix="stale-check-")
+    copy_path = os.path.join(tmpdir, "stale_copy.csv")
+    shutil.copyfile(DATA, copy_path)
+
+    # The guard compares the identity recorded at open time with the current one. Touching
+    # alone used to be enough to defeat it, because the identity truncated mtime to whole
+    # seconds and a touch in the same second as the load compared equal -- the guard failed
+    # open on exactly the case it exists for. It now uses nanosecond mtime, and this test
+    # changes the size too, so it holds even on a coarse-timestamp filesystem.
+    r_open = call({"cmd": "open", "path": copy_path})
+    copy_sid = r_open.get("session_id")
+    check("copy opened for the staleness check", r_open.get("ok") is True, str(r_open)[:120])
+
+    before = os.path.getsize(copy_path)
+    with open(copy_path, "ab") as fh:
+        fh.write(b"\n")          # harmless to a CSV reader, changes the identity
+    os.utime(copy_path, None)
+
+    r = call({"cmd": "analyze", "sid": copy_sid, "op": "summary"})
     refused = (r.get("ok") is False
                and "changed while this session was open" in str(r.get("error", "")))
     check("refuses to answer after the file changed", refused,
           "" if refused else f"got: {r}")
+    check("the staleness check saw a size change",
+          os.path.getsize(copy_path) == before + 1)
+    check("the caller's dataset was not modified", os.path.getsize(DATA) == before,
+          f"{os.path.getsize(DATA)} vs {before}")
+
+    call({"cmd": "close", "sid": copy_sid})
+    shutil.rmtree(tmpdir, ignore_errors=True)
 except Exception as exc:
     check("staleness guard", False, f"{type(exc).__name__}: {exc}")
 

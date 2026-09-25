@@ -378,7 +378,7 @@ Sub_metering_1         169,105  169,105    OK    ties=1,880,175 (IQR=0)
 ```bash
 # test suites (the plan layer needs no GPU)
 python skills/cudf-analytics/scripts/plan_test.py            # 56 checks
-python skills/cudf-analytics/scripts/smoke_test.py           # 59 checks
+python skills/cudf-analytics/scripts/smoke_test.py           # 76 checks
 bash   agent/run_criteria_tests.sh                           # 11 judging-criteria cases
 bash   agent/run_stability_check.sh 3 <your-data.csv>        # reproducibility
 ```
@@ -524,7 +524,7 @@ error handling can all be verified on an ordinary machine.
 
 ```bash
 pip install -r requirements.txt
-python skills/cudf-analytics/scripts/smoke_test.py        # 59 checks
+python skills/cudf-analytics/scripts/smoke_test.py        # 76 checks
 python skills/cudf-analytics/scripts/gpu_analytics.py --input <any.csv> --op auto
 ```
 

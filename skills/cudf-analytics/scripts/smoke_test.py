@@ -312,6 +312,66 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001 - a smoke test should report, not crash
             check("deliverables section ran", False, f"{type(exc).__name__}: {exc}")
 
+        print("\n--engine routing: small files go to the CPU, because the GPU is slower there")
+        # Measured on the GB10: the GPU path carries about 1.5 s of fixed cost (0.03 python
+        # start, 0.55 import cudf, 0.95 import+frame), so a 10k-row file costs 1.58 s on the GPU
+        # against 0.19 s on the CPU. The crossover is between 5M (0.85x) and 8M (1.11x) rows.
+        # These assertions pin that behaviour down, including the case that got it wrong first:
+        # a byte threshold sent the 881 MB / 20M-row demo file to the CPU and threw away its
+        # speedup, because CSV density varies by more than 2x.
+        try:
+            import gpu_analytics as GA
+            # NOTE: bound locally on purpose. `main()` reuses the name `csv` for the fixture
+            # path, so a module-level `import csv` is shadowed here and every csv.writer() call
+            # raises AttributeError on a str.
+            from csv import writer as csv_writer
+
+            for rows, name in ((10_000, "tiny_dense.csv"), (20_000, "small.csv")):
+                p = os.path.join(tmpdir, name)
+                with open(p, "w", newline="") as fh:
+                    wr = csv_writer(fh)
+                    wr.writerow(["row_id", "label", "value"])
+                    for i in range(rows):
+                        wr.writerow([i, "label-%d" % (i % 97), i * 1.5])
+
+            tiny = os.path.join(tmpdir, "tiny_dense.csv")
+            use_gpu, reason = GA.pick_engine_for(tiny, "auto")
+            check("routing: a tiny file routes to the CPU", use_gpu is False, str(use_gpu))
+            check("routing: the CPU choice carries a reason to report",
+                  bool(reason) and "MB" in reason, str(reason)[:80])
+            check("routing: forcing the GPU overrides routing",
+                  GA.pick_engine_for(tiny, "auto", force_gpu=True)[0] is True)
+            check("routing: forcing the CPU overrides routing",
+                  GA.pick_engine_for(tiny, "auto", force_cpu=True)[0] is False)
+
+            # Density independence: the same row count in a much wider file must still be
+            # judged by rows, not bytes.
+            dense = os.path.join(tmpdir, "density_dense.csv")
+            sparse = os.path.join(tmpdir, "density_sparse.csv")
+            for p, pad in ((dense, 2), (sparse, 60)):
+                with open(p, "w", newline="") as fh:
+                    wr = csv_writer(fh)
+                    wr.writerow(["row_id", "label", "value"])
+                    for i in range(200_000):
+                        wr.writerow([i, "y" * pad, i * 1.5])
+            e1, e2 = GA._estimate_rows(dense), GA._estimate_rows(sparse)
+            check("routing: row estimate does not depend on row density",
+                  e1 and e2 and abs(e1 - e2) / max(e1, e2) < 0.15,
+                  f"dense={e1} sparse={e2}")
+            check("routing: row estimate is within 15% of the truth",
+                  abs(e1 - 200_000) / 200_000 < 0.15, f"got {e1} want ~200000")
+            check("routing: a wide-but-small file still routes to the CPU",
+                  GA.pick_engine_for(sparse, "auto")[0] is False)
+            # The threshold must stay inside the measured crossover band. 5M rows measured
+            # 0.85x (CPU wins) and 8M measured 1.11x (GPU wins), so a threshold outside that
+            # band would send files to whichever engine is slower.
+            check("routing: the row threshold sits inside the measured crossover band",
+                  5_000_000 <= GA.SMALL_ROWS <= 8_000_000, f"SMALL_ROWS={GA.SMALL_ROWS:,}")
+            check("routing: the byte shortcut stays far below the crossover",
+                  GA.TINY_FILE_BYTES <= 128e6, f"TINY_FILE_BYTES={GA.TINY_FILE_BYTES}")
+        except Exception as exc:  # noqa: BLE001
+            check("routing section ran", False, f"{type(exc).__name__}: {exc}")
+
         print("\n--force-cpu parity (CPU numbers must match the default path)")
         code, cpu_out, err = run(["--input", csv, "--op", "summary", "--force-cpu"])
         check("force-cpu exits 0", code == 0, err.strip()[-400:])

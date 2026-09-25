@@ -101,8 +101,19 @@ def _free_gpu_gb() -> Optional[float]:
 
 
 def _file_identity(path: str) -> list:
+    """Identity of a file for staleness detection: absolute path, size, modification time.
+
+    Nanosecond mtime, not `int(st_mtime)`. Truncating to whole seconds made the guard fail
+    open on a real scenario: the guard compares the identity recorded at open time against the
+    current one, so a file touched within the same second as the load compared equal and the
+    session happily answered from a stale snapshot. That is exactly the silent wrong answer the
+    guard exists to prevent. `st_mtime_ns` is available in Python 3.3+, and where a filesystem
+    has coarser granularity the size component still catches most real edits.
+    """
     st = os.stat(path)
-    return [os.path.abspath(path), st.st_size, int(st.st_mtime)]
+    mtime_ns = getattr(st, "st_mtime_ns", None)
+    return [os.path.abspath(path), st.st_size,
+            int(mtime_ns) if mtime_ns is not None else int(st.st_mtime * 1e9)]
 
 
 @dataclass
@@ -230,6 +241,22 @@ def do_open(req: dict) -> dict:
         )
 
     force_cpu = bool(req.get("force_cpu"))
+    # Route exactly as the stateless engine does. A resident session is a GPU-residency
+    # mechanism, so opening one for a file the GPU loses on is the worst of both: slower than
+    # pandas and holding device memory for the privilege. Only an explicit force_cpu on a large
+    # file is honoured, which keeps the A/B comparison usable.
+    if not force_cpu:
+        use_gpu, route_reason = GA.pick_engine_for(str(path), "session")
+        if not use_gpu:
+            return _err(
+                "no GPU session opened: " + str(route_reason),
+                hint=("for a dataset this size the CPU path is faster and a session would hold "
+                      "device memory for nothing. Call analyze_dataset or export_deliverables "
+                      "instead; they will use pandas. Pass force_cpu=true to open a CPU-backed "
+                      "session anyway when you want the A/B comparison."),
+                route_threshold_rows=GA.SMALL_ROWS,
+                suggest_engine="pandas",
+            )
     try:
         eng = GA.detect_engine(force_cpu=force_cpu)
     except Exception as exc:
@@ -342,8 +369,19 @@ def _pick_group_columns(frame) -> list:
     return out
 
 
+def _sid_from(req: dict) -> Any:
+    """Read the session handle, accepting both spellings this protocol has used.
+
+    `open` answers with "session_id" while `analyze` and `close` read "sid". The agent layer
+    translates between them, which is why the mismatch went unnoticed -- but anything calling
+    the worker directly follows the answer it was given and gets "no such session: None".
+    Accepting either key removes a trap rather than documenting it.
+    """
+    return req.get("sid") if req.get("sid") is not None else req.get("session_id")
+
+
 def do_analyze(req: dict) -> dict:
-    sid = req.get("sid")
+    sid = _sid_from(req)
     sess = SESSIONS.get(sid)
     if sess is None:
         return _err(f"no such session: {sid}. Open sessions: {sorted(SESSIONS) or 'none'}",
@@ -490,7 +528,7 @@ def do_list(_req: dict) -> dict:
 
 
 def do_close(req: dict) -> dict:
-    sid = req.get("sid")
+    sid = _sid_from(req)
     if sid in (None, "", "all"):
         n = len(SESSIONS)
         SESSIONS.clear()

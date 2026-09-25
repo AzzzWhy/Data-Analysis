@@ -14,6 +14,57 @@ wrong.
 | `make_deliverables.py` | Turns an engine result into `report.md`, `.svg` charts and CSV/JSON exports. | `python make_deliverables.py --input - --out-dir DIR --source-file FILE [--lang zh\|en\|auto] [--lang-context TEXT]` |
 | `analysis_plan.py` | Plan catalog and progress bookkeeping. Imported, not run directly. | `import analysis_plan` |
 
+### Which engine runs, and why it is not always the GPU
+
+`--engine auto` (the default) picks the engine from the file, not from a preference for the GPU.
+The GPU path carries a large **fixed** cost, so on small files it is slower, and the engine says
+so rather than quietly reporting a "GPU speedup" that is really a slowdown.
+
+Fixed cost, measured on the GB10 by decomposition:
+
+| Step | Seconds |
+| :--- | ---: |
+| bare Python start | 0.03 |
+| `import cudf` | 0.55 |
+| `import cudf` + build one DataFrame | 0.95 |
+
+Crossover, measured on real files:
+
+| Rows | GPU s | CPU s | Ratio | Winner |
+| ---: | ---: | ---: | ---: | :--- |
+| 10,000 | 1.58 | 0.20 | 0.13× | CPU |
+| 100,000 | 1.61 | 0.24 | 0.15× | CPU |
+| 1,000,000 | 1.83 | 0.57 | 0.31× | CPU |
+| 5,000,000 | 2.62 | 2.23 | 0.85× | CPU |
+| **8,000,000** | 3.09 | 3.44 | **1.11×** | **GPU** |
+| 10,000,000 | 3.60 | 4.10 | 1.14× | GPU |
+| 15,000,000 | 4.38 | 6.11 | 1.40× | GPU |
+| 20,000,000 | 5.36 | 8.09 | 1.51× | GPU |
+
+The crossover is between 5M and 8M rows, so the routing threshold is **6,500,000 rows** and a
+byte shortcut of **64 MB** catches files too small for any plausible row density.
+
+| Flag | Effect |
+| :--- | :--- |
+| `--engine auto` (default) | Route by the row estimate above |
+| `--engine cpu` / `--force-cpu` | Force pandas |
+| `--engine gpu` / `--force-gpu` | Force cuDF, even below the crossover |
+
+The result JSON reports both decisions separately and they mean different things:
+
+- `routing_reason` — the CPU was chosen **deliberately**, with the measurement that justified it.
+  This is not a failure.
+- `fallback_reason` — the GPU was tried and **failed**. This is a failure.
+
+A deliberate routing decision never populates `fallback_reason`, because reporting a conscious
+choice as a defect would both mislead the caller and hide a real fallback when one happens.
+
+Row count is **estimated** from a 1 MB prefix, not counted: counting exactly would cost a full
+read, which is the thing the engine exists to avoid paying twice. Measured error is under 8% on
+files of 200k rows, and the estimate is density-independent, which matters because a byte-only
+threshold got this wrong — the demo file is 152 bytes per row, so its 20M rows occupy only 881 MB
+and a 950 MB byte threshold sent the main demo to the CPU and threw away its speedup.
+
 ### Report language
 
 `make_deliverables.py` writes the report in the caller's language and defaults to **Chinese**.

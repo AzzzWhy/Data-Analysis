@@ -38,7 +38,7 @@ users ask in either language.
 
 ## Status
 
-- Verified on GB10 (cuDF 25.10.00 / pandas 2.3.3): `smoke_test.py` passes all 59 checks, with
+- Verified on GB10 (cuDF 25.10.00 / pandas 2.3.3): `smoke_test.py` passes all 76 checks, with
   cuDF and pandas agreeing exactly on mean, median and max.
 - End-to-end speedup of 6.45× on a 30,000,000-row CSV (5.67 GB): 19.286 s → 2.988 s, with
   zero difference in results between engines. **Note:** only about 3× of this is GPU compute;
