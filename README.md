@@ -456,8 +456,9 @@ PASS: every recorded claim reproduced independently.
 ├── agent/                          Agent 应用（比赛主体）
 │   ├── agent_main.py               tool-calling 循环
 │   ├── skills.py                   Skill 注册 + GPU/CPU 实测对比 + 输出压缩
-│   ├── demo_script.py              9 步演示（--prewarm 预热，含多步下钻）
+│   ├── demo_script.py              9 环节演示（--prewarm 预热，含交付物与多步下钻）
 │   ├── run_criteria_tests.sh       11 项评审用例
+│   ├── run_stability_check.sh      可复现性：同一问题连跑 N 次，校验会话卫生与计划覆盖
 │   ├── gpu_vs_cpu_demo.py          两引擎并排对照
 │   ├── session_skill_test.py       会话工具层断言
 │   ├── env_stepfun.sh              非交互 shell 的 key 加载
@@ -480,7 +481,17 @@ PASS: every recorded claim reproduced independently.
 │       └── benchmark_cpu_vs_gpu.py 基准测试
 │
 ├── benchmark/                      GB10 实测证据与原始日志
+│   ├── benchmark_results.json      机器可读的实测数字
+│   ├── benchmark_results.md        实测表格
+│   ├── gb10_run.log                原始运行日志
+│   ├── smoke/gb10_smoke_test.log   GB10 上的自检日志
 │   └── charts/                     工具生成的图表样本（直接可看，无需装依赖）
+│       ├── groupby_bar.svg         分组柱状图
+│       ├── corr_heatmap.svg        相关性热力图
+│       ├── outliers_bar.svg        异常值分布
+│       └── summary_means.svg       列均值对比（已剔除标识列）
+│
+├── skill.md                        入口页（指向 SKILL.md 与 README）
 ├── INNOVATION_OPTIONS.md           5 个创新方案评估
 └── LICENSE · requirements.txt
 ```
