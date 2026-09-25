@@ -138,6 +138,23 @@ run_case "no-tool-needed" \
   "帮我解释一下什么是 IQR 四分位距" \
   "四分位|IQR" "analyze_dataset"
 
+# (1)+(3) a genuinely multi-step question must select the stateful session skill and open the
+# file through it, rather than re-loading the file per step.
+#
+# NOTE: these patterns run under `grep -E`, which is POSIX ERE -- no lookahead. An earlier
+# version used "(?=.*x)", which silently never matches and would have failed forever. Keep
+# patterns to plain ERE.
+run_case "multi-step-session" \
+  "先看 $DATA 的整体概览，然后找出 revenue 的异常值，再按 region 分组分析，用同一个会话完成" \
+  "\[round [0-9]+\] -> dataset_session.*operation.: .open" "显存不足"
+
+# (4) the session must be released. Two acceptable outcomes, both checked here: the model
+# calls close itself, or the agent's cleanup backstop releases it and says so. What must not
+# happen is a session left holding ~1.7 GB.
+run_case "session-cleanup" \
+  "用会话方式看 $DATA 的整体概览和 revenue 异常值，完成后释放" \
+  "close|自动释放" "显存不足"
+
 echo "==============================================================="
 echo "PASS=$PASS  FAIL=$FAIL"
 if [ -n "$FAILED_CASES" ]; then

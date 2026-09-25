@@ -8,16 +8,24 @@ Two mechanisms live here, and the distinction matters:
     trigger specification, not documentation.
   * `skill_func_map` — name -> implementation. What actually runs, locally, on the GB10.
 
-`analyze_dataset` is the accelerated one: it shells out to
-`cudf-analytics/scripts/gpu_analytics.py`, which does full-file aggregation with cuDF on
-the GPU and falls back to pandas when no GPU is usable. The original
-`load_csv_dataset` is kept for compatibility with the earlier agent.
+`analyze_dataset` is the stateless accelerated path: it shells out to
+`cudf-analytics/scripts/gpu_analytics.py`, which does full-file aggregation with cuDF on the
+GPU and falls back to pandas when no GPU is usable.
+
+`dataset_session` is the stateful path: it loads a file into GPU memory once, via a
+long-lived `gpu_session.py` worker, and then runs many analyses against that resident copy.
+Measured on a 20M-row, 3.0 GB CSV, that turns a 5-step analysis from 10.8 s (re-reading each
+step on the GPU) into 1.5 s. That is what makes multi-step drill-down affordable.
+
+The original `load_csv_dataset` is kept for compatibility with the earlier agent.
 """
 
+import atexit
 import json
 import os
 import subprocess
 import sys
+import threading
 
 import pandas as pd
 
@@ -71,6 +79,68 @@ def _python_bin() -> str:
 # --------------------------------------------------------------------------------------
 
 skill_definitions = [
+    {
+        "type": "function",
+        "function": {
+            "name": "dataset_session",
+            "description": (
+                "把数据文件一次性载入显存，之后在同一次会话里反复分析，避免每一步都重新读盘。"
+                "适合【多步分析】：先找异常再定位来源、按多个维度对比、由概览逐步下钻。"
+                "\n\n为什么用它：全量数据常驻内存后，后续每一步从数秒降到几十毫秒"
+                "（2000 万行实测：载入约 1.9 秒，之后每步 0.03~0.5 秒）。"
+                "因此多步下钻变得便宜，且每一步仍然是全量数据，不采样。"
+                "\n\n调用方式（三步）："
+                "1) operation='open' + file_path —— 打开文件，返回 session_id；"
+                "2) operation='analyze' + session_id + op —— 反复分析，op 与 analyze_dataset 相同"
+                "(profile/summary/groupby/corr/outliers/auto)，可带 by/agg/columns/top_k；"
+                "3) operation='close' + session_id —— 分析结束必须关闭以释放显存。"
+                "\n\n必须使用的场景：用户的需求需要多步完成，例如「找出异常并分析原因」"
+                "「对比几个维度的表现」「先概览再深入某一组」。"
+                "\n\n不要用于：只有一步的简单问题（直接用 analyze_dataset 更省显存）；"
+                "画图；修改数据文件。单次问题用 session 只会白占显存。"
+                "\n\n注意：会话会持续占用显存（2000 万行约 1.7GB）。分析完请 close。"
+                "如果 open 因显存不足被拒绝，改回 analyze_dataset。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "operation": {
+                        "type": "string",
+                        "enum": ["open", "analyze", "list", "close"],
+                        "description": "open=载入文件并返回 session_id；analyze=在会话上执行分析；"
+                                       "list=查看当前会话；close=释放",
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "operation='open' 时要载入的文件路径",
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "operation='analyze'/'close' 时 open 返回的会话编号，例如 s1",
+                    },
+                    "op": {
+                        "type": "string",
+                        "enum": ["auto", "profile", "summary", "groupby", "corr", "outliers"],
+                        "description": "operation='analyze' 时要执行的分析，含义与 analyze_dataset 一致",
+                    },
+                    "by": {"type": "string", "description": "op='groupby' 时的分组列"},
+                    "agg": {
+                        "type": "string",
+                        "description": "op='groupby' 时的聚合方式，例如 revenue:sum,mean",
+                    },
+                    "columns": {
+                        "type": "string",
+                        "description": "要分析的列，逗号分隔，例如 revenue,cost",
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "description": "groupby/corr/outliers 返回多少条，默认 20",
+                    },
+                },
+                "required": ["operation"],
+            },
+        },
+    },
     {
         "type": "function",
         "function": {
@@ -431,6 +501,219 @@ def _attach_speedup(out: dict, path: str, operation: str, by, agg, columns, top_
 
 
 # --------------------------------------------------------------------------------------
+# Stateful sessions: hold a dataset in GPU memory across several analyses
+# --------------------------------------------------------------------------------------
+
+# A worker is one long-lived process holding the resident frames. It is started on first use
+# and reused for the rest of the conversation, because its entire value is the state it keeps.
+_worker_lock = threading.Lock()
+_worker = None
+
+
+def _session_script() -> str:
+    """Locate gpu_session.py next to the engine."""
+    engine = _find_engine()
+    cand = os.path.join(os.path.dirname(engine), "gpu_session.py")
+    if not os.path.exists(cand):
+        raise FileNotFoundError(f"找不到 gpu_session.py（期望在 {cand}）")
+    return cand
+
+
+def _worker_start():
+    """Start the session worker, or return None when it cannot be started."""
+    script = _session_script()
+    proc = subprocess.Popen(
+        [_python_bin(), script],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, bufsize=1,
+    )
+    # Kill the worker when this process exits, so a crashed agent does not leave a process
+    # holding gigabytes of device memory.
+    atexit.register(lambda: _worker_stop(proc))
+    return proc
+
+
+def _worker_stop(proc) -> None:
+    try:
+        if proc and proc.poll() is None:
+            try:
+                proc.stdin.write(json.dumps({"cmd": "close", "sid": "all"}) + "\n")
+                proc.stdin.flush()
+            except Exception:
+                pass
+            proc.terminate()
+    except Exception:
+        pass
+
+
+def _worker_call(payload: dict, timeout: float = 1800.0):
+    """
+    Send one request to the session worker and return its parsed response.
+
+    Returns an error dict rather than raising: a broken worker must degrade the agent to the
+    stateless path, never crash the conversation.
+    """
+    global _worker
+    with _worker_lock:
+        # Restart on demand: if the worker died (OOM, killed, crashed), the next call brings
+        # up a fresh one instead of failing forever.
+        if _worker is None or _worker.poll() is not None:
+            if _worker is not None:
+                _worker = None
+            try:
+                _worker = _worker_start()
+            except Exception as exc:
+                return {"ok": False,
+                        "error": f"无法启动会话进程: {type(exc).__name__}: {exc}"}
+        try:
+            _worker.stdin.write(json.dumps(payload) + "\n")
+            _worker.stdin.flush()
+            line = _worker.stdout.readline()
+        except (BrokenPipeError, OSError) as exc:
+            _worker = None
+            return {"ok": False, "error": f"会话进程通信失败: {exc}。请改用 analyze_dataset。"}
+        if not line:
+            err = ""
+            try:
+                err = (_worker.stderr.read() or "")[-400:]
+            except Exception:
+                pass
+            _worker = None
+            return {"ok": False,
+                    "error": f"会话进程已退出。{('stderr: ' + err) if err else ''}"
+                             f"请改用 analyze_dataset 做单次分析。"}
+        try:
+            return json.loads(line)
+        except json.JSONDecodeError:
+            return {"ok": False, "error": f"会话进程返回了无法解析的输出: {line[:200]}"}
+
+
+def _resolve_data_path(file_path: str) -> str:
+    """
+    Resolve a user-supplied path, searching likely data directories for a bare filename.
+
+    Why this exists: an LLM naturally writes "sales_demo.csv", not the absolute path. The
+    agent process runs in `agent/`, while the datasets live in the parent directory, so a
+    bare filename used to fail with "file not found" -- and the model would then repeat the
+    same relative path instead of switching to the absolute one it had been handed. Prompt
+    instructions alone did not fix that (verified), because the model's preferred form is the
+    bare filename. Resolving it here removes the failure mode rather than papering over it.
+
+    Only applies when the given path does not exist. An existing path is always honoured.
+    """
+    raw = str(file_path or "").strip()
+    if not raw:
+        return ""
+    expanded = os.path.expanduser(raw)
+    if os.path.exists(expanded):
+        return expanded
+    if os.path.isabs(expanded):
+        return expanded
+
+    # Search the places a dataset plausibly lives, nearest first. Deliberately a short,
+    # predictable list: a filesystem-wide search would be slow and unpredictable.
+    candidates = []
+    env_dir = os.environ.get("DEMO_DATA_DIR")
+    if env_dir:
+        candidates.append(env_dir)
+    candidates += [
+        os.getcwd(),
+        os.path.dirname(_THIS_DIR),
+        os.path.expanduser("~"),
+        "/data",
+    ]
+    for base in candidates:
+        cand = os.path.join(base, raw)
+        if os.path.isfile(cand):
+            return cand
+    # Also try the bare basename, in case the caller passed a stray directory prefix.
+    name = os.path.basename(raw)
+    if name and name != raw:
+        for base in candidates:
+            cand = os.path.join(base, name)
+            if os.path.isfile(cand):
+                return cand
+    return expanded
+
+
+def close_all_sessions() -> dict:
+    """
+    Release every open session. Called at the end of an agent run.
+
+    Structural backstop, not a substitute for the model calling close: prompt instructions
+    to clean up are unreliable (observed: a real run left a 1.7 GB session open), and a
+    leaked resident frame degrades every later task on the box. Returns what it released.
+    """
+    try:
+        resp = _worker_call({"cmd": "list"})
+        opened = resp.get("count") or 0
+        if not opened:
+            return {"closed": 0}
+        out = _worker_call({"cmd": "close", "sid": "all"})
+        return {"closed": opened, "detail": out}
+    except Exception as exc:
+        return {"closed": 0, "error": f"{type(exc).__name__}: {exc}"}
+
+
+def dataset_session(operation: str, file_path: str = None, session_id: str = None,
+                    op: str = None, by: str = None, agg: str = None,
+                    columns: str = None, top_k: int = None,
+                    force_cpu: bool = False) -> str:
+    """
+    Load a dataset into memory once, then run several analyses against that copy.
+
+    Never raises — failures come back as {"success": false, "error": ...} so the agent can
+    fall back to the stateless tool or explain the problem.
+    """
+    try:
+        operation = str(operation or "open").strip().lower()
+        if operation not in ("open", "analyze", "list", "close"):
+            return _err(f"operation 必须是 open / analyze / list / close，收到: {operation}")
+
+        if operation == "open":
+            req = {"cmd": "open", "path": _resolve_data_path(file_path),
+                   "force_cpu": bool(force_cpu)}
+        elif operation == "analyze":
+            req = {"cmd": "analyze", "sid": session_id, "op": op or "auto", "by": by,
+                   "agg": agg, "columns": columns, "top_k": top_k}
+        elif operation == "close":
+            req = {"cmd": "close", "sid": session_id or "all"}
+        else:
+            req = {"cmd": "list"}
+
+        if operation == "analyze" and not session_id:
+            return _err("analyze 需要 session_id（先用 operation='open' 打开文件）")
+
+        resp = _worker_call(req)
+        if not resp.get("ok"):
+            # Pass the worker's own guidance through: it is written for the model, and
+            # dropping it would leave the agent with an unactionable error.
+            return _err(
+                resp.get("error") or "会话操作失败",
+                hint=resp.get("hint") or "可以改用 analyze_dataset 做单次无状态分析。",
+                **{k: v for k, v in resp.items()
+                   if k in ("open_sessions", "free_gb", "need_gb", "file_gb")},
+            )
+
+        out = dict(resp)
+        out["success"] = True
+        out.pop("ok", None)
+        # Keep the payload compact; the same compaction the stateless path uses, so the
+        # model sees a consistent shape either way.
+        for key in ("profile", "summary", "groupby", "corr", "outliers", "auto"):
+            if key in out:
+                out[key] = _compact(out[key])
+        if operation == "analyze" and out.get("engine") != "cudf":
+            out["warning"] = (
+                f"本会话运行在 CPU 上 (engine={out.get('engine')})，回答时不要声称用了 GPU 加速。"
+            )
+        return json.dumps(out, ensure_ascii=False, default=str)
+    except Exception as exc:  # never let a session failure break the agent loop
+        return _err(f"{type(exc).__name__}: {exc}",
+                    hint="可以改用 analyze_dataset 做单次无状态分析。")
+
+
+# --------------------------------------------------------------------------------------
 # Skill implementations (what actually runs)
 # --------------------------------------------------------------------------------------
 
@@ -446,11 +729,13 @@ def analyze_dataset(file_path: str, operation: str, by: str = None, agg: str = N
     try:
         if not file_path or not str(file_path).strip():
             return _err("必须提供 file_path")
-        path = os.path.expanduser(str(file_path).strip())
+        path = _resolve_data_path(str(file_path))
         if not os.path.exists(path):
             return _err(
                 f"文件不存在: {path}",
-                hint="调用 list_datasets 看看有哪些可用数据文件",
+                hint=("如果这是相对路径或文件名，它相对于 agent 进程的工作目录解析。"
+                      "请调用 list_datasets 拿到该文件的绝对路径，然后用绝对路径重试一次；"
+                      "不要直接放弃，也不要凭空猜测路径。"),
             )
         if os.path.isdir(path):
             return _err(f"这是一个目录而不是文件: {path}")
@@ -598,7 +883,8 @@ def load_csv_dataset(file_path: str) -> str:
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
-def _err(message: str, hint: str = None, detail: str = None, exit_code: int = None) -> str:
+def _err(message: str, hint: str = None, detail: str = None, exit_code: int = None,
+         **extra) -> str:
     payload = {"success": False, "error": message}
     if hint:
         payload["hint"] = hint
@@ -606,6 +892,9 @@ def _err(message: str, hint: str = None, detail: str = None, exit_code: int = No
         payload["detail"] = detail
     if exit_code is not None:
         payload["exit_code"] = exit_code
+    # Allow callers to attach context (free memory, open session ids, ...) without widening
+    # the signature for every new field.
+    payload.update(extra)
     return json.dumps(payload, ensure_ascii=False)
 
 
@@ -615,6 +904,7 @@ def _err(message: str, hint: str = None, detail: str = None, exit_code: int = No
 
 skill_func_map = {
     "analyze_dataset": analyze_dataset,
+    "dataset_session": dataset_session,
     "list_datasets": list_datasets,
     "load_csv_dataset": load_csv_dataset,
 }

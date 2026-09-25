@@ -37,13 +37,17 @@ import time
 
 from openai import OpenAI
 
+import skills
 from skills import load_skill_definitions, skill_func_map
 
 MODEL_NAME = os.environ.get("STEPFUN_MODEL", "step-3.7-flash")
 BASE_URL = os.environ.get("STEPFUN_BASE_URL", "https://api.stepfun.com/step_plan/v1")
 
 # A tool loop that never ends is worse than one that stops and explains itself.
-MAX_TOOL_ROUNDS = int(os.environ.get("MAX_TOOL_ROUNDS", "6"))
+# 8 rather than 6: a genuine drill-down needs open + several analyze steps + close, and
+# running out mid-analysis costs more (a half-finished answer) than one extra round does.
+# Measured: a real multi-step question used 6 rounds and had no budget left to close.
+MAX_TOOL_ROUNDS = int(os.environ.get("MAX_TOOL_ROUNDS", "8"))
 
 SYSTEM_PROMPT = """你是一个部署在 NVIDIA DGX Spark 上的数据分析智能体。
 
@@ -57,12 +61,29 @@ SYSTEM_PROMPT = """你是一个部署在 NVIDIA DGX Spark 上的数据分析智�
   当成本次结果复述；只有在"同一文件 + 同一操作"完全相同时才可以复用，并且要说明这是复用。
 - 用户给出了具体的文件路径或列名时，即使你可能觉得这个文件不存在，也要调用工具去试，
   让工具返回真实错误，再据此向用户说明问题——不要凭文件名猜测而跳过调用。
+- **工具返回错误后要判断它是否可修复，可修复的必须自己修完再回答**：
+  如果错误信息给出了可执行的下一步（例如"文件不存在，请用 list_datasets 拿绝对路径重试"
+  或"列名不存在，请先调 profile 查真实列名"），就按它说的再做一次，然后用正确参数重试。
+  只有当你已经按指引重试过仍然失败，才把问题报告给用户。
+  不要因为第一次调用失败就直接放弃、也不要跳过工具改用猜测。
 - 如果工具返回的 error 说某个列不存在（例如 "Column(s) ['销售额'] do not exist"），
   先调用 analyze_dataset(operation="profile") 拿到真实列名，再用正确的列名重试一次；
   如果重试仍失败，就把真实列名告诉用户并请他确认想要哪一列，不要重复猜列名。
 - 不要凭空假设列名。用户用中文描述业务口径（如“销售额”“销量”）时，先确认文件里
   实际的列名是什么，再构造 by / agg / columns 参数。
 - 一次调用得到的结果足够回答时，就直接给出结论，不要反复调用。
+- 当需求本身是**多步**的（例如「找出异常并分析原因」「对比几个维度」「先概览再深入某一组」），
+  用 dataset_session 做：先 operation="open" 打开文件拿到 session_id，之后每一步都用
+  operation="analyze" + 同一个 session_id 执行，**不要在中间重复 open**；全部做完后必须
+  operation="close" 释放显存。
+  这样做的价值：数据已常驻显存，之后每一步都是全量计算但只需几十毫秒，所以你可以放心多问几步去下钻。
+- **已经 open 了就必须一直用它，直到 close 为止。** 会话中途某一步失败（例如分组列名写错）时，
+  修正参数后**仍然用 dataset_session 重试**，不要改回 analyze_dataset：
+  analyze_dataset 每一步都要重新读盘（2000 万行约 10~25 秒），而 session 里只要几十毫秒。
+  只有 open 本身失败（例如显存不足）才降级到 analyze_dataset。
+- **用完一定要 close。** 会话持续占用显存（2000 万行约 1.7GB），不关闭会影响后续任务和其他进程。
+  即使中途出错，也要把已打开的会话关掉。
+- 只有一步的简单问题**不要**用 session（用 analyze_dataset 即可），session 会白占显存。
 
 回答要求：
 - 用中文回答，直接给出用户想知道的结论，把关键数字说清楚（带上单位和量级）。
@@ -75,6 +96,12 @@ SYSTEM_PROMPT = """你是一个部署在 NVIDIA DGX Spark 上的数据分析智�
   「本次分析在 GPU（NVIDIA GB10）上通过 cuDF 完成，全量 <N> 行耗时 <X> 秒；
    同一计算在 CPU pandas 上耗时 <Y> 秒，GPU 快 <Z> 倍。」
   然后按 gpu_vs_cpu 的 honest_note 附上必要的说明（哪些加速不属于 GPU 计算）。
+- 如果用的是 dataset_session：**每一步**的 analyze 返回里有 step_seconds（本步耗时）和
+  cumulative_seconds（会话累计）；调 close 时返回 workflow_comparison，里面有
+  本次会话总耗时、传统做法（CPU 每步重读）耗时和倍数。回答结尾就按 workflow_comparison
+  写明「本次 N 步全量分析共 X 秒；若每步都用 CPU 重新读盘计算约需 Y 秒，快 Z 倍」，
+  并照它的 note 说明：该倍数包含「数据已常驻显存」的收益，不等于纯 GPU 计算加速比。
+  不要把它说成纯 GPU 计算加速。
 - 相关性不等于因果，不要过度解读 corr 的结果。
 - 不要输出原始 JSON，用自然语言和必要的表格呈现。
 """
@@ -156,6 +183,25 @@ def summarize_tool_result(result_json: str) -> str:
     secs_txt = f"{secs:.2f}s" if isinstance(secs, (int, float)) else ""
     bits = [f"engine={payload.get('engine')}", rows_txt, secs_txt]
 
+    # Session calls have their own shape: a load, cheap per-step timings, and a
+    # workflow-level figure on close. Surface those so a demo shows the multi-step
+    # drill-down and its cost as it happens.
+    if payload.get("session_id") and "step_seconds" in payload:
+        bits.append(f"| step {payload['step_seconds']}s "
+                    f"(session total {payload.get('cumulative_seconds')}s, "
+                    f"step #{payload.get('steps_this_session')})")
+    elif "load_seconds" in payload and payload.get("session_id"):
+        cpu_load = payload.get("cpu_load_seconds")
+        bits.append(f"| loaded {payload['load_seconds']}s"
+                    + (f" vs CPU {cpu_load}s" if cpu_load else "")
+                    + (f", resident {payload['resident_mb']}MB"
+                       if payload.get("resident_mb") else ""))
+    wc = payload.get("workflow_comparison")
+    if isinstance(wc, dict) and isinstance(wc.get("speedup_x"), (int, float)):
+        bits.append(f"| WORKFLOW: session {wc['session_total_seconds']}s vs "
+                    f"naive-CPU {wc['naive_cpu_seconds']}s = {wc['speedup_x']:.1f}x")
+        return "OK  " + "  ".join(b for b in bits if b)
+
     # Surface the measured GPU-vs-CPU comparison in the trace: this is the line that shows
     # the audience what the skill bought them on this very call.
     cmp = payload.get("gpu_vs_cpu")
@@ -187,6 +233,20 @@ class Agent:
             print(msg, flush=True)
 
     def run(self, user_query: str) -> str:
+        """Answer one question. Any session left open is released on the way out."""
+        try:
+            return self._run_inner(user_query)
+        finally:
+            # Structural guarantee rather than a prompt request. The model is asked to call
+            # close, and usually does, but a leaked resident frame costs gigabytes and would
+            # silently degrade every later question. Observed once in practice, so this is
+            # enforced in code.
+            released = skills.close_all_sessions()
+            if released.get("closed"):
+                self.log(f"  [session] 自动释放了 {released['closed']} 个未关闭的会话"
+                         f"（模型忘记调用 close）")
+
+    def _run_inner(self, user_query: str) -> str:
         self.messages.append({"role": "user", "content": user_query})
 
         for round_index in range(1, MAX_TOOL_ROUNDS + 1):

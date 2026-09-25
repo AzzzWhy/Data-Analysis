@@ -121,6 +121,57 @@ always passed as strings. `std`/`var` on cuDF use `ddof=0` while pandas uses `dd
 which the result flags in `notes`.
 Groups are sorted descending by the first requested metric.
 
+**`--by` takes exactly one column.** A comma-separated pair such as `region,category` is
+rejected with `--by column 'region,category' not found; available: [...]`. To break a metric
+down by two dimensions, issue two groupby calls.
+
+## Sessions: keeping the data resident across steps
+
+`gpu_analytics.py` is stateless — every invocation re-reads and re-parses the file. That is
+fine for one question and wasteful for five, because real analysis is rarely one step:
+"find the outliers" is nearly always followed by "where do they come from", "how much do
+they matter", "which group drives them".
+
+`gpu_session.py` is a long-lived worker that loads the file **once** into device memory and
+then answers many `analyze` requests against that resident copy.
+
+| | 5-step full-data analysis (20M rows, 3.0 GB) |
+| :--- | ---: |
+| CPU, re-reading every step | 49.7 s |
+| GPU, re-reading every step | 10.8 s |
+| **GPU with a resident session** | **1.5 s** |
+
+Measured inside one session: load 1.85 s (1,692 MB resident), then `profile` 0.05 s,
+`outliers` 0.42 s, `groupby` 0.04 s, a second `groupby` 0.03 s, `corr` 0.53 s.
+
+Protocol (newline-delimited JSON on stdin/stdout):
+
+```bash
+{"cmd": "open",    "path": "/data/sales.csv"}
+{"cmd": "analyze", "sid": "s1", "op": "groupby", "by": "region", "agg": "revenue:sum"}
+{"cmd": "list"}
+{"cmd": "close",   "sid": "s1"}        # or "sid": "all"
+```
+
+Design points that are load-bearing:
+
+- **Full data, every step.** Because the frame is resident there is no reason to subsample
+  for speed, so `rows_scanned` is the whole file on every step and is reported so it can be
+  checked.
+- **Staleness is refused, not tolerated.** The handle records the file's size and mtime at
+  open time and re-checks before every operation. If the file changed underneath, the worker
+  refuses rather than computing on a snapshot that no longer matches the file.
+- **Memory is admitted, not hidden.** `open` refuses *before* loading when the device cannot
+  hold the file plus working room, and says what it needed and what it found. At most 4
+  sessions may be open at once.
+- **Every failure is JSON.** The worker outlives a bad request; the caller degrades to the
+  stateless path.
+
+Note the honest framing when reporting a session speedup: the figure includes the benefit of
+not re-reading the file, which is not the same as GPU compute throughput. `close` returns a
+`workflow_comparison` block whose `note` says exactly that, and the reported ratio should be
+presented with it.
+
 ## Performance reporting
 
 Before quoting any number, confirm the harness is green:
@@ -170,6 +221,10 @@ not just the best row.
 | Out-of-memory on a huge file | Add `--columns` to analyze fewer columns, or `--usecols` to load fewer. |
 | Need a CPU-vs-GPU comparison of one command | Add `--force-cpu` and compare against the normal run. |
 | `--op corr --method spearman` runs on CPU | Expected: cuDF only does pearson, so that request falls back and reports why. |
+| `--by region,category` rejected | `--by` takes one column. Issue two groupby calls instead. |
+| `显存不足 / memory refused on session open` | Expected guard, raised before loading. Use `analyze_dataset` for a one-off, or pass `columns` to load fewer. |
+| Session says the file "已被修改" | The file changed under the session, so its answers would be stale. Re-`open` it. |
+| Session left open after a run | The agent releases it in a `finally` block; the model is also told to `close`. If a session is ever orphaned, `{"cmd":"close","sid":"all"}` frees it. |
 
 **Restoring the GPU path on GB10:**
 
@@ -186,5 +241,9 @@ before making any speed claims.
 - Read-only: this skill never writes to or mutates the user's dataset.
 - It computes statistics; it does not plot, model, or fetch remote data.
 - Correlation is not causation — do not present `corr` output as a causal finding.
+- `--by` groups by a single column only.
+- A session holds the dataset in device memory for its whole lifetime (about 1.7 GB per 20M
+  rows), so sessions are capped at 4 and refused outright when memory is short. For one-off
+  questions use the stateless path, which holds nothing between calls.
 - Always surface `rows_scanned` so the user knows the numbers came from the whole file,
   not a sample.

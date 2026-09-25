@@ -24,9 +24,10 @@
 | :--- | :--- |
 | 🔍 **自主决策** | 自己判断该调哪个 Skill、参数怎么填,不需要人指定 |
 | ⚡ **GPU 加速** | cuDF 全量计算,20M 行分组聚合 **3.93×**、相关性 **3.69×** |
+| 🔁 **多步会话** | 数据常驻显存,后续每步 **0.03 秒**,整条工作流快 **19×** |
 | 📊 **当场证明** | 每次回答都附上**这一问实测**的 GPU/CPU 耗时对比 |
 | 🛡️ **诚实降级** | 没有 GPU 就自动回退 pandas,并如实声明 `engine="pandas"` |
-| ✅ **可复核** | 59 项自检 + 7 项评审用例 + 每个数字独立复算 |
+| ✅ **可复核** | 59 项自检 + 9 项评审用例 + 每个数字独立复算 |
 
 </div>
 
@@ -99,10 +100,10 @@
 
 | 评审维度 | 本项目的实现 | 可验证的证据 |
 | :--- | :--- | :--- |
-| **① 技能调用能力**<br><sub>自主判断何时调用 + 参数正确</sub> | 模型从 2 个 Skill 中自主选择;未给文件时先调 `list_datasets` 发现数据;概念性问题**不调**工具;列名报错后自动改调 `profile` 学真实列名再重试 | `run_criteria_tests.sh` **7/7 通过**,断言打在工具调用轨迹上而非回答文本上 |
-| **② 任务完成度**<br><sub>自然语言 → 真实结果</sub> | 6 种操作全部返回真实统计量;回答里给中文结论、排名、表格与关键发现 | `smoke_test.py` **59 项断言**;`verify_*.py` 独立复算 |
-| **③ 创新性** | 见下方「创新点在哪」 | 加速比在对话内当场测量 |
-| **④ 代码可用性**<br><sub>可部署 / 健壮 / 异常处理</sub> | 引擎自动降级;`analyze_dataset` **永不抛异常**;无 GPU、文件不存在、列名错误、中文列名都能优雅处理并提供可执行的下一步 | 无 GPU 路径可跑;**第⑥步**演示文件不存在;`run_criteria_tests.sh` 覆盖 3 类异常输入 |
+| **① 技能调用能力**<br><sub>自主判断何时调用 + 参数正确</sub> | 模型从 3 个 Skill 中自主选择;未给文件时先调 `list_datasets` 发现数据;概念性问题**不调**工具;列名报错后自动改调 `profile` 学真实列名再重试;**多步需求会自主切换到会话式 Skill** | `run_criteria_tests.sh` **9/9 通过**,断言打在工具调用轨迹上而非回答文本上 |
+| **② 任务完成度**<br><sub>自然语言 → 真实结果</sub> | 6 种操作全部返回真实统计量;回答里给中文结论、排名、表格与关键发现;多步问题能自主下钻定位 | `smoke_test.py` **59 项断言**;`verify_*.py` 独立复算 |
+| **③ 创新性** | 会话式显存复用让多步下钻成本降一个数量级;加速比在对话内当场测量 | 实测 9 步分析 8.46 秒 |
+| **④ 代码可用性**<br><sub>可部署 / 健壮 / 异常处理</sub> | 引擎自动降级;`analyze_dataset` / `dataset_session` **永不抛异常**;显存不足**提前拒绝**并给出可执行建议;文件改动后拒绝用旧数据作答;无 GPU、文件不存在、列名错误、中文列名都能优雅处理 | 无 GPU 路径可跑;`session_*_test.py` 共 **41 项断言** |
 | **⑤ 演示效果**<br><sub>端到端对话流畅</sub> | 7 步脚本化演示,**76 秒**,每步显示加速比;`--prewarm` 预热保证现场零等待 | `demo_script.py` |
 
 ### 创新点在哪
@@ -167,6 +168,51 @@
 
 **结论:冷读加速中约 47~49% 来自计算,其余来自并行解析与核数差。**
 本项目如实报告这一点,而不是拿 6.45× 当卖点。
+
+### 多步分析为什么需要常驻显存
+
+单次查询快 3 倍不算什么。真正的问题是:**数据分析从来不是一步**——"找出异常"之后必然要"定位来源"、"量化影响"、"对比分组"。
+
+而无状态路径每问一次就要重新读盘一次:
+
+| 做法(2000 万行 / 3.04 GB) | 5 步全量分析 |
+| :--- | ---: |
+| CPU,每步重读 | **49.7 s** |
+| GPU,每步重读 | 10.8 s |
+| **GPU 常驻显存(`dataset_session`)** | **1.5 s** |
+
+这就是 `dataset_session` 存在的理由:它把"单次查询快一点"变成"**多步工作流快一个数量级**",从而让"下钻"从奢侈变成默认动作。
+
+实测会话内部(同一份数据):
+
+```
+open  载入 2000 万行        1.85 s    (常驻 1,692 MB 显存)
+      profile               0.05 s
+      outliers              0.42 s
+      groupby by region     0.04 s
+      groupby by category   0.03 s
+      corr                  0.53 s
+close 会话总计 9 步           8.46 s
+      vs 传统「CPU 每步重读」   约 77 s     → 19.2×
+```
+
+**为什么这必须是 GPU skill 而不是纯调度技巧:**
+
+- 121 GB 显存装得下 2000 万行,CPU 内存方案在多数机器上会 OOM
+- 它**也真的会不够用**。所以 `open` 会在载入**之前**检查显存并拒绝:
+  ```
+  显存不足，已拒绝载入：该文件约 2.83GB，预计需要 12.5GB 空闲显存，当前只有 4.1GB。
+  建议改用 analyze_dataset 单次分析，或先用 columns 参数只读需要的列。
+  ```
+- 同时最多 4 个会话,超出即拒绝,而不是让显存静默耗尽
+
+**三条守卫,都是踩过坑才加的:**
+
+| 守卫 | 防的问题 |
+| :--- | :--- |
+| **文件身份校验**(路径+大小+mtime) | 会话期间文件被改,后续步骤会用**旧快照**算出错误答案 → 拒绝作答并提示重新 open |
+| **"没有重读"的可证伪断言** | 用「同一操作连跑两次耗时不变」+「累计耗时 = 载入 + 各步之和」证明,而不是靠阈值猜 |
+| **收尾强制释放** | 实测模型**会忘记 close**(留下 1.7 GB);`run()` 用 `finally` 兜底释放,不依赖提示词 |
 
 ### 只在真实数据上暴露的 bug 🐛
 
@@ -260,7 +306,9 @@ PASS: every recorded claim reproduced independently.
     "agg": "revenue:sum,mean",
     "rows_scanned": 20000000,    // 注意：行数在操作块内部
     "compute_seconds": 1.91,     // 纯计算（不含读取）
-    "groups": [ /* ... */ ]
+    "groups": 5,                 // 分组数量（整数，不是数据）
+    "sorted_by": "revenue__sum",
+    "top_k": [ /* 实际的分组结果行在这里，最多 top_k 条 */ ]
   }
 }
 ```
@@ -284,8 +332,9 @@ PASS: every recorded claim reproduced independently.
 │   ├── agent_main.py               tool-calling 循环
 │   ├── skills.py                   Skill 注册 + GPU/CPU 实测对比 + 输出压缩
 │   ├── demo_script.py              7 步演示（--prewarm 预热）
-│   ├── run_criteria_tests.sh       7 项评审用例
+│   ├── run_criteria_tests.sh       9 项评审用例
 │   ├── gpu_vs_cpu_demo.py          两引擎并排对照
+│   ├── session_skill_test.py       会话工具层 41 项断言中的前半
 │   ├── env_stepfun.sh              非交互 shell 的 key 加载
 │   ├── verify_*.py                 独立复算 Agent 报的数字
 │   ├── diagnose_iqr*.py            IQR 浮点 bug 的根因诊断
@@ -294,8 +343,10 @@ PASS: every recorded claim reproduced independently.
 ├── skills/cudf-analytics/          Skill 本体
 │   ├── SKILL.md                    触发条件 + 工作流（中英双语触发词）
 │   └── scripts/
-│       ├── gpu_analytics.py        核心引擎（cuDF / pandas 双路径）
+│       ├── gpu_analytics.py        核心引擎（cuDF / pandas 双路径，无状态）
+│       ├── gpu_session.py          常驻会话 worker（数据驻留显存，多步复用）
 │       ├── smoke_test.py           59 项自检 + GPU/CPU 数值一致性
+│       ├── session_worker_test.py  worker 协议与守卫测试
 │       ├── attribution_test.py     归因：I/O vs 计算
 │       ├── memory_ceiling_test.py  多规模压力测试
 │       └── benchmark_cpu_vs_gpu.py 基准测试
@@ -350,7 +401,7 @@ cd ../../agent && python agent_main.py --ask "分析 /path/to/data.csv 的异常
 export DEMO_DATA=/path/to/sales_demo.csv
 python demo_script.py --prewarm && python demo_script.py
 
-# 4) 评审用例套件（7 项）
+# 4) 评审用例套件（9 项）
 bash run_criteria_tests.sh
 ```
 
