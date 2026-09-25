@@ -295,6 +295,9 @@ class Agent:
 
     def _run_inner(self, user_query: str) -> str:
         self.messages.append({"role": "user", "content": user_query})
+        # Let the skill layer know what language the user wrote in, so a generated report
+        # comes back in that language rather than always in the default one.
+        skills.remember_request_text(user_query)
 
         for round_index in range(1, MAX_TOOL_ROUNDS + 1):
             try:

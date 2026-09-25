@@ -419,37 +419,144 @@ def _write_csv(path: str, rows: List[dict]) -> int:
     return len(rows)
 
 
+def detect_lang(*texts: Optional[str]) -> str:
+    """Pick the report language: Chinese if the caller wrote Chinese, otherwise English.
+
+    The rule is "answer in the language you were asked in". A Chinese-speaking user gets a
+    Chinese report; an English-speaking one gets an English report; and when there is no text
+    to judge from, Chinese is the default because that is this skill's primary audience.
+
+    Working code, except for a comment, may still contain CJK inside backticks or in a quoted
+    filename, so the sample is taken from the prose the caller passed in rather than from any
+    file on disk.
+    """
+    for t in texts:
+        if t and re.search(r"[\u4e00-\u9fff]", str(t)):
+            return "zh"
+    return "en" if any(t for t in texts) else "zh"
+
+
+def resolve_lang(lang: str, *texts: Optional[str]) -> str:
+    """Turn a --lang value into a concrete language, applying detection for 'auto'."""
+    v = str(lang or "auto").strip().lower()
+    if v in ("zh", "cn", "zh-cn", "chinese", "中文"):
+        return "zh"
+    if v in ("en", "english", "en-us"):
+        return "en"
+    return detect_lang(*texts)
+
+
+# Report labels. Keys are the English wording; the Chinese column is what a Chinese-speaking
+# user should read. Kept as one table rather than two copies of the report so the two languages
+# cannot drift apart structurally.
+_L: Dict[str, str] = {
+    "Analysis report": "分析报告",
+    "Source data": "数据来源",
+    "Rows analysed": "分析行数",
+    "full scan, not a sample": "全量扫描，非抽样",
+    "Compute engine": "计算引擎",
+    "on": "运行于",
+    "Generated": "生成时间",
+    "Operation": "操作",
+    "Dataset profile": "数据概况",
+    "rows x": "行 ×",
+    "columns": "列",
+    "Column": "列名",
+    "Type": "类型",
+    "Statistical summary": "统计摘要",
+    "count": "计数", "mean": "均值", "std": "标准差", "min": "最小",
+    "q1": "下四分位", "median": "中位数", "q3": "上四分位", "max": "最大", "nulls": "空值",
+    "Grouped aggregates": "分组聚合",
+    "Grouped by": "分组字段",
+    "aggregated as": "聚合方式",
+    "groups in total; top": "共",
+    "shown, ranked by": "组，展示前",
+    "sorted by": "排序依据",
+    "IQR outliers": "IQR 异常值",
+    "Outliers": "异常值数", "Share": "占比",
+    "Lower bound": "下界", "Upper bound": "上界",
+    "Values sitting exactly on a fence are excluded from the counts (relative tolerance 1e-9), "
+    "so the result does not depend on floating-point rounding differences between engines. "
+    "Excluded:": "恰好落在边界上的值不计入（相对容差 1e-9），因此结果不依赖引擎间的浮点舍入差异。已排除：",
+    "Strongest correlations": "最强相关性",
+    "correlation, ranked by absolute value.": "相关系数，按绝对值排序。",
+    "Pair": "变量对",
+    "Correlation is not causation; these are associations in this dataset only.":
+        "相关不等于因果；这些只是本数据集中的关联。",
+    "Charts": "图表",
+    "How this was produced": "计算方式说明",
+    "Statistics were computed by": "统计由",
+    "over the full dataset. The numbers in this report are exact aggregates, not estimates "
+    "from a sample.": "全文计算得出。本报告中的数字是精确聚合值，不是抽样估计。",
+    "The GPU accelerated the **aggregation**. Chart rendering is not GPU-accelerated: the "
+    "charts are drawn from the aggregated values (a few dozen rows), where rendering cost is "
+    "irrelevant. Reporting a GPU speedup for drawing a bar chart would be meaningless.":
+        "GPU 加速的是**聚合计算**。图表渲染并未使用 GPU：图表是用聚合后的数值（几十行）绘制的，"
+        "此时渲染开销可以忽略。为「画柱状图」报一个 GPU 加速比是没有意义的。",
+    "This run used the CPU path, so no GPU acceleration is claimed for it.":
+        "本次走的是 CPU 路径，因此不声称任何 GPU 加速。",
+}
+
+# Column headers that come from the engine rather than from the prose, so they need their own
+# mapping: these are the statistic names appearing inside summary tables.
+_STAT_ZH = {"count": "计数", "mean": "均值", "std": "标准差", "min": "最小", "q1": "下四分位",
+            "median": "中位数", "q3": "上四分位", "max": "最大", "nulls": "空值"}
+
+
+def _make_tr(lang: str):
+    """Return tr(key, stat=False). Chinese falls back to English for anything unmapped."""
+    def tr(key: str, stat: bool = False) -> str:
+        if lang != "zh":
+            return key
+        if stat:
+            return _STAT_ZH.get(key, key)
+        return _L.get(key, key)
+    return tr
+
+
 def build_report(payload: dict, out_dir: str, title: str, charts: List[str],
                  source_file: str, rows_scanned: Optional[int],
-                 engine: str, gpu: Optional[str]) -> str:
-    """Markdown report tying the tables, the charts and the provenance together."""
+                 engine: str, gpu: Optional[str], lang: str = "auto") -> str:
+    """Markdown report tying the tables, the charts and the provenance together.
+
+    Written in the language the caller used: see detect_lang. Every label goes through tr(),
+    so a Chinese question produces a Chinese report and an English one an English report.
+    """
+    lang = resolve_lang(lang, title, payload.get("question"), payload.get("goal"))
+    tr = _make_tr(lang)
     lines: List[str] = []
     add = lines.append
+    # Chinese uses full-width punctuation; mixing half-width colons and periods into an
+    # otherwise Chinese report reads as sloppy. English keeps the ASCII forms.
+    colon = "：" if lang == "zh" else ": "
+    stop = "。" if lang == "zh" else "."
     add(f"# {title}")
     add("")
-    add(f"- Source data: `{os.path.basename(source_file)}`")
+    add(f"- {tr('Source data')}{colon}`{os.path.basename(source_file)}`")
     if rows_scanned:
-        add(f"- Rows analysed: **{rows_scanned:,}** (full scan, not a sample)")
-    add(f"- Compute engine: **{engine}**" + (f" on {gpu}" if gpu else ""))
-    add(f"- Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        add(f"- {tr('Rows analysed')}{colon}**{rows_scanned:,}** ({tr('full scan, not a sample')})")
+    add(f"- {tr('Compute engine')}{colon}**{engine}**"
+        + (f" {tr('on')} {gpu}" if gpu else ""))
+    add(f"- {tr('Generated')}{colon}{time.strftime('%Y-%m-%d %H:%M:%S')}")
     add("")
 
     op = payload.get("op") or (payload.get("operation") if isinstance(payload, dict) else None)
     if op:
-        add(f"- Operation: `{op}`")
+        add(f"- {tr('Operation')}{colon}`{op}`")
         add("")
 
     # --- profile ---
     prof = payload.get("profile")
     if isinstance(prof, dict):
-        add("## Dataset profile")
+        add(f"## {tr('Dataset profile')}")
         add("")
         if prof.get("rows") is not None:
-            add(f"{prof['rows']:,} rows x {len(prof.get('columns') or [])} columns.")
+            add(f"{prof['rows']:,} {tr('rows x')} "
+                f"{len(prof.get('columns') or [])} {tr('columns')}{stop}")
             add("")
         dtypes = prof.get("dtypes")
         if isinstance(dtypes, dict):
-            add("| Column | Type |")
+            add(f"| {tr('Column')} | {tr('Type')} |")
             add("| :--- | :--- |")
             for k, v in dtypes.items():
                 add(f"| `{k}` | {v} |")
@@ -465,11 +572,11 @@ def build_report(payload: dict, out_dir: str, title: str, charts: List[str],
         if isinstance(stats, dict) and stats:
             keys = [k for k, v in stats.items() if isinstance(v, dict)]
             if keys:
-                add("## Statistical summary")
+                add(f"## {tr('Statistical summary')}")
                 add("")
                 fields = ["count", "mean", "std", "min", "q1", "median", "q3", "max", "nulls"]
                 have = [f for f in fields if any(f in stats[k] for k in keys)]
-                add("| Column | " + " | ".join(have) + " |")
+                add(f"| {tr('Column')} | " + " | ".join(tr(f, stat=True) for f in have) + " |")
                 add("| :--- | " + " | ".join("---:" for _ in have) + " |")
                 for k in keys:
                     vals = " | ".join(_fmt(stats[k].get(f)) for f in have)
@@ -481,11 +588,16 @@ def build_report(payload: dict, out_dir: str, title: str, charts: List[str],
     if isinstance(gb, dict):
         rows = gb.get("top_k") or []
         if rows:
-            add("## Grouped aggregates")
+            add(f"## {tr('Grouped aggregates')}")
             add("")
-            add(f"Grouped by `{gb.get('by')}`, aggregated as `{gb.get('agg')}`. "
-                f"{gb.get('groups')} groups in total; top {len(rows)} shown, "
-                f"ranked by `{gb.get('sorted_by')}`.")
+            if lang == "zh":
+                add(f"{tr('Grouped by')} `{gb.get('by')}`，{tr('aggregated as')} `{gb.get('agg')}`；"
+                    f"{tr('groups in total; top')} {gb.get('groups')} {tr('shown, ranked by')} "
+                    f"{len(rows)} {tr('sorted by')} `{gb.get('sorted_by')}`。")
+            else:
+                add(f"{tr('Grouped by')} `{gb.get('by')}`, {tr('aggregated as')} `{gb.get('agg')}`. "
+                    f"{gb.get('groups')} groups in total; top {len(rows)} shown, "
+                    f"ranked by `{gb.get('sorted_by')}`.")
             add("")
             cols, _ = _flatten_table(rows)
             add("| " + " | ".join(f"`{c}`" for c in cols) + " |")
@@ -502,9 +614,10 @@ def build_report(payload: dict, out_dir: str, title: str, charts: List[str],
     if isinstance(out, dict):
         res = out.get("results") or {}
         if isinstance(res, dict) and res:
-            add("## IQR outliers")
+            add(f"## {tr('IQR outliers')}")
             add("")
-            add("| Column | Outliers | Share | Lower bound | Upper bound |")
+            add(f"| {tr('Column')} | {tr('Outliers')} | {tr('Share')} | "
+                f"{tr('Lower bound')} | {tr('Upper bound')} |")
             add("| :--- | ---: | ---: | ---: | ---: |")
             for name, info in res.items():
                 if not isinstance(info, dict):
@@ -516,10 +629,11 @@ def build_report(payload: dict, out_dir: str, title: str, charts: List[str],
             ties = {n: i.get("fence_ties_excluded") for n, i in res.items()
                     if isinstance(i, dict) and i.get("fence_ties_excluded")}
             if ties:
-                add("Values sitting exactly on a fence are excluded from the counts "
-                    "(relative tolerance 1e-9), so the result does not depend on "
-                    "floating-point rounding differences between engines. Excluded: "
-                    + ", ".join(f"`{n}` {_fmt(v)}" for n, v in ties.items()) + ".")
+                add(tr("Values sitting exactly on a fence are excluded from the counts "
+                       "(relative tolerance 1e-9), so the result does not depend on "
+                       "floating-point rounding differences between engines. Excluded: ")
+                    + " " + ", ".join(f"`{n}` {_fmt(v)}" for n, v in ties.items())
+                    + ("" if lang == "zh" else "."))
                 add("")
 
     # --- correlation ---
@@ -527,11 +641,11 @@ def build_report(payload: dict, out_dir: str, title: str, charts: List[str],
     if isinstance(corr, dict):
         pairs = corr.get("pairs")
         if isinstance(pairs, list) and pairs:
-            add("## Strongest correlations")
+            add(f"## {tr('Strongest correlations')}")
             add("")
-            add(f"{corr.get('method', 'pearson')} correlation, ranked by absolute value.")
+            add(f"{corr.get('method', 'pearson')} {tr('correlation, ranked by absolute value.')}")
             add("")
-            add("| Pair | r |")
+            add(f"| {tr('Pair')} | r |")
             add("| :--- | ---: |")
             for p in pairs[:15]:
                 if isinstance(p, dict):
@@ -539,12 +653,12 @@ def build_report(payload: dict, out_dir: str, title: str, charts: List[str],
                     b = p.get("b") or p.get("col2")
                     add(f"| `{a}` vs `{b}` | {_fmt(p.get('corr'))} |")
             add("")
-            add("Correlation is not causation; these are associations in this dataset only.")
+            add(tr("Correlation is not causation; these are associations in this dataset only."))
             add("")
 
     # --- charts ---
     if charts:
-        add("## Charts")
+        add(f"## {tr('Charts')}")
         add("")
         for c in charts:
             rel = os.path.basename(c)
@@ -554,20 +668,20 @@ def build_report(payload: dict, out_dir: str, title: str, charts: List[str],
             add("")
 
     # --- provenance, stated honestly ---
-    add("## How this was produced")
+    add(f"## {tr('How this was produced')}")
     add("")
-    add(f"Statistics were computed by `{engine}`"
+    add(f"{tr('Statistics were computed by')} `{engine}`"
         + (f" (GPU: {gpu})" if gpu is not None and engine != "pandas" else "")
-        + " over the full dataset. The numbers in this report are exact aggregates, not "
-          "estimates from a sample.")
+        + " " + tr("over the full dataset. The numbers in this report are exact aggregates, not "
+                   "estimates from a sample."))
     add("")
     if engine != "pandas":
-        add("The GPU accelerated the **aggregation**. Chart rendering is not GPU-accelerated: "
-            "the charts are drawn from the aggregated values (a few dozen rows), where "
-            "rendering cost is irrelevant. Reporting a GPU speedup for drawing a bar chart "
-            "would be meaningless.")
+        add(tr("The GPU accelerated the **aggregation**. Chart rendering is not GPU-accelerated: "
+               "the charts are drawn from the aggregated values (a few dozen rows), where "
+               "rendering cost is irrelevant. Reporting a GPU speedup for drawing a bar chart "
+               "would be meaningless."))
     else:
-        add("This run used the CPU path, so no GPU acceleration is claimed for it.")
+        add(tr("This run used the CPU path, so no GPU acceleration is claimed for it."))
     add("")
 
     md = "\n".join(lines)
@@ -582,11 +696,16 @@ def build_report(payload: dict, out_dir: str, title: str, charts: List[str],
 # --------------------------------------------------------------------------------------
 
 def build(payload: dict, out_dir: str, title: Optional[str] = None,
-          source_file: Optional[str] = None) -> dict:
+          source_file: Optional[str] = None, lang: str = "auto",
+          lang_context: Optional[str] = None) -> dict:
     """Write charts, data files and a report for one analysis payload. Returns a manifest."""
     os.makedirs(out_dir, exist_ok=True)
     source_file = source_file or payload.get("input") or "dataset"
-    title = title or f"Analysis report — {os.path.basename(str(source_file))}"
+    # Default to Chinese: a Chinese caller should get a Chinese report. A caller who writes
+    # English gets an English one. lang_context is the user's own wording, when the caller can
+    # pass it, and is the best signal for which language they are writing in.
+    lang = resolve_lang(lang, lang_context, title, payload.get("question"), payload.get("goal"))
+    title = title or f"{_L.get('Analysis report') if lang == 'zh' else 'Analysis report'} — {os.path.basename(str(source_file))}"
     engine = payload.get("engine", "unknown")
     gpu = payload.get("gpu")
     rows_scanned = payload.get("rows_scanned")
@@ -718,7 +837,7 @@ def build(payload: dict, out_dir: str, title: Optional[str] = None,
     data_files.append(json_path)
 
     md_path = build_report(payload, out_dir, title, charts, str(source_file),
-                           rows_scanned, engine, gpu)
+                           rows_scanned, engine, gpu, lang=lang)
 
     return {
         "out_dir": os.path.abspath(out_dir),
@@ -740,12 +859,17 @@ def main() -> int:
     ap.add_argument("--out-dir", default="deliverables")
     ap.add_argument("--title")
     ap.add_argument("--source-file")
+    ap.add_argument("--lang", default="auto", choices=["auto", "zh", "en"],
+                    help="report language; auto follows the language of --lang-context/--title")
+    ap.add_argument("--lang-context",
+                    help="the user's own wording, used only to decide the report language")
     args = ap.parse_args()
     if not args.input:
         ap.error("--input is required")
     with open(args.input, encoding="utf-8") as fh:
         payload = json.load(fh)
-    manifest = build(payload, args.out_dir, args.title, args.source_file)
+    manifest = build(payload, args.out_dir, args.title, args.source_file,
+                     lang=args.lang, lang_context=args.lang_context)
     print(json.dumps(manifest, ensure_ascii=False, indent=1))
     return 0
 

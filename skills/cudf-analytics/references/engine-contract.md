@@ -11,8 +11,22 @@ wrong.
 | :--- | :--- | :--- |
 | `gpu_analytics.py` | Stateless engine. One operation per process; re-reads the file every time. | `python gpu_analytics.py --input FILE --op OP [...]` |
 | `gpu_session.py` | Resident session worker. NDJSON commands on stdin/stdout; loads once, serves many steps. | `python gpu_session.py`, then one JSON command per line |
-| `make_deliverables.py` | Turns an engine result into `report.md`, `.svg` charts and CSV/JSON exports. | `python make_deliverables.py --input - --out-dir DIR --source-file FILE` |
+| `make_deliverables.py` | Turns an engine result into `report.md`, `.svg` charts and CSV/JSON exports. | `python make_deliverables.py --input - --out-dir DIR --source-file FILE [--lang zh\|en\|auto] [--lang-context TEXT]` |
 | `analysis_plan.py` | Plan catalog and progress bookkeeping. Imported, not run directly. | `import analysis_plan` |
+
+### Report language
+
+`make_deliverables.py` writes the report in the caller's language and defaults to **Chinese**.
+
+| Flag | Effect |
+| :--- | :--- |
+| `--lang zh` / `--lang en` | Force one language, whatever the context says |
+| `--lang auto` (default) | Decide from `--lang-context`, then `--title`, then `question`/`goal` in the payload |
+| `--lang-context TEXT` | The user's own wording; the best signal for which language they wrote in. `export_deliverables` fills this from the recorded request automatically, so the agent does not re-state the question |
+| (no text anywhere) | Chinese, because that is this skill's primary audience |
+
+English and Chinese report structures are asserted to have the same number of sections, so the
+two cannot drift apart. A forced `en` report is checked to contain no CJK characters at all.
 
 The long flag is `--input`, not `--file`. Passing `--file` produces an argparse error that
 reads like a usage problem rather than a typo, which sends a caller round the same loop.

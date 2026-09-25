@@ -601,6 +601,23 @@ def _attach_speedup(out: dict, path: str, operation: str, by, agg, columns, top_
 # Stateful sessions: hold a dataset in GPU memory across several analyses
 # --------------------------------------------------------------------------------------
 
+# The user's own wording for the question being answered. Recorded by the agent loop, not
+# exposed as a tool parameter: the report should follow the language the user wrote in, and
+# asking the model to re-state the question as an argument would only add a way to get it
+# wrong. Used solely to choose the report language.
+_REQUEST_TEXT = ""
+
+
+def remember_request_text(text: str) -> None:
+    """Record the current question so generated deliverables match its language."""
+    global _REQUEST_TEXT
+    _REQUEST_TEXT = str(text or "")
+
+
+def _request_text() -> str:
+    return _REQUEST_TEXT
+
+
 # A worker is one long-lived process holding the resident frames. It is started on first use
 # and reused for the rest of the conversation, because its entire value is the state it keeps.
 _worker_lock = threading.Lock()
@@ -1063,13 +1080,18 @@ def _last_file() -> str | None:
 
 def export_deliverables(file_path: str = None, operation: str = "auto", by: str = None,
                         agg: str = None, columns: str = None, top_k: int = None,
-                        out_dir: str = None) -> str:
+                        out_dir: str = None, lang: str = None,
+                        lang_context: str = None) -> str:
     """
     Analyse on the GPU, then write charts, CSV exports and a Markdown report.
 
     Reuses the exact same engine invocation as `analyze_dataset`, so the numbers in the
     report are the same numbers the agent would otherwise have quoted in chat -- there is no
     second, subtly different code path that could disagree with the answer.
+
+    The report is written in the caller's language. Pass `lang_context` with the user's own
+    wording and the report follows the language they wrote in; pass `lang` as "zh" or "en" to
+    force one. With neither, the report is Chinese, which is this skill's primary audience.
 
     Never raises: every failure comes back as a structured error the model can act on.
     """
@@ -1122,7 +1144,10 @@ def export_deliverables(file_path: str = None, operation: str = "auto", by: str 
         # skill's internals and means a failure here cannot corrupt the agent process.
         proc2 = subprocess.run(
             [_python_bin(), script, "--input", "/dev/stdin", "--out-dir", target,
-             "--source-file", path],
+             "--source-file", path]
+            + (["--lang", str(lang)] if lang else [])
+            + (["--lang-context", str(lang_context or _request_text())]
+               if (lang_context or _request_text()) else []),
             input=proc.stdout, capture_output=True, text=True, timeout=600)
         if proc2.returncode != 0:
             detail = (proc2.stderr or "").strip().splitlines()

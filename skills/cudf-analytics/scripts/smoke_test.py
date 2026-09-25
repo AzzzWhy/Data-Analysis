@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -259,6 +260,57 @@ def main() -> int:
 
         code, out, err = run(["--input", csv, "--op", "summary", "--columns", "region"])
         check("non-numeric --columns exits 2", code == 2, str(code))
+
+        print("\n--deliverables: language follows the caller, not a hardcoded default")
+        # make_deliverables had no coverage here at all before this section. The language
+        # switch is exactly the kind of thing that looks fine and silently regresses, so it is
+        # asserted directly: a Chinese caller must get a Chinese report, an English caller an
+        # English one, and an English report must contain no Chinese at all.
+        try:
+            sys.path.insert(0, HERE)
+            import make_deliverables as MD
+
+            check("language: Chinese text selects zh",
+                  MD.detect_lang("分析这份数据") == "zh", MD.detect_lang("分析这份数据"))
+            check("language: English text selects en",
+                  MD.detect_lang("analyse this dataset") == "en",
+                  MD.detect_lang("analyse this dataset"))
+            check("language: no text defaults to zh",
+                  MD.detect_lang(None, "") == "zh", MD.detect_lang(None, ""))
+            check("language: an explicit value overrides detection",
+                  MD.resolve_lang("en", "分析这份数据") == "en"
+                  and MD.resolve_lang("zh", "analyse this") == "zh")
+
+            deliv_dir = os.path.join(tmpdir, "deliv")
+            payload = {"op": "auto", "engine": "cudf", "rows_scanned": 20000,
+                       "profile": {"rows": 20000, "columns": ["region", "revenue"],
+                                   "dtypes": {"region": "object", "revenue": "float64"}},
+                       "outliers": {"results": {"revenue": {"count": 5, "pct": 0.03,
+                                                            "lower_bound": -1.0,
+                                                            "upper_bound": 9.0}}}}
+            man_zh = MD.build(dict(payload), os.path.join(deliv_dir, "zh"),
+                              title="报告", source_file="fixture.csv", lang="zh")
+            man_en = MD.build(dict(payload), os.path.join(deliv_dir, "en"),
+                              title="Report", source_file="fixture.csv", lang="en")
+            md_zh = open(man_zh["report"], encoding="utf-8").read()
+            md_en = open(man_en["report"], encoding="utf-8").read()
+            check("zh report is Chinese", "分析行数" in md_zh and "数据概况" in md_zh)
+            check("en report is English", "Rows analysed" in md_en
+                  and "Dataset profile" in md_en)
+            check("en report carries no Chinese",
+                  not re.search(r"[\u4e00-\u9fff]", md_en),
+                  str(re.findall(r"[\u4e00-\u9fff]+", md_en)[:3]))
+            check("zh report states the full-scan claim",
+                  "全量扫描，非抽样" in md_zh)
+            check("zh report does not claim GPU rendering",
+                  "图表渲染并未使用 GPU" in md_zh)
+            check("both languages produce the same sections",
+                  md_zh.count("##") == md_en.count("##"),
+                  f"zh={md_zh.count('##')} en={md_en.count('##')}")
+            check("charts are produced for the report",
+                  man_en["chart_count"] >= 1, str(man_en["chart_count"]))
+        except Exception as exc:  # noqa: BLE001 - a smoke test should report, not crash
+            check("deliverables section ran", False, f"{type(exc).__name__}: {exc}")
 
         print("\n--force-cpu parity (CPU numbers must match the default path)")
         code, cpu_out, err = run(["--input", csv, "--op", "summary", "--force-cpu"])
