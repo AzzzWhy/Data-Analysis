@@ -261,8 +261,17 @@ python skills/cudf-analytics/scripts/smoke_test.py
 
 That runs every operation against ground truth computed independently in pandas and
 exits non-zero on any mismatch. On a GPU host it also checks that cuDF and pandas agree.
-Verified on GB10 (cuDF 25.10.00 / pandas 2.3.3): all 76 checks pass, with cuDF and
-pandas agreeing exactly on mean, median and max.
+Verified on GB10 (cuDF 25.10.00 / pandas 2.3.3): 80 checks pass on the current revision, with
+cuDF and pandas agreeing exactly on mean, median and max.
+
+The count is deliberately tied to a revision rather than stated as a permanent fact. It has
+already drifted twice: assertions were added without updating this line, so the number here went
+stale while the suite stayed green. The invariant to rely on is **exit code 0 and no `[FAIL]`
+line**, not the count. To read the count off the current revision:
+
+```bash
+python skills/cudf-analytics/scripts/smoke_test.py | grep -c '\[PASS\]'
+```
 
 To substantiate a CPU vs GPU claim, run the benchmark instead of asserting one:
 
