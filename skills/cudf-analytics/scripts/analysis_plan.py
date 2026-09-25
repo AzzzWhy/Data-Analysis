@@ -111,7 +111,8 @@ def _arg_str(args: Dict[str, Any]) -> str:
 CATALOG: Dict[str, Dict[str, Any]] = {
     # "why are these values odd, and where do they come from" -- the drill-down shape.
     "drill_down": {
-        "triggers": ["outlier", "anomal", "odd", "unusual", "why", "reason", "cause",
+        "triggers": ["异常", "离群", "为什么", "原因", "来源", "怎么来", "定位", "下钻",
+                     "outlier", "anomal", "odd", "unusual", "why", "reason", "cause",
                      "come from", "comes from", "trace", "pinpoint", "drill"],
         "why": ("Confirm the scope, size the anomaly, narrow it by dimension to a concrete group, "
                 "then check whether it is only an association between metrics"),
@@ -136,7 +137,8 @@ CATALOG: Dict[str, Dict[str, Any]] = {
     # that plan, then win on catalog order. The specific forms below cover the grouping
     # intent without that collision.
     "compare_groups": {
-        "triggers": ["compare", "comparison", "which", "rank", "group", "by ", "per ",
+        "triggers": ["对比", "比较", "哪个", "排名", "分组", "按 ", "按每", "各地区", "各类",
+                     "compare", "comparison", "which", "rank", "group", "by ", "per ",
                      "versus", " vs ", "across", "highest", "lowest", "top "],
         "why": ("Compare the totals, then the means, then check whether the spread explains the "
                 "gap, and finally whether the dimensions are independent"),
@@ -150,7 +152,8 @@ CATALOG: Dict[str, Dict[str, Any]] = {
     },
     # "is this dataset sound"
     "data_quality": {
-        "triggers": ["quality", "missing", "empty", "null", "duplicate", "dup", "dirty",
+        "triggers": ["质量", "缺失", "空值", "重复", "脏", "清洗",
+                     "quality", "missing", "empty", "null", "duplicate", "dup", "dirty",
                      "clean", "check", "integrity"],
         "why": ("Check the structure, then missing values, then outliers, then the shape of the "
                 "distributions"),
@@ -162,7 +165,8 @@ CATALOG: Dict[str, Dict[str, Any]] = {
     },
     # "how do these columns relate"
     "relationships": {
-        "triggers": ["correlat", "relat", "associat", "influence", "driver", "drive",
+        "triggers": ["相关", "关系", "关联", "影响", "因素", "驱动",
+                     "correlat", "relat", "associat", "influence", "driver", "drive",
                      "drives", "driving", "depend", "affect", "impact", "factor"],
         "why": ("Get the correlation matrix, then go back to the distributions to confirm that "
                 "extremes are not driving it, then check whether it holds across groups"),

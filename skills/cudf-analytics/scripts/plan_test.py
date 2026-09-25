@@ -65,6 +65,21 @@ def main() -> int:
         # "every" belongs to any plan, but "the relationship between each metric" is a
         # relationships question.
         ("what is the relationship between each of these metrics", "relationships"),
+        # Chinese goals are the primary input language for this skill -- SKILL.md lists Chinese
+        # trigger words, the demo script asks its questions in Chinese, and the criteria suite
+        # does too. These cases were lost when the repository was translated to English, and
+        # because the tests went with them the loss was invisible: the suite kept passing in
+        # English while every Chinese goal silently fell through to the default shape. Keep
+        # them here so that cannot happen again.
+        ("找出 revenue 的异常值并解释原因", "drill_down"),
+        ("这些异常是怎么来的", "drill_down"),
+        ("为什么这些离群值这么大", "drill_down"),
+        ("按 region 分组对比各地区的销售额", "compare_groups"),
+        ("哪个类别的排名最高", "compare_groups"),
+        ("这份数据的质量怎么样，有没有缺失", "data_quality"),
+        ("检查重复和空值", "data_quality"),
+        ("哪些指标之间相关性最强", "relationships"),
+        ("各指标之间的关系如何", "relationships"),
     ]
     for goal, want in cases:
         got = AP.choose_kind(goal)
