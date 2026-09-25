@@ -298,24 +298,32 @@ but they leave out the part that decides small-file cases: the GPU path carries 
 of fixed cost (0.03 s Python start, 0.55 s `import cudf`, 0.95 s import plus first DataFrame).
 On a small file that fixed cost is the whole runtime.
 
-Measured end-to-end, both engines fresh, same file, `--op auto`:
+Measured end-to-end, both engines fresh, same file, `--op auto`. The deciding axis is the file's
+**size in bytes**:
 
-| Rows | GPU | CPU | Ratio | Winner |
-| ---: | ---: | ---: | ---: | :--- |
-| 10,000 | 1.58 s | 0.20 s | 0.13x | CPU |
-| 1,000,000 | 1.83 s | 0.57 s | 0.31x | CPU |
-| 5,000,000 | 2.62 s | 2.23 s | 0.85x | CPU |
-| 8,000,000 | 3.09 s | 3.44 s | 1.11x | GPU |
-| 20,000,000 | 5.36 s | 8.09 s | 1.51x | GPU |
+| Shape | Rows | Size | CPU | GPU | Ratio | Winner |
+| :--- | ---: | ---: | ---: | ---: | ---: | :--- |
+| narrow | 5,000,000 | 0.217 GB | 2.21 s | 2.85 s | 0.78x | CPU |
+| narrow | 20,000,000 | 0.881 GB | 8.19 s | 5.40 s | 1.52x | GPU |
+| narrow | 50,000,000 | 2.500 GB | 25.23 s | 10.59 s | 2.38x | GPU |
+| wide | 4,000,000 | 0.604 GB | 4.66 s | 3.67 s | 1.27x | GPU |
+| wide | 20,000,000 | 3.038 GB | 21.61 s | 9.92 s | 2.18x | GPU |
+| wide | 40,000,000 | 6.082 GB | 44.59 s | 16.84 s | 2.65x | GPU |
 
-So the honest position is: **below roughly 6.5 million rows the GPU is slower, and the engine
-routes to pandas on its own** rather than reporting a speedup that is a slowdown. Use
-`--force-gpu` to override when you want the comparison instead of the fastest path.
+Note that the same 20,000,000 rows give 1.52x at 0.88 GB and 2.18x at 3.04 GB, so row count alone
+cannot decide this. Routing uses bytes with a width adjustment (0.55 GB for wide rows, 0.40 GB
+under 80 B/row), and **below that the engine routes to pandas on its own** rather than reporting a
+speedup that is a slowdown. Use `--force-gpu` to override when a comparison is wanted.
 
-Note the gap between 7.16x in the table above and 1.51x here: they measure different things, and
-both are correct. The 7.16x is compute-only with a 20-core pandas baseline; the 1.51x is the
-whole process including CSV parsing and startup, against the single-core pandas path the engine
-actually falls back to. Quote whichever one matches the question being asked, and say which it is.
+As data grows the rate is roughly linear and the speedup approaches the CPU/GPU cost ratio:
+~2.4x for narrow rows, ~4.6x or better for wide ones. But it is a ceiling, not a floor: the
+80,000,000-row point came in *lower* than the 50,000,000-row one per GB, confirmed by
+re-measurement, and memory rather than time is the real limit for very large files.
+
+Note the gap between 7.16x in the table above and 2.65x here: they measure different things, and
+both are correct. The 7.16x is compute-only with a 20-core pandas baseline; the end-to-end figures
+include CSV parsing and process startup against the single-core pandas path the engine actually
+falls back to. Quote whichever one matches the question being asked, and say which it is.
 
 ### Small data does get GPU speedup, but only when the fixed cost is amortised
 

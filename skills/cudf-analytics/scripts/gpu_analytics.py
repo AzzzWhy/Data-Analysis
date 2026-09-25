@@ -84,16 +84,29 @@ class Engine:
 
 _ENGINE: Optional[Engine] = None
 
-# Where the GPU stops losing. Measured on the GB10, not guessed: see pick_engine_for for the
-# full table. 5M rows was 0.85x and 8M rows 1.11x, so the crossover sits between them.
-SMALL_ROWS = 6_500_000
+# Where the GPU stops losing. The deciding quantity is the file's SIZE IN BYTES, not its row
+# count, because the cost being amortised is dominated by parsing bytes. Row count was the wrong
+# axis: the same 20M rows measured 1.57x at 0.88 GB and 2.18x at 3.04 GB, which no row-based
+# threshold can express.
+#
+# Width still matters, because a wide row of 17-digit floats costs the CPU more per byte than a
+# short integer row does. Measured crossover, both engines fresh, --op auto:
+#
+#   narrow  50 B/row: CPU wins at 0.217 GB (0.78x), GPU wins at 0.348 GB (1.03x) and 0.881 GB (1.52x)
+#   wide   152 B/row: CPU wins at 0.301 GB (0.85x), GPU wins at 0.604 GB (1.27x)
+#
+# So ~0.40 GB is the highest crossover seen and ~0.22 GB the lowest, and the threshold is placed
+# at the HIGH end on purpose: routing to the CPU when the GPU would have been marginally faster
+# costs a few percent, while routing to the GPU when the CPU would have won pays the full ~1.5 s
+# startup for nothing. Narrow rows get the conservative value because their CPU/GPU slope ratio
+# is the least favourable (CPU costs only ~4.3x the GPU per byte there, against ~10x for wide rows).
+CROSSOVER_BYTES = int(0.55e9)        # wide rows: crossover measured between 0.30 and 0.60 GB
+CROSSOVER_BYTES_NARROW = int(0.40e9)  # narrow rows: measured between 0.22 and 0.35 GB
+NARROW_BYTES_PER_ROW = 80.0          # below this, take the conservative threshold
 
-# A byte threshold is a poor primary signal because CSV density varies by more than 2x -- the
-# demo file is 152 bytes per row, so its 20M rows occupy only 881 MB, and a 950 MB threshold
-# sent the main demo to the CPU and threw away its GPU speedup. Row count is authoritative and
-# cheap to estimate; the byte check only short-circuits files so small that no plausible row
-# count could reach the crossover.
-TINY_FILE_BYTES = int(64e6)         # 64 MB
+# Kept for the row estimate's own sanity check and for callers that ask about rows; the routing
+# decision above no longer depends on it.
+SMALL_ROWS = 6_500_000
 
 
 def _read_table(mod: Any, path: str, usecols: Optional[Sequence[str]] = None,
@@ -194,6 +207,19 @@ def detect_engine(force_cpu: bool = False, verbose: bool = False) -> Engine:
     return engine
 
 
+def _fmt_size(nbytes: float) -> str:
+    """Format a byte count so it stays readable at both ends of the range.
+
+    Fixed GB formatting rendered a 0.4 MB file as "0.00 GB", which is useless to the model
+    reading the reason and to a user reading the report.
+    """
+    if nbytes < 1e6:
+        return f"{nbytes / 1e3:.0f} KB"
+    if nbytes < 1e9:
+        return f"{nbytes / 1e6:.1f} MB"
+    return f"{nbytes / 1e9:.2f} GB"
+
+
 def pick_engine_for(path: str, op: str, force_cpu: bool = False,
                     force_gpu: bool = False, verbose: bool = False) -> Tuple[bool, Optional[str]]:
     """Decide whether the GPU is worth using for this file, from measured numbers.
@@ -204,23 +230,31 @@ def pick_engine_for(path: str, op: str, force_cpu: bool = False,
     Why this exists: on the GPU path a large part of the runtime is fixed cost, not compute.
     Measured on the GB10 by decomposing it: 0.03 s bare Python start, 0.55 s to import cudf,
     0.95 s to import cudf and build one DataFrame. A 10,000-row file therefore costs 1.58 s on
-    the GPU against 0.19 s on the CPU -- 8x SLOWER, and the ratio is entirely startup. The
-    crossover, measured on real files of one to twenty million rows:
+    the GPU against 0.19 s on the CPU -- 8x SLOWER, and the ratio is entirely startup.
 
-        rows      GPU s    CPU s   ratio
-       5,000,000   2.62    2.23    0.85x   CPU
-       8,000,000   3.09    3.44    1.11x   GPU
-      10,000,000   3.60    4.10    1.14x   GPU
-      15,000,000   4.38    6.11    1.40x   GPU
-      20,000,000   5.36    8.09    1.51x   GPU
+    Measured, both engines fresh, --op auto. Size in bytes is the deciding axis:
 
-    So below roughly eight million rows the honest answer is that pandas wins, and using the
-    GPU there would be slower while looking more impressive. The thresholds below are the
-    measured crossover with margin on the CPU side, because being slower is a real cost while
-    giving up a little headroom on the GPU side is not.
+        file                    rows        size     CPU s    GPU s   ratio
+        narrow  50 B/row     5,000,000   0.217 GB    2.21     2.85   0.78x  CPU
+        narrow  50 B/row     8,000,000   0.348 GB    3.35     3.25   1.03x  GPU
+        narrow  50 B/row    20,000,000   0.881 GB    8.19     5.40   1.52x  GPU
+        wide   152 B/row     2,000,000   0.301 GB    2.35     2.76   0.85x  CPU
+        wide   152 B/row     4,000,000   0.604 GB    4.66     3.67   1.27x  GPU
+        wide   150 B/row    20,000,000   3.038 GB   21.61     9.92   2.18x  GPU
+        wide   152 B/row    40,000,000   6.082 GB   44.59    16.84   2.65x  GPU
 
-    Row count is read from a prefix of the file rather than counted, and file size is the
-    backstop when no newline is found in that prefix.
+    Two things this table says that an earlier row-based threshold got wrong:
+
+    1. The axis is BYTES. The same 20M rows measured 1.52x at 0.88 GB and 2.18x at 3.04 GB, so
+       row count cannot express the decision on its own.
+    2. Width still shifts the crossover, because a 17-digit float column costs the CPU more per
+       byte than a short integer column. Measured crossover is 0.22-0.35 GB for narrow rows and
+       0.30-0.60 GB for wide ones. Narrow rows therefore get the more conservative threshold,
+       their CPU/GPU slope ratio being the least favourable (~4.3x per byte against ~10x).
+
+    Thresholds sit at the HIGH end of each measured band on purpose: routing to the CPU when the
+    GPU would have been marginally faster costs a few percent, while routing to the GPU when the
+    CPU would have won pays the full ~1.5 s startup for nothing.
     """
     if force_cpu:
         return False, "CPU forced by --force-cpu"
@@ -232,19 +266,26 @@ def pick_engine_for(path: str, op: str, force_cpu: bool = False,
         size = os.path.getsize(path)
     except OSError:
         pass
-
-    if size is not None and size < TINY_FILE_BYTES:
-        # Too small for the fixed cost to amortise under any plausible row density.
-        return False, (f"file is {size / 1e6:.1f} MB, far below the size at which the GPU's "
-                       f"fixed startup cost can amortise")
+    if size is None:
+        return True, None
 
     rows = _estimate_rows(path)
-    if rows is not None and rows < SMALL_ROWS:
-        return False, (f"about {rows:,} rows, below the {SMALL_ROWS:,}-row crossover measured "
-                       f"on this hardware: the GPU is slower at this size because most of its "
-                       f"runtime is fixed startup cost, not compute")
-    if verbose and rows is not None:
-        _log(f"row estimate {rows:,} >= {SMALL_ROWS:,}; using the GPU")
+    per_row = (size / rows) if (rows and rows > 0) else None
+    narrow = per_row is not None and per_row < NARROW_BYTES_PER_ROW
+    threshold = CROSSOVER_BYTES_NARROW if narrow else CROSSOVER_BYTES
+
+    if size < threshold:
+        shape = (f"about {per_row:.0f} bytes per row over roughly {rows:,} rows"
+                 if per_row is not None else "this file")
+        return False, (
+            f"file is {_fmt_size(size)} ({shape}), below the {_fmt_size(threshold)} crossover "
+            f"measured on this hardware. The GPU is slower at this size because most of its "
+            f"runtime is fixed startup cost (~1.5 s) rather than compute, and the CPU path wins "
+            f"on bytes parsed per second. Pass force_gpu=true to compare anyway."
+        )
+    if verbose:
+        _log(f"{_fmt_size(size)} >= {_fmt_size(threshold)} crossover"
+             f"{f' at {per_row:.0f} B/row' if per_row else ''}; using the GPU")
     return True, None
 
 

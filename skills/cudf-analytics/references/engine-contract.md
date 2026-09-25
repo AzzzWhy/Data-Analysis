@@ -28,25 +28,36 @@ Fixed cost, measured on the GB10 by decomposition:
 | `import cudf` | 0.55 |
 | `import cudf` + build one DataFrame | 0.95 |
 
-Crossover, measured on real files:
+Crossover, measured with both engines fresh and `--op auto`. The deciding axis is **bytes**, and
+row width shifts where the crossover sits:
 
-| Rows | GPU s | CPU s | Ratio | Winner |
-| ---: | ---: | ---: | ---: | :--- |
-| 10,000 | 1.58 | 0.20 | 0.13× | CPU |
-| 100,000 | 1.61 | 0.24 | 0.15× | CPU |
-| 1,000,000 | 1.83 | 0.57 | 0.31× | CPU |
-| 5,000,000 | 2.62 | 2.23 | 0.85× | CPU |
-| **8,000,000** | 3.09 | 3.44 | **1.11×** | **GPU** |
-| 10,000,000 | 3.60 | 4.10 | 1.14× | GPU |
-| 15,000,000 | 4.38 | 6.11 | 1.40× | GPU |
-| 20,000,000 | 5.36 | 8.09 | 1.51× | GPU |
+| Shape | Rows | Size | CPU s | GPU s | Ratio | Winner |
+| :--- | ---: | ---: | ---: | ---: | ---: | :--- |
+| narrow, ~41 B/row | 5,000,000 | 0.217 GB | 2.21 | 2.85 | 0.78× | CPU |
+| narrow, ~41 B/row | 8,000,000 | 0.348 GB | 3.35 | 3.25 | 1.03× | GPU (marginal) |
+| narrow, ~44 B/row | 20,000,000 | 0.881 GB | 8.19 | 5.40 | 1.52× | GPU |
+| narrow, 50 B/row | 50,000,000 | 2.500 GB | 25.23 | 10.59 | 2.38× | GPU |
+| wide, 152 B/row | 2,000,000 | 0.301 GB | 2.35 | 2.76 | 0.85× | CPU |
+| wide, 152 B/row | 4,000,000 | 0.604 GB | 4.66 | 3.67 | 1.27× | GPU |
+| wide, 152 B/row | 20,000,000 | 3.038 GB | 21.61 | 9.92 | 2.18× | GPU |
+| wide, 152 B/row | 40,000,000 | 6.082 GB | 44.59 | 16.84 | 2.65× | GPU |
 
-The crossover is between 5M and 8M rows, so the routing threshold is **6,500,000 rows** and a
-byte shortcut of **64 MB** catches files too small for any plausible row density.
+Two corrections this table forced, both of which were wrong in an earlier version of this file:
+
+1. **The axis is bytes, not rows.** The same 20,000,000 rows measured 1.52× at 0.88 GB and 2.18×
+   at 3.04 GB. No row-count threshold can express that.
+2. **Width still shifts the crossover**, because a 17-digit float column costs the CPU more per
+   byte than a short integer column. The measured crossover band is 0.22–0.35 GB for narrow rows
+   and 0.30–0.60 GB for wide rows.
+
+So the thresholds are `0.55 GB` for wide rows and `0.40 GB` for narrow rows (under 80 B/row), and
+both sit at the HIGH end of their measured band on purpose: routing to the CPU when the GPU would
+have been marginally faster costs a few percent, while routing to the GPU when the CPU would have
+won pays the full ~1.5 s startup for nothing.
 
 | Flag | Effect |
 | :--- | :--- |
-| `--engine auto` (default) | Route by the row estimate above |
+| `--engine auto` (default) | Route by file size in bytes, with the width adjustment above |
 | `--engine cpu` / `--force-cpu` | Force pandas |
 | `--engine gpu` / `--force-gpu` | Force cuDF, even below the crossover |
 
@@ -60,10 +71,37 @@ A deliberate routing decision never populates `fallback_reason`, because reporti
 choice as a defect would both mislead the caller and hide a real fallback when one happens.
 
 Row count is **estimated** from a 1 MB prefix, not counted: counting exactly would cost a full
-read, which is the thing the engine exists to avoid paying twice. Measured error is under 8% on
-files of 200k rows, and the estimate is density-independent, which matters because a byte-only
-threshold got this wrong — the demo file is 152 bytes per row, so its 20M rows occupy only 881 MB
-and a 950 MB byte threshold sent the main demo to the CPU and threw away its speedup.
+read, which is the thing the engine exists to avoid paying twice. It is now used only to derive
+bytes-per-row for the width adjustment; the routing decision itself is made on size, since that is
+the quantity that decides. Measured error on the estimate is under 8% on files of 200k rows, and
+it is density-independent.
+
+### What happens as data keeps growing
+
+Fitting both engines per byte of CSV, over the measured points:
+
+| Shape | CPU per byte | GPU per byte | CPU/GPU slope | Predicted ceiling |
+| :--- | ---: | ---: | ---: | ---: |
+| narrow, ~50 B/row | ~10.2 s/GB | ~2.4 s/GB | ~4.3× | ~4.3× |
+| wide, ~152 B/row | ~7.2 s/GB | ~1.5 s/GB | ~4.6–8× | ~4.6–8× |
+
+The rate is roughly linear while the file fits comfortably in memory, and the speedup approaches
+the slope ratio. Measured 6.08 GB at 2.65× against a model prediction of 2.7×, so the linear range
+holds at least to 6 GB.
+
+Do **not** read this as an unbounded trend, and be careful quoting larger extrapolations:
+
+- The 80,000,000-row point (4.00 GB) came in at 2.09×, below the 50,000,000-row point's 2.38×, and
+  a best-of-3 re-measurement confirmed 2.09× rather than thermal noise. Per GB the GPU cost rose
+  from 4.24 s/GB at 2.5 GB to 5.37 s/GB at 4.0 GB, while the CPU cost stayed flat near 10.3 s/GB.
+  The GPU path degrades before the CPU one does, so the ceiling is a ceiling and not a floor that
+  keeps rising.
+- Memory is the hard limit, not time. cuDF is a device library: a 6 GB CSV plus the frame built
+  from it must coexist with the CUDA context, and the resident-session path holds it for the
+  session's life. The GB10 has 121 GB of unified memory so this is far off, but on a smaller
+  device it binds long before the speedup curve flattens.
+- These are single-op end-to-end timings. The multi-step resident-session numbers below are a
+  separate effect and are not additive with this.
 
 ### Small data: when the GPU still wins, and it is not about rows
 

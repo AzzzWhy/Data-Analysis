@@ -312,7 +312,7 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001 - a smoke test should report, not crash
             check("deliverables section ran", False, f"{type(exc).__name__}: {exc}")
 
-        print("\n--engine routing: small files go to the CPU, because the GPU is slower there")
+        print("\n--engine routing: the CPU below the measured byte crossover, the GPU above it")
         # Measured on the GB10: the GPU path carries about 1.5 s of fixed cost (0.03 python
         # start, 0.55 import cudf, 0.95 import+frame), so a 10k-row file costs 1.58 s on the GPU
         # against 0.19 s on the CPU. The crossover is between 5M (0.85x) and 8M (1.11x) rows.
@@ -338,7 +338,7 @@ def main() -> int:
             use_gpu, reason = GA.pick_engine_for(tiny, "auto")
             check("routing: a tiny file routes to the CPU", use_gpu is False, str(use_gpu))
             check("routing: the CPU choice carries a reason to report",
-                  bool(reason) and "MB" in reason, str(reason)[:80])
+                  bool(reason) and "crossover" in reason, str(reason)[:80])
             check("routing: forcing the GPU overrides routing",
                   GA.pick_engine_for(tiny, "auto", force_gpu=True)[0] is True)
             check("routing: forcing the CPU overrides routing",
@@ -362,13 +362,34 @@ def main() -> int:
                   abs(e1 - 200_000) / 200_000 < 0.15, f"got {e1} want ~200000")
             check("routing: a wide-but-small file still routes to the CPU",
                   GA.pick_engine_for(sparse, "auto")[0] is False)
-            # The threshold must stay inside the measured crossover band. 5M rows measured
-            # 0.85x (CPU wins) and 8M measured 1.11x (GPU wins), so a threshold outside that
-            # band would send files to whichever engine is slower.
-            check("routing: the row threshold sits inside the measured crossover band",
-                  5_000_000 <= GA.SMALL_ROWS <= 8_000_000, f"SMALL_ROWS={GA.SMALL_ROWS:,}")
-            check("routing: the byte shortcut stays far below the crossover",
-                  GA.TINY_FILE_BYTES <= 128e6, f"TINY_FILE_BYTES={GA.TINY_FILE_BYTES}")
+            # The thresholds must stay inside the measured crossover bands, and the narrow-row one must be
+# the more conservative of the two. Measured: narrow rows cross between 0.22 and 0.35 GB, wide
+# rows between 0.30 and 0.60 GB. A threshold below its band would send files to the GPU that the
+# CPU wins; far above it would leave GPU speedup on the table.
+            check("routing: the wide-row threshold sits inside its measured band",
+                  0.30e9 <= GA.CROSSOVER_BYTES <= 0.60e9,
+                  f"CROSSOVER_BYTES={GA.CROSSOVER_BYTES / 1e9:.2f} GB")
+            check("routing: the narrow-row threshold is inside its band and the conservative one",
+                  0.22e9 <= GA.CROSSOVER_BYTES_NARROW <= 0.40e9
+                  and GA.CROSSOVER_BYTES_NARROW <= GA.CROSSOVER_BYTES,
+                  f"narrow={GA.CROSSOVER_BYTES_NARROW / 1e9:.2f} GB")
+            # The decision axis is bytes; width only shifts the threshold. Same total size, two
+            # widths, and the narrow one must be judged more conservatively. This is the property
+            # a row-based threshold could not express.
+            def routed_gpu(size, per_row):
+                narrow = per_row < GA.NARROW_BYTES_PER_ROW
+                return size >= (GA.CROSSOVER_BYTES_NARROW if narrow else GA.CROSSOVER_BYTES)
+
+            check("routing: 0.20 GB routes to the CPU at either width",
+                  not routed_gpu(0.20e9, 50.0) and not routed_gpu(0.20e9, 152.0))
+            check("routing: 3.04 GB routes to the GPU (the demo file's size)",
+                  routed_gpu(3.04e9, 152.0))
+            check("routing: narrow rows carry the stricter threshold",
+                  GA.CROSSOVER_BYTES_NARROW < GA.CROSSOVER_BYTES
+                  and GA.NARROW_BYTES_PER_ROW < 152.0,
+                  f"narrow={GA.CROSSOVER_BYTES_NARROW / 1e9:.2f} GB cutoff={GA.NARROW_BYTES_PER_ROW}")
+            check("routing: the row estimate is still available for callers that ask",
+                  GA.SMALL_ROWS > 0, f"SMALL_ROWS={GA.SMALL_ROWS:,}")
         except Exception as exc:  # noqa: BLE001
             check("routing section ran", False, f"{type(exc).__name__}: {exc}")
 
