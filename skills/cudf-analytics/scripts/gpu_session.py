@@ -181,6 +181,7 @@ def _err(msg: str, **extra) -> dict:
 
 
 def do_open(req: dict) -> dict:
+    request_started = time.perf_counter()
     path = req.get("path")
     if not path or not str(path).strip():
         return _err("path is required")
@@ -219,6 +220,16 @@ def do_open(req: dict) -> dict:
                 "load_seconds": round(existing.load_seconds, 3),
                 "reused_existing_session": True,
                 "already_loaded": True,
+                "execution_decision": GA.execution_decision_record(
+                    mode="reuse", policy="resident_reuse",
+                    selected_backend=existing.engine.name,
+                    actual_backend=existing.engine.name,
+                    reason="reused the existing resident frame; no file was reloaded",
+                    signals={"operation": "open", "file_size_bytes": os.path.getsize(path),
+                             "session_id": existing.sid},
+                    observed={"phase": "session_reuse", "elapsed_seconds": round(
+                        time.perf_counter() - request_started, 6), "rows_scanned": 0},
+                ),
                 "note": (
                     f"This file is already loaded, so session {existing.sid} is reused and no "
                     "second copy took device memory. **Use session_id="
@@ -242,10 +253,15 @@ def do_open(req: dict) -> dict:
 
     force_cpu = bool(req.get("force_cpu"))
     force_gpu = bool(req.get("force_gpu"))
+    decision_mode = "force_cpu" if force_cpu else "force_gpu" if force_gpu else "auto"
+    route_reason = "CPU forced by the caller" if force_cpu else None
+    route_details: Dict[str, Any] = {}
     # Preserve the single-query heuristic. Both engines can keep data resident:
     # resident GPU versus stateless CPU is not a fair acceleration comparison.
     if not force_cpu and not force_gpu:
-        use_gpu, route_reason = GA.pick_engine_for(str(path), "session")
+        use_gpu, route_reason = GA.pick_engine_for(
+            str(path), "session", details=route_details
+        )
         if not use_gpu:
             return _err(
                 "no GPU session opened: " + str(route_reason),
@@ -260,6 +276,7 @@ def do_open(req: dict) -> dict:
                 suggest_engine="pandas",
                 session_worth_it_if="several analyses over the same file, not one",
             )
+    selected_backend = "pandas" if force_cpu else "cudf"
     try:
         eng = GA.detect_engine(force_cpu=force_cpu)
     except Exception as exc:
@@ -271,10 +288,11 @@ def do_open(req: dict) -> dict:
         cols = [c.strip() for c in str(usecols).split(",") if c.strip()]
 
     started = time.perf_counter()
+    read_fallback = None
     try:
         frame = eng.read(path, usecols=cols)
     except Exception as exc:
-        reason = ("read failed: " + str(exc)) if eng.is_gpu else None
+        read_fallback = ("read failed: " + str(exc)) if eng.is_gpu else None
         if eng.is_gpu:
             # Same fallback rule as the stateless path: if cuDF cannot read it, retry pandas.
             try:
@@ -283,7 +301,7 @@ def do_open(req: dict) -> dict:
             except Exception as exc2:
                 return _err(f"read failed: {type(exc2).__name__}: {exc2}")
         else:
-            return _err(f"read failed: {type(exc).__name__}: {exc}", reason=reason)
+            return _err(f"read failed: {type(exc).__name__}: {exc}", reason=read_fallback)
     load_seconds = time.perf_counter() - started
 
     if not hasattr(frame, "columns") or len(frame.columns) == 0:
@@ -294,6 +312,7 @@ def do_open(req: dict) -> dict:
     sess = Session(
         sid=sid, path=path, engine=eng, frame=frame, rows=int(len(frame)),
         identity=_file_identity(path), load_seconds=load_seconds,
+        reason=route_reason if selected_backend == "pandas" else None,
     )
     # A CPU-resident frame is the honest baseline for this same file, and it is measured
     # without touching the GPU. Failures here must not fail the open.
@@ -328,12 +347,39 @@ def do_open(req: dict) -> dict:
         "load_seconds": round(load_seconds, 3),
         "cpu_load_seconds": round(sess.cpu_load_seconds, 3) if sess.cpu_load_seconds else None,
         "resident_mb": resident_mb,
+        "execution_decision": GA.execution_decision_record(
+            mode=decision_mode,
+            policy="caller_override" if decision_mode != "auto" else
+                   "measured_file_size_crossover",
+            selected_backend=selected_backend,
+            actual_backend=eng.name,
+            reason=route_reason or (
+                "GPU forced by the caller" if decision_mode == "force_gpu" else
+                "the measured file-size crossover policy selected GPU; this is not an "
+                "operation-specific cost prediction"
+            ),
+            signals={"operation": "open", "file_size_bytes": os.path.getsize(path),
+                     "admission_required_free_gb": round(need_gb, 3),
+                     "free_device_gb": round(free_gb, 3) if free_gb is not None else None,
+                     **route_details},
+            observed={"phase": "session_open", "elapsed_seconds": round(
+                time.perf_counter() - request_started, 6),
+                "load_seconds": round(load_seconds, 6), "resident_mb": resident_mb,
+                "rows_scanned": sess.rows},
+            fallback_reason=read_fallback or (
+                eng.reason if selected_backend == "cudf" and not eng.is_gpu else None
+            ),
+        ),
         "contract": (
             f"The frame is resident in memory ({eng.name}), {sess.rows:,} rows. Every later "
             "analyze runs on all of it: nothing is re-read from disk and nothing is sampled. "
             "Call close when the analysis is done."
         ),
     }
+    if sess.reason:
+        out["routing_reason"] = sess.reason
+    if out["execution_decision"]["fallback_reason"]:
+        out["fallback_reason"] = out["execution_decision"]["fallback_reason"]
 
     # Build a plan when a goal was given, or when the caller asked for one. The plan is
     # filled in with real column names discovered right here, so the model receives an
@@ -352,6 +398,9 @@ def do_open(req: dict) -> dict:
             "always continue from the next one without tracking progress yourself. If a step "
             "looks wrong you can skip it, and the system marks skipped steps."
         )
+    out["execution_decision"]["observed"]["elapsed_seconds"] = round(
+        time.perf_counter() - request_started, 6
+    )
     return out
 
 
@@ -410,11 +459,20 @@ def do_analyze(req: dict) -> dict:
     args.input = sess.path
 
     started = time.perf_counter()
+    reread_for_fallback = False
+
+    def load_for(engine):
+        nonlocal reread_for_fallback
+        if engine.name == sess.engine.name:
+            return sess.frame
+        # A cuDF operation can be unsupported. The pandas retry needs a pandas frame,
+        # not the resident cuDF frame handed to it under a different engine label.
+        reread_for_fallback = True
+        return engine.read(sess.path, usecols=list(sess.frame.columns))
+
     try:
-        # The whole point: `load` hands back the resident frame, so `execute` never reads
-        # the file. Every other behaviour (ops, fallback, timing) is the shared code path.
         payload, used, _elapsed, fallback, rows = GA.execute(
-            sess.engine, lambda _eng: sess.frame, op, args
+            sess.engine, load_for, op, args
         )
     except Exception as exc:
         return _err(f"{op} failed: {type(exc).__name__}: {exc}")
@@ -434,16 +492,36 @@ def do_analyze(req: dict) -> dict:
         "step_seconds": round(step_seconds, 3),
         "cumulative_seconds": round(sess.load_seconds + sess.analysis_seconds, 3),
         "steps_this_session": sess.steps,
+        "execution_decision": GA.execution_decision_record(
+            mode="resident", policy="resident_reuse",
+            selected_backend=sess.engine.name, actual_backend=used.name,
+            reason=(f"reused the resident {sess.engine.name} frame; no file was reloaded"
+                    if not reread_for_fallback else
+                    f"the resident {sess.engine.name} operation fell back to {used.name}; "
+                    "the file was reloaded for the fallback"),
+            signals={"operation": op, "file_size_bytes": sess.identity[1],
+                     "session_id": sess.sid, "resident": True},
+            observed={"phase": "session_step", "elapsed_seconds": round(step_seconds, 6),
+                      "compute_seconds": payload.get("compute_seconds"),
+                      "rows_scanned": rows,
+                      "reread_for_fallback": reread_for_fallback},
+            fallback_reason=fallback,
+        ),
         op: payload,
     }
+    if sess.reason:
+        out["routing_reason"] = sess.reason
     if fallback:
         out["fallback_reason"] = fallback
     # Restate the invariant every time: the model should never drift into describing a
     # session step as a sample.
+    data_path_note = ("The GPU operation fell back to pandas, which re-read the full file. "
+                      if reread_for_fallback else
+                      f"This step ran on all {rows:,} resident rows, with no read from disk. ")
     out["note"] = (
-        f"This step ran on all {rows:,} resident rows, with no read from disk. "
+        data_path_note +
         f"Session total {out['cumulative_seconds']:.2f}s (load {sess.load_seconds:.2f}s + "
-        f"{sess.steps} steps of compute {sess.analysis_seconds:.2f}s)."
+        f"{sess.steps} steps of analysis {sess.analysis_seconds:.2f}s)."
     )
 
     # --- plan bookkeeping -------------------------------------------------------------

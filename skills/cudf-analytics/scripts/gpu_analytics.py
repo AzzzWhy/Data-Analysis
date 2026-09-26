@@ -221,7 +221,8 @@ def _fmt_size(nbytes: float) -> str:
 
 
 def pick_engine_for(path: str, op: str, force_cpu: bool = False,
-                    force_gpu: bool = False, verbose: bool = False) -> Tuple[bool, Optional[str]]:
+                    force_gpu: bool = False, verbose: bool = False,
+                    details: Optional[Dict[str, Any]] = None) -> Tuple[bool, Optional[str]]:
     """Decide whether the GPU is worth using for this file, from measured numbers.
 
     Returns (use_gpu, reason). reason is set when the CPU was chosen deliberately, so the
@@ -256,6 +257,8 @@ def pick_engine_for(path: str, op: str, force_cpu: bool = False,
     GPU would have been marginally faster costs a few percent, while routing to the GPU when the
     CPU would have won pays the full ~1.5 s startup for nothing.
     """
+    if details is not None:
+        details.update({"policy": "measured_file_size_crossover", "operation": op})
     if force_cpu:
         return False, "CPU forced by --force-cpu"
     if force_gpu:
@@ -273,6 +276,13 @@ def pick_engine_for(path: str, op: str, force_cpu: bool = False,
     per_row = (size / rows) if (rows and rows > 0) else None
     narrow = per_row is not None and per_row < NARROW_BYTES_PER_ROW
     threshold = CROSSOVER_BYTES_NARROW if narrow else CROSSOVER_BYTES
+    if details is not None:
+        details.update({
+            "file_size_bytes": size,
+            "estimated_rows": rows,
+            "estimated_bytes_per_row": round(per_row, 2) if per_row is not None else None,
+            "crossover_bytes": threshold,
+        })
 
     if size < threshold:
         shape = (f"about {per_row:.0f} bytes per row over roughly {rows:,} rows"
@@ -287,6 +297,33 @@ def pick_engine_for(path: str, op: str, force_cpu: bool = False,
         _log(f"{_fmt_size(size)} >= {_fmt_size(threshold)} crossover"
              f"{f' at {per_row:.0f} B/row' if per_row else ''}; using the GPU")
     return True, None
+
+
+def execution_decision_record(*, mode: str, policy: str, selected_backend: str,
+                              actual_backend: str, reason: str, signals: Dict[str, Any],
+                              observed: Dict[str, Any], fallback_reason: Optional[str] = None
+                              ) -> Dict[str, Any]:
+    """A stable, factual decision trace shared by one-off and resident execution.
+
+    Cost predictions stay null until a calibrated per-operation model exists. An admission
+    headroom check is a safety threshold, not an estimate of peak memory usage.
+    """
+    return {
+        "schema_version": 1,
+        "mode": mode,
+        "policy": policy,
+        "selected_backend": selected_backend,
+        "actual_backend": actual_backend,
+        "reason": reason,
+        "signals": signals,
+        "estimate": {
+            "elapsed_seconds": None,
+            "peak_memory_mb": None,
+            "status": "not_calibrated",
+        },
+        "observed": observed,
+        "fallback_reason": fallback_reason,
+    }
 
 
 def _estimate_rows(path: str, sample_bytes: int = 1 << 20) -> Optional[int]:
@@ -981,13 +1018,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         force_cpu = bool(args.force_cpu) or (args.engine == "cpu")
         force_gpu = bool(args.force_gpu) or (args.engine == "gpu")
         route_reason: Optional[str] = None
+        route_details: Dict[str, Any] = {}
+        mode = "force_cpu" if force_cpu else "force_gpu" if force_gpu else "auto"
         if not force_cpu and not force_gpu:
-            use_gpu, route_reason = pick_engine_for(path, args.op, verbose=args.verbose)
+            use_gpu, route_reason = pick_engine_for(
+                path, args.op, verbose=args.verbose, details=route_details
+            )
             force_cpu = not use_gpu
             if args.verbose and route_reason:
                 _log(f"CPU chosen: {route_reason}")
         elif force_cpu:
             route_reason = "CPU forced by the caller"
+        selected_backend = "pandas" if force_cpu else "cudf"
         eng = detect_engine(force_cpu=force_cpu, verbose=args.verbose)
         payload, used, elapsed, fallback, rows = execute(eng, load, args.op, args)
         # A deliberate CPU choice is not a fallback. Keeping them separate matters: a fallback
@@ -1015,6 +1057,25 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if fallback_reason is None and not used.is_gpu and route_reason is None:
         fallback_reason = used.reason
 
+    total_seconds = round(time.perf_counter() - t_start, 6)
+    decision_reason = route_reason or (
+        "GPU forced by the caller" if mode == "force_gpu" else
+        "the measured file-size crossover policy selected GPU; this is not an "
+        "operation-specific cost prediction"
+    )
+    decision = execution_decision_record(
+        mode=mode,
+        policy="caller_override" if mode != "auto" else "measured_file_size_crossover",
+        selected_backend=selected_backend,
+        actual_backend=used.name,
+        reason=decision_reason,
+        signals={"operation": args.op, "file_size_bytes": os.path.getsize(path),
+                 **route_details},
+        observed={"phase": "request_total", "elapsed_seconds": total_seconds,
+                  "compute_seconds": payload.get("compute_seconds"), "rows_scanned": rows},
+        fallback_reason=fallback_reason,
+    )
+
     result: Dict[str, Any] = {
         "ok": True,
         "op": args.op,
@@ -1026,9 +1087,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "accelerated": used.is_gpu,
         "fallback_reason": fallback_reason,
         "routing_reason": route_reason,
+        "execution_decision": decision,
         "rows_scanned": rows,
         "op_seconds": round(elapsed, 6),
-        "total_seconds": round(time.perf_counter() - t_start, 6),
+        "total_seconds": total_seconds,
     }
     result.update(payload)
 

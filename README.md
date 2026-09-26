@@ -507,6 +507,20 @@ agent can tell whether the GPU path was actually taken:
   "gpu": "NVIDIA GB10",
   "accelerated": true,           // the GPU path really ran
   "fallback_reason": null,       // populated when it did not
+  "execution_decision": {
+    "schema_version": 1,
+    "mode": "auto",             // auto, force_cpu, force_gpu or resident reuse
+    "policy": "measured_file_size_crossover",
+    "selected_backend": "cudf", // policy choice before probing/fallback
+    "actual_backend": "cudf",   // what really ran
+    "reason": "...",            // human-readable selection rationale
+    "signals": {"operation": "groupby", "file_size_bytes": 3038000000},
+    "estimate": {"elapsed_seconds": null, "peak_memory_mb": null,
+                 "status": "not_calibrated"},
+    "observed": {"phase": "request_total", "elapsed_seconds": 2.63,
+                 "compute_seconds": 1.91, "rows_scanned": 20000000},
+    "fallback_reason": null
+  },
   "total_seconds": 2.63,         // end to end, including the read
   "groupby": {
     "by": "region",
@@ -519,6 +533,14 @@ agent can tell whether the GPU path was actually taken:
   }
 }
 ```
+
+`execution_decision` is also returned for resident session open, reuse and analysis steps.
+Its `selected_backend` and `actual_backend` differ when a GPU attempt falls back to pandas.
+Until a per-operation cost model has been calibrated, elapsed-time and peak-memory estimates
+are explicitly null; the session admission threshold (`admission_required_free_gb`) is a safety
+headroom requirement, not a prediction of peak memory. Existing result fields remain available.
+Run `python skills/cudf-analytics/scripts/execution_decision_test.py` for the CPU-only contract
+checks, including forced GPU requests on machines without cuDF.
 
 Exit codes, observed rather than assumed:
 

@@ -940,7 +940,8 @@ def analyze_dataset(file_path: str, operation: str, by: str = None, agg: str = N
             )
 
         # Strip the echo of the input path (the model already knows it) and compact the rest.
-        result = {k: v for k, v in payload.items() if k != "input"}
+        result = {k: v for k, v in payload.items()
+                  if k not in ("input", "execution_decision")}
         # Remember the target so a follow-up "now chart that" needs no path from the user.
         _remember_last_file(path)
         if isinstance(result.get("corr"), dict) and "matrix" in result["corr"]:
@@ -965,6 +966,7 @@ def analyze_dataset(file_path: str, operation: str, by: str = None, agg: str = N
             "accelerated": payload.get("accelerated"),
             "rows_scanned": rows_scanned,
             "seconds": payload.get("total_seconds"),
+            "execution_decision": payload.get("execution_decision"),
             "result": _compact(result),
         }
         # Tell the model plainly when it did NOT get GPU speed, so it cannot overclaim. The two cases
@@ -1225,6 +1227,7 @@ def export_deliverables(file_path: str = None, operation: str = "auto", by: str 
             "data_files": manifest["data_files"],
             "chart_count": manifest["chart_count"],
             "engine": (payload.get("engine") or "unknown"),
+            "execution_decision": payload.get("execution_decision"),
             "rows_scanned": manifest.get("rows_scanned"),
             "total_seconds": payload.get("total_seconds"),
             "note": manifest["note"],
