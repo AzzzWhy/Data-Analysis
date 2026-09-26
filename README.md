@@ -8,14 +8,16 @@ Submitted to the third NVIDIA DGX Spark Hackathon, Agent Skills track.
 
 ## Newly verified evidence
 
-Interactive SSH sessions now open a full-screen workbench: dataset path sidebar, scrollable
-Markdown results, fixed question input, actual CPU/GPU status, elapsed time and F2 execution
-details. Install `pip install -r requirements-tui.txt`, then run `python agent/agent_main.py`.
-Paste a server-side path in the left input and press Enter, then ask your question below.
-The classic ANSI-blue layout uses character-framed panes and compact reverse-video status
-bars, including on terminals without true-color support. F1 shows help, F2 toggles logs,
-F3 focuses the file path, F4 focuses the question, and F10 exits safely. Ctrl+L / Ctrl+Q
-remain available. The previous modern interface is preserved at commit `c5bd101`.
+Interactive SSH sessions open a conversation-first terminal inspired by Claude Code's
+restrained interaction style: warm accents, scrollable Markdown answers, a fixed prompt,
+actual CPU/GPU status and elapsed time. This is still the project's existing analysis agent,
+not a Claude integration. Install `pip install -r requirements-tui.txt`, then run
+`python agent/agent_main.py`. Use `/file /absolute/server/path.csv` to select a file, or
+`/file` / F3 to open the normally hidden file drawer (Enter confirms; Esc closes).
+Server paths refer to existing files on the SSH machine; this does not upload local files.
+Enter sends your question. Ctrl+O / F2 / `/logs` toggles execution details; `/help` / F1
+shows help. Ctrl+L / F4 focuses the prompt; Ctrl+Q / F10 / `/quit` exits safely.
+The previous sidebar and classic layouts are preserved at commits `c5bd101` and `1e6e16b`.
 On narrow terminals the layout adapts. `--plain`, non-TTY input and `--ask` retain the original
 CLI behavior. Ctrl+Q waits for any running analysis and memory cleanup before exiting; it does
 not pretend to cancel an in-flight CUDA/API operation.

@@ -43,10 +43,28 @@ async def main():
                 await pilot.pause()
                 assert app.selected_file == str(data.resolve())
                 assert app.engine == '尚未执行'
+                assert not app.query_one('#sidebar').display
                 await pilot.press('f3')
                 assert app.focused.id == 'file-path'
+                assert app.query_one('#sidebar').display
+                await pilot.press('escape')
+                assert not app.query_one('#sidebar').display
                 await pilot.press('f4')
                 assert app.focused.id == 'prompt'
+                app.query_one('#prompt', Input).value = '/file ' + str(data)
+                await pilot.press('enter')
+                assert app.selected_file == str(data.resolve()) and not agent.prompts
+                app.query_one('#prompt', Input).value = '/file'
+                await pilot.press('enter')
+                assert app.focused.id == 'file-path'
+                await pilot.press('enter')
+                assert app.focused.id == 'prompt' and not app.query_one('#sidebar').display
+                app.query_one('#prompt', Input).value = '/not-a-command'
+                await pilot.press('enter')
+                assert not agent.prompts
+                app.query_one('#prompt', Input).value = '/help'
+                await pilot.press('enter')
+                assert not agent.prompts
                 app.query_one('#prompt', Input).value = '按地区统计收入'
                 await pilot.press('enter')
                 await wait_done(app, pilot)
@@ -55,10 +73,14 @@ async def main():
                 assert app.elapsed > 0
                 assert len(app.query(Markdown)) >= 2
                 assert not app.query_one('#details').display
-                await pilot.press('f2')
+                await pilot.press('ctrl+o')
                 assert app.query_one('#details').display
+                app.query_one('#prompt', Input).value = '/logs'
+                await pilot.press('enter')
+                assert not app.query_one('#details').display and len(agent.prompts) == 1
                 assert app.query_one('#prompt').region.bottom <= size[1]
                 assert app.query_one('#prompt').region.right <= size[0]
+                assert app.query_one('#prompt').region.width > 10
                 assert not app.busy and not app.query_one('#send').disabled
             print(f'PASS layout, file selection, submit, actual-engine status, log toggle: {size}')
         agent = FakeAgent('[model call failed] test-only error')
