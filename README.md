@@ -1,4 +1,4 @@
-# Data-Analysis Agent Skill
+# GPU加速与数据分析
 
 A tool-calling agent that runs exact statistical analysis over large local datasets on an
 NVIDIA GB10 (DGX Spark) with RAPIDS cuDF. The model decides what to compute and writes the
@@ -14,7 +14,8 @@ actual CPU/GPU status and elapsed time. This is still the project's existing ana
 not a Claude integration. Install `pip install -r requirements-tui.txt`, then run
 `python agent/agent_main.py`. Use `/file /absolute/server/path.csv` to select a file, or
 `/file` / F3 to open the normally hidden file drawer (Enter confirms; Esc closes).
-Server paths refer to existing files on the SSH machine; this does not upload local files.
+Paths refer to existing files on the machine running the agent (the SSH server when connected
+remotely); this does not upload local files.
 Enter sends your question. Ctrl+O / F2 / `/logs` toggles execution details; `/help` / F1
 shows help. Ctrl+L / F4 focuses the prompt; Ctrl+Q / F10 / `/quit` exits safely.
 The previous sidebar and classic layouts are preserved at commits `c5bd101` and `1e6e16b`.
@@ -22,6 +23,45 @@ On narrow terminals the layout adapts. `--plain`, non-TTY input and `--ask` reta
 CLI behavior. Ctrl+Q waits for any running analysis and memory cleanup before exiting; it does
 not pretend to cancel an in-flight CUDA/API operation.
 Test the interface without API calls: `python agent/tui_test.py` (requires the optional UI dependency).
+
+## API connection and startup setup
+
+Starting an interactive agent opens connection settings before analysis. Enter an
+OpenAI-compatible API **base URL**, a masked API key, and a model. Click **读取此地址的模型列表**
+to query that endpoint's `/models`, then select a returned model. If the provider does not
+support model listing, type the model ID manually. A listed model is not necessarily suitable:
+the analysis agent needs Chat Completions with tool/function calling. Native Anthropic Messages,
+Gemini-native APIs and Responses-only models are not adapters implemented by this change.
+
+Use **暂时跳过** to keep current settings for this run. **忽略，不再提示** saves the skip
+preference without applying unfinished form values. Alternatively, check **以后不再弹出启动设置**
+when saving a complete configuration. The dialog continues to appear on future interactive
+launches until the user disables it; it does not require a connection to open.
+`/settings` or F5 always reopens it, and `--configure` overrides the startup skip preference.
+The basic terminal fallback supports a hidden-key setup wizard and `/settings` too.
+Non-interactive `--ask` and piped input never launch a setup prompt.
+
+The header shows the selected model and API host, not a fixed model or machine name.
+Changing the API URL clears the previous key and model in the form. Changing a connection
+starts a fresh backend conversation; earlier answers remain visible but are not sent to the
+new provider. Settings cannot be changed while analysis is running.
+
+Settings live outside the repository at `~/.config/gpu-data-analysis/connection.json`
+(`XDG_CONFIG_HOME` is honored). `GPU_ANALYSIS_CONFIG` overrides this path. By default the key
+stays in memory only; only URL, model and preferences are saved. Saving the key requires the
+explicit **保存密钥到本机明文文件** checkbox. This is **plaintext**, not encryption: POSIX files
+are owner-only (`0600`); Windows inherits the config directory's ACL. Do not share this file.
+Unchecking key storage and saving removes the saved key. If startup is skipped and no key
+is saved or provided by the environment, use `/settings` to enter it before analysis.
+
+For unattended use, set `GPU_API_BASE_URL`, `GPU_API_KEY`, `GPU_API_MODEL`. The aliases
+`OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL` also work. Existing `STEPFUN_*` variables
+remain supported. Generic environment settings take precedence; a changed endpoint never
+inherits a stored or legacy StepFun key. `--base-url` and `--model` override this run's settings;
+provide secrets through the environment or hidden UI input, not command-line arguments.
+
+Offline connection regression tests (synthetic keys and mocked HTTP, no paid requests):
+`python agent/api_config_test.py`.
 
 - [Fair resident CPU vs resident GPU](benchmark/resident/README.md): five repeats, both load
   once. At 20M rows / 3.04 GB, GPU workflow median is 2.92x faster (2.46x including startup).

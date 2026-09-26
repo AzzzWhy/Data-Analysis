@@ -35,6 +35,10 @@ Thumbs.db
 deliverables/
 agent/deliverables/
 .last_dataset_path
+# Local API connection files must never be published (default lives outside the repo).
+connection.json
+.connection-*
+.env
 
 # Private project summaries: risk assessment and self-critique aimed at the author only.
 # Kept on the PC outside the repository, never published.

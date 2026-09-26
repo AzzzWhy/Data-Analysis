@@ -1,8 +1,8 @@
 """Full-screen presentation; the existing Agent remains the sole execution backend."""
 from pathlib import Path
-import platform
 import re
 import time
+from urllib.parse import urlsplit
 
 from textual import work
 from textual.binding import Binding
@@ -25,11 +25,12 @@ class Finished(Message):
 
 
 class SparkTUI(App):
-    TITLE = 'Data Analysis / GB10'
+    TITLE = 'GPU加速与数据分析'
     ENABLE_COMMAND_PALETTE = False
     BINDINGS = [Binding('f1', 'help', '帮助', show=False),
                 Binding('f2', 'details', '日志', show=False),
                 ('ctrl+o', 'details', '执行详情'), ('f3', 'focus_file', '文件'),
+                ('f5', 'settings', '设置'),
                 Binding('f4', 'focus_prompt', '输入', show=False),
                 Binding('escape', 'close_file', '返回', show=False),
                 Binding('f10', 'safe_quit', '退出', show=False),
@@ -77,12 +78,17 @@ class SparkTUI(App):
     .tiny #context { height: 1; }
     '''
 
-    def __init__(self, agent, model: str, initial_file: str = '', record_details: bool = True):
+    def __init__(self, agent, model: str, initial_file: str = '', record_details: bool = True,
+                 connection=None, agent_factory=None, persist_config=None, force_setup=False,
+                 model_loader=None):
         super().__init__()
         self.agent, self.model = agent, model
         self.selected_file = ''
         self.initial_file = initial_file
         self.record_details = record_details
+        self.connection, self.agent_factory = connection, agent_factory
+        self.persist_config, self.force_setup = persist_config, force_setup
+        self.model_loader = model_loader
         self.busy = False
         self.quit_pending = False
         self.started = 0.0
@@ -94,8 +100,8 @@ class SparkTUI(App):
         self.agent.event_sink = lambda text: self.post_message(Trace(text))
 
     def compose(self) -> ComposeResult:
-        yield Static('✳  SPARK ANALYSIS', id='brand', markup=False)
-        yield Static(f'{self.model}  ·  {platform.node()}  ·  未选择文件', id='context', markup=False)
+        yield Static('✳  GPU加速与数据分析', id='brand', markup=False)
+        yield Static(self.context_text(), id='context', markup=False)
         with Horizontal(id='body'):
             with Vertical(id='sidebar'):
                 yield Static('选择数据文件  ·  Enter 确认 / Esc 返回', classes='section', markup=False)
@@ -103,10 +109,10 @@ class SparkTUI(App):
                 yield Button('[ 加载 ]', id='use-file')
                 yield Static('文件：未选择\n大小：—', id='dataset', markup=False)
                 yield Static('F3 选择文件\nEnter 确认路径\nTab 切换区域', id='file-hint', markup=False)
-                yield Static(f'当前会话\n{self.model}\n本机 · {platform.node()}\n0 次分析', id='session', markup=False)
+                yield Static(f'当前模型 · {self.model or "未配置"}', id='session', markup=False)
             with Vertical(id='main'):
                 with VerticalScroll(id='conversation'):
-                    yield Markdown('### 从一个问题开始。\n\n`/file` 选择服务器文件 · `/help` 查看帮助\n\n例如：按地区比较收入，找出异常值，并导出报告。\n\n执行时显示实际 CPU / GPU 引擎；详细过程按 Ctrl+O 查看。', classes='answer', id='welcome')
+                    yield Markdown('### 从一个问题开始。\n\n`/file` 选择本机文件 · `/settings` 连接设置\n\n例如：按地区比较收入，找出异常值，并导出报告。\n\n执行时显示实际 CPU / GPU 引擎；详细过程按 Ctrl+O 查看。', classes='answer', id='welcome')
                 yield RichLog(id='details', wrap=True, markup=False, max_lines=500)
         yield Static('待命 · 引擎尚未执行', id='status', markup=False)
         with Horizontal(id='composer'):
@@ -125,6 +131,13 @@ class SparkTUI(App):
             self.select_file()
         self.action_focus_prompt()
         self.adapt_layout(self.size.width)
+        if self.connection is not None and (self.force_setup or not self.connection.skip_setup):
+            self.call_after_refresh(self.action_settings)
+
+    def context_text(self):
+        host = urlsplit(self.connection.base_url).netloc if self.connection else ''
+        dataset = Path(self.selected_file).name if self.selected_file else '未选择文件'
+        return '  ·  '.join(part for part in (self.model or '未配置模型', host, dataset) if part)
 
     def on_resize(self, event):
         self.adapt_layout(event.size.width)
@@ -160,7 +173,7 @@ class SparkTUI(App):
             return
         self.selected_file = str(path)
         self.query_one('#dataset', Static).update(f'{path.name}  ·  {size / 1e6:.1f} MB')
-        self.query_one('#context', Static).update(f'{self.model}  ·  {path.name}  ·  {size / 1e6:.1f} MB')
+        self.query_one('#context', Static).update(self.context_text())
         self.query_one('#sidebar').display = False
         self.action_focus_prompt()
 
@@ -192,15 +205,16 @@ class SparkTUI(App):
                     self.select_file()
                 else:
                     self.action_focus_file()
-            elif command in ('/help', '/logs'):
+            elif command in ('/help', '/logs', '/settings'):
                 widget.value = ''
-                self.action_help() if command == '/help' else self.action_details()
+                {'/help': self.action_help, '/logs': self.action_details,
+                 '/settings': self.action_settings}[command]()
             elif command == '/quit':
                 self.action_safe_quit()
             else:
                 # Absolute paths may begin with '/'; keep them as normal analysis input.
                 if '/' not in command[1:] and not Path(command).is_file():
-                    self.notify('未知命令。可用：/file、/logs、/help、/quit', severity='warning')
+                    self.notify('未知命令。可用：/file、/settings、/logs、/help、/quit', severity='warning')
                     return
                 # A path-only prompt is ambiguous; let the existing agent interpret it.
                 command = ''
@@ -263,7 +277,7 @@ class SparkTUI(App):
         self.phase = '分析失败' if message.failed else '分析完成'
         for selector in ('#prompt', '#send', '#file-path', '#use-file'):
             self.query_one(selector).disabled = False
-        self.query_one('#session', Static).update(f'当前会话\n{self.model}\n本机 · {platform.node()}\n{self.turns} 次分析')
+        self.query_one('#session', Static).update(f'当前模型 · {self.model or "未配置"}\n{self.turns} 次分析')
         # Freeze elapsed time at completion; no fake progress percentage.
         self.elapsed = time.monotonic() - self.started
         self.started = 0
@@ -289,7 +303,39 @@ class SparkTUI(App):
         self.action_focus_prompt()
 
     def action_help(self):
-        self.notify('/file 路径：选择服务器文件（不上传）\n/logs 或 Ctrl+O：执行详情\nEnter：发送 · F3：文件 · Esc：返回 · Ctrl+Q：安全退出\n分析运行时退出会等待任务完成与内存清理。', title='SPARK ANALYSIS · 帮助', timeout=12)
+        self.notify('/file 路径：选择本机文件（SSH 时指服务器文件，不上传）\n/settings 或 F5：修改 API 地址、密钥与模型\n/logs 或 Ctrl+O：执行详情\nEnter：发送 · F3：文件 · Esc：返回 · Ctrl+Q：安全退出\n分析运行时退出会等待任务完成与内存清理。', title='GPU加速与数据分析 · 帮助', timeout=12)
+
+    def action_settings(self):
+        if self.busy:
+            self.notify('请等待当前分析完成，再修改连接设置。')
+            return
+        if self.connection is None or self.agent_factory is None:
+            self.notify('此嵌入式界面未提供连接配置；请从 agent_main.py 启动。')
+            return
+        from api_setup import APISetup
+        from api_config import save_config
+        kwargs = {'model_loader': self.model_loader} if self.model_loader else {}
+        self.push_screen(APISetup(self.connection, self.persist_config or save_config, **kwargs),
+                         self.apply_connection)
+
+    def apply_connection(self, config):
+        if config is None:
+            self.action_focus_prompt()
+            return
+        changed = (config.base_url, config.api_key, config.model) != (
+            self.connection.base_url, self.connection.api_key, self.connection.model)
+        if changed:
+            old_client = getattr(self.agent, 'client', None)
+            self.agent = self.agent_factory(config)
+            self.agent.event_sink = lambda text: self.post_message(Trace(text))
+            if old_client:
+                old_client.close()
+            self.phase, self.engine, self.elapsed = '待命', '尚未执行', 0.0
+            self.notify('连接已切换。旧对话仍可查看，但不会发送给新的服务。')
+        self.connection, self.model = config, config.model
+        self.query_one('#context', Static).update(self.context_text())
+        self.refresh_status()
+        self.action_focus_prompt()
 
     def action_safe_quit(self):
         if self.busy:

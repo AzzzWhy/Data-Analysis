@@ -1,9 +1,9 @@
 """
-DGX Spark data-analysis agent — StepFun LLM + locally executed Agent Skills.
+GPU加速与数据分析 — configurable OpenAI-compatible LLM + local Agent Skills.
 
 The point of this file is the part the earlier version was missing: a tool-calling loop.
 The model decides *which* skill to call and *with what arguments*; the skill code runs
-locally on the GB10 and its real output is fed back to the model, which then answers the
+locally on the current machine and its real output is fed back to the model, which answers the
 user in natural language.
 
 Loop shape:
@@ -37,12 +37,13 @@ import sys
 import time
 
 from openai import OpenAI
+from api_config import create_client, load_config, save_config
 
 import skills
 from skills import load_skill_definitions, skill_func_map
 
-MODEL_NAME = os.environ.get("STEPFUN_MODEL", "step-3.7-flash")
-BASE_URL = os.environ.get("STEPFUN_BASE_URL", "https://api.stepfun.com/step_plan/v1")
+MODEL_NAME = os.environ.get('GPU_API_MODEL') or os.environ.get('OPENAI_MODEL') or os.environ.get('STEPFUN_MODEL', 'step-3.7-flash')
+BASE_URL = os.environ.get('GPU_API_BASE_URL') or os.environ.get('OPENAI_BASE_URL') or os.environ.get('STEPFUN_BASE_URL', 'https://api.stepfun.com/step_plan/v1')
 
 # A tool loop that never ends is worse than one that stops and explains itself.
 #
@@ -53,7 +54,8 @@ BASE_URL = os.environ.get("STEPFUN_BASE_URL", "https://api.stepfun.com/step_plan
 # Measured: a 6-operation drill-down plus close needs 8 rounds; with extra exploration, more.
 MAX_TOOL_ROUNDS = int(os.environ.get("MAX_TOOL_ROUNDS", "10"))
 
-SYSTEM_PROMPT = """You are a data-analysis agent running on an NVIDIA DGX Spark.
+SYSTEM_PROMPT = """You are the GPU加速与数据分析 agent. Your tools execute on the current local machine.
+Do not assume its hardware or hostname. Use the tool outputs to report the actual CPU/GPU engine.
 
 How you work:
 - The user gives you an analytical request in natural language. You have locally executable
@@ -137,7 +139,7 @@ Answer requirements:
   ran" paragraph giving three numbers: GPU time, CPU time, and the factor. All three, or the
   figure is incomplete; the GPU number alone is not enough.
   Reference format (follow it, do not drop the CPU):
-  "This analysis ran on the GPU (NVIDIA GB10) through cuDF over all <N> rows in <X> seconds;
+  "This analysis ran on the GPU through cuDF over all <N> rows in <X> seconds;
   the same computation took <Y> seconds on CPU pandas, so the GPU was <Z>x faster."
   Then add the caveats from honest_note in gpu_vs_cpu (which parts of the speedup are not GPU
   compute).
@@ -154,13 +156,8 @@ Answer requirements:
 """
 
 
-def build_client() -> OpenAI:
-    api_key = os.environ.get("STEPFUN_API_KEY")
-    if not api_key:
-        print("[error] the STEPFUN_API_KEY environment variable is not set.")
-        print("        On this machine run: source ~/.bashrc   then start the script again.")
-        sys.exit(2)
-    return OpenAI(api_key=api_key, base_url=BASE_URL)
+def build_client(config=None) -> OpenAI:
+    return create_client(config or load_config())
 
 
 # --------------------------------------------------------------------------------------
@@ -374,7 +371,7 @@ class Tui:
         from rich.text import Text
 
         body = Text()
-        body.append("DGX Spark 数据分析 Agent", style="bold")
+        body.append("GPU加速与数据分析", style="bold")
         body.append("  ·  由 Agent Skill 驱动\n\n", style="dim")
         body.append("引擎会自己判断该不该用 GPU,并说明理由。\n", style="")
         body.append("输入 ", style="dim")
@@ -440,8 +437,9 @@ class Tui:
 
 
 class Agent:
-    def __init__(self, client: OpenAI, verbose: bool = True, event_sink=None):
+    def __init__(self, client: OpenAI, verbose: bool = True, event_sink=None, model: str | None = None):
         self.client = client
+        self.model = model if model is not None else MODEL_NAME
         self.verbose = verbose
         self.event_sink = event_sink
         self.messages: list[dict] = [{"role": "system", "content": _system_prompt()}]
@@ -453,7 +451,7 @@ class Agent:
         self.tools = [] if self.no_tools else load_skill_definitions()
         if self.verbose:
             names = [t["function"]["name"] for t in self.tools]
-            print(f"[agent] model={MODEL_NAME}")
+            print(f"[agent] model={self.model}")
             if self.no_tools:
                 print("[agent] CONTROL RUN: no skills are available to the model")
             else:
@@ -486,6 +484,8 @@ class Agent:
 
     def run(self, user_query: str) -> str:
         """Answer one question. Any session left open is released on the way out."""
+        if self.client is None or not self.model:
+            return '[model call failed] 尚未配置 API 地址、密钥与模型。请输入 /settings 打开连接设置。'
         try:
             return self._run_inner(user_query)
         finally:
@@ -511,18 +511,19 @@ class Agent:
                 # "this model has no skills here".
                 kwargs = {} if self.no_tools else {"tools": self.tools, "tool_choice": "auto"}
                 response = self.client.chat.completions.create(
-                    model=MODEL_NAME,
+                    model=self.model,
                     messages=self.messages,
                     **kwargs,
                 )
             except Exception as exc:
                 # A model/transport failure must not kill the session or lose the history.
-                self.log(f"  [api error] {type(exc).__name__}: {exc}")
+                error = self.safe_error(exc)
+                self.log(f"  [api error] {error}")
                 if "tool" in str(exc).lower():
                     self.log("  [hint] this model may not support function calling. "
                              "Use --no-tools to fall back to plain chat, or switch to a model "
                              "that supports tool calls.")
-                return f"[model call failed] {type(exc).__name__}: {exc}"
+                return f"[model call failed] {error}"
 
             if not response.choices:
                 return "[model call failed] empty response"
@@ -563,25 +564,47 @@ class Agent:
         self.log(f"  [warn] hit the tool-round limit ({MAX_TOOL_ROUNDS})")
         try:
             final = self.client.chat.completions.create(
-                model=MODEL_NAME, messages=self.messages)
+                model=self.model, messages=self.messages)
             content = final.choices[0].message.content or ""
             self.messages.append({"role": "assistant", "content": content})
             return content
         except Exception as exc:
             return (f"[tool round limit {MAX_TOOL_ROUNDS} reached, no summary could be generated] "
-                    f"{type(exc).__name__}: {exc}")
+                    f"{self.safe_error(exc)}")
+
+    def safe_error(self, exc):
+        text = f'{type(exc).__name__}: {exc}'
+        key = getattr(self.client, 'api_key', '')
+        return text.replace(key, '[REDACTED]') if key else text
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="DGX Spark data-analysis agent with Agent Skills")
+    ap = argparse.ArgumentParser(description="GPU加速与数据分析 · local Agent Skills")
     ap.add_argument("--ask", help="ask one question and exit (non-interactive demo)")
     ap.add_argument("--quiet", action="store_true", help="suppress tool-call tracing")
     ap.add_argument("--plain", action="store_true",
                     help="disable the full-screen interface and colour; interactive terminals "
                          "use Textual when installed, otherwise the basic terminal")
+    ap.add_argument('--configure', action='store_true', help='open API connection settings even when startup prompts are disabled')
+    ap.add_argument('--base-url', help='OpenAI-compatible API base URL (changing it clears inherited credentials)')
+    ap.add_argument('--model', help='model ID to use for this run')
     args = ap.parse_args()
 
-    client = build_client()
+    try:
+        config = load_config()
+        if args.base_url:
+            from api_config import normalize_url
+            url = normalize_url(args.base_url)
+            if url != config.base_url:
+                config.api_key = os.environ.get('GPU_API_KEY') or os.environ.get('OPENAI_API_KEY', '')
+                config.model = ''
+            config.base_url = url
+        if args.model:
+            config.model = args.model
+    except ValueError as exc:
+        print(f'[error] {exc}', file=sys.stderr)
+        return 2
+    client = build_client(config) if config.ready else None
     # Full screen is only for an interactive terminal. Scripted --ask runs and pipes keep
     # their stable line-oriented output; --plain explicitly opts out.
     if not args.ask and not args.plain and sys.stdin.isatty() and sys.stdout.isatty():
@@ -591,9 +614,28 @@ def main() -> int:
             print(f'Full-screen UI unavailable ({exc}); using the basic terminal. '
                   'Install requirements-tui.txt for the new interface.', file=sys.stderr)
         else:
-            SparkTUI(Agent(client, verbose=False), MODEL_NAME, record_details=not args.quiet).run()
+            def factory(connection):
+                return Agent(build_client(connection) if connection.ready else None,
+                             verbose=False, model=connection.model)
+            SparkTUI(Agent(client, verbose=False, model=config.model), config.model,
+                     record_details=not args.quiet, connection=config,
+                     agent_factory=factory, persist_config=save_config,
+                     force_setup=args.configure).run()
             return 0
-    agent = Agent(client, verbose=not args.quiet)
+    if args.configure or (not args.ask and sys.stdin.isatty() and not config.skip_setup):
+        if not sys.stdin.isatty():
+            print('[error] --configure requires an interactive terminal.', file=sys.stderr)
+            return 2
+        from api_config import terminal_setup
+        config = terminal_setup(config)
+        if client:
+            client.close()
+        client = build_client(config) if config.ready else None
+    if not config.ready:
+        print('[error] Configure API address, key and model with --configure; '
+              'or set GPU_API_BASE_URL, GPU_API_KEY and GPU_API_MODEL.', file=sys.stderr)
+        return 2
+    agent = Agent(client, verbose=not args.quiet, model=config.model)
 
     # Module-level so Agent.log can reach it without threading a reference through every call.
     global TUI
@@ -625,6 +667,15 @@ def main() -> int:
         if task.strip().lower() in {"exit", "quit"}:
             print("Goodbye.")
             break
+        if task.strip() == '/settings':
+            from api_config import terminal_setup
+            updated = terminal_setup(config)
+            if updated.ready:
+                if client:
+                    client.close()
+                config, client = updated, build_client(updated)
+                agent = Agent(client, verbose=not args.quiet, model=config.model)
+            continue
         if not task.strip():
             continue
         if tui.enabled:
