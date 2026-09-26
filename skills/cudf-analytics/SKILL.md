@@ -6,19 +6,11 @@ description: >-
   correlate, or find outliers in a CSV, Parquet, TSV, JSONL, or Excel dataset, especially
   when the file is large (hundreds of MB to many GB, or millions of rows) or when the user
   mentions GPU, cuDF, RAPIDS, or complains that pandas is too slow or runs out of memory.
-  Trigger it for questions like "what is the average sale per category in this CSV", "analyze
-  the distribution and outliers in this data", or "how long would 50 million rows take".
   Also trigger it when the user wants something they can keep, such as "make me a chart",
   "give me a report", "export this" or "I need it for a presentation", because this skill
   writes a Markdown report, SVG charts and CSV exports from the GPU-computed aggregates.
   Do NOT trigger for single-number arithmetic, fetching data from a database/API, training
-  ML models, or editing the dataset. When in doubt and a data file is involved, prefer this
-  skill — it falls back to pandas automatically when no GPU is present, so it is always safe
-  to call.
-whenToUse: >-
-  Analyzing a local tabular data file (CSV/Parquet/TSV/JSONL/Excel) for statistics,
-  group-by aggregation, correlation, or outlier detection, especially at million-row scale
-  where pandas is slow; and producing a shareable report or charts from those results.
+  ML models, or editing the dataset. Falls back to pandas when no GPU is present.
 metadata:
   version: "0.1.0"
   author: NVIDIA DGX Spark Hackathon submission
@@ -78,6 +70,13 @@ training models, querying a remote database, or any task where no tabular file i
 
 ## Workflow
 
+**Installed location:** resolve script and reference paths from the directory containing this
+`SKILL.md`. The examples below use the repository layout; after installation, invoke
+`<skill-directory>/scripts/gpu_analytics.py` (and the other bundled scripts) instead. No custom
+Agent runtime is required: a compatible client can read this skill and invoke its Python CLI.
+Use the Python interpreter available in the host environment, or `GPU_ANALYTICS_PYTHON` when
+set. CPU-only clients can verify correctness and exports without cuDF.
+
 1. **Find the file.** Verify the path exists and its size before running anything
    (a 4GB CSV is fine on GB10; a 40GB one is not).
 2. **Profile first, in one call:**
@@ -128,6 +127,10 @@ down by two dimensions, issue two groupby calls.
 
 ## Sessions: keeping the data resident across steps
 
+For complete group rankings or global minima, `groupby` defaults to only the top 20 groups.
+Set `--top-k` to cover every group (24 for hourly analysis). Check `groups` against the
+returned rows; do not invent omitted groups or identify a global minimum from truncated top-K.
+
 `gpu_analytics.py` is stateless — every invocation re-reads and re-parses the file. That is
 fine for one question and wasteful for five, because real analysis is rarely one step:
 "find the outliers" is nearly always followed by "where do they come from", "how much do
@@ -136,13 +139,12 @@ they matter", "which group drives them".
 `gpu_session.py` is a long-lived worker that loads the file **once** into device memory and
 then answers many `analyze` requests against that resident copy.
 
-| | 5-step full-data analysis (20M rows, 3.0 GB) |
-| :--- | ---: |
-| CPU, re-reading every step | 49.7 s |
-| GPU, re-reading every step | 10.8 s |
-| **GPU with a resident session** | **1.5 s** |
+The fair five-repeat 20M-row comparison (profile, summary, groupby, corr, outliers) loads once
+on both engines: GPU workflow is 2.92x faster including one load, or 2.46x including startup.
+Older stateless-vs-session figures combine GPU acceleration with avoided rereads; they are not
+a fair resident-engine baseline.
 
-Measured inside one session: load 1.85 s (1,692 MB resident), then `profile` 0.05 s,
+An older session trace, with a different operation sequence: load 1.85 s (1,692 MB resident), then `profile` 0.05 s,
 `outliers` 0.42 s, `groupby` 0.04 s, a second `groupby` 0.03 s, `corr` 0.53 s.
 
 Protocol (newline-delimited JSON on stdin/stdout):
@@ -353,21 +355,22 @@ both are correct. The 7.16x is compute-only with a 20-core pandas baseline; the 
 include CSV parsing and process startup against the single-core pandas path the engine actually
 falls back to. Quote whichever one matches the question being asked, and say which it is.
 
-### Small data does get GPU speedup, but only when the fixed cost is amortised
+### Repeated work: residency is not GPU acceleration
 
-The crossover above is the verdict for one operation. For several operations over the same file
-the answer flips, because the stateless CPU path re-reads the whole file on every call while a
-resident session reads it once. Measured with 5 operations on a small file:
+Historical measurements below compare resident GPU with stateless CPU (which rereads each
+time). They show a workflow advantage, not GPU superiority over a resident CPU dataframe:
 
 | Rows | GPU per step after open | CPU, 5 rounds | GPU, 5 rounds | Speedup |
 | ---: | ---: | ---: | ---: | ---: |
 | 1,000,000 | 0.058 s | 11.17 s | 2.95 s | **3.79x** |
 | 5,000,000 | 0.187 s | 35.51 s | 6.95 s | **5.11x** |
 
-So on a file below the crossover, pass `force_gpu=true` when you intend to run several analyses
-over it, and let it route to pandas when it is a single question. `dataset_session` says exactly
-this when it refuses a small file: the refusal carries the threshold and the advice to use
-`force_gpu` for repeated work, rather than just telling you to use a different tool.
+Five-repeat fair measurements with both engines loading once instead found resident CPU
+2.64x faster at 1M rows. At 20M rows / 3.04 GB, GPU was 2.92x faster including one load,
+or 2.46x including process startup. Compute-only median was 1.63x but GPU compute CV exceeded
+10%; do not call that ratio stable. This is default pandas, not an optimized CPU baseline.
+See `benchmark/resident/README.md` in the repository. For repeated small-file work retry
+session open with `force_cpu=true`; use `force_gpu=true` for an explicit comparison only.
 
 ## Failure handling
 
@@ -376,7 +379,7 @@ this when it refuses a small file: the refusal carries the threshold and the adv
 | `error: input file not found` | Verify the path; try again with the absolute path. |
 | `engine` is `pandas` with a `fallback_reason` | Tell the user plainly that it ran on CPU, then fix the GPU env (see below). |
 | `engine` is `pandas` with a `routing_reason` and no `fallback_reason` | Nothing is broken: this size is faster on the CPU, and the reason quotes the measurement. Do not report it as a failure. Use `--force-gpu` if a GPU comparison is wanted. |
-| Several analyses over the same small file | Open a session with `force_gpu=true`: the GPU's ~1.5 s startup is paid once and later steps cost ~0.06 s instead of a full re-read (3.79x at 1M rows). |
+| Several analyses over the same small file | Open with `force_cpu=true` to avoid rereads without GPU startup. Multiple operations alone do not prove GPU is faster. |
 | Out-of-memory on a huge file | Add `--columns` to analyze fewer columns, or `--usecols` to load fewer. |
 | Need a CPU-vs-GPU comparison of one command | Add `--force-cpu` and compare against the normal run. |
 | `--op corr --method spearman` runs on CPU | Expected: cuDF only does pearson, so that request falls back and reports why. |

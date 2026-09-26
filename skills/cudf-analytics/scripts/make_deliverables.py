@@ -273,7 +273,12 @@ def chart_line(rows: List[dict], x_key: str, y_keys: List[str], title: str,
         svg.line(x1 + 10, ly, x1 + 32, ly, color, 3)
         svg.text(x1 + 38, ly + 4, key[:18], size=11, fill=INK)
 
-    for i, r in enumerate(rows[:14]):
+    # Limit label density, not coverage: span the entire x axis including its endpoint.
+    label_count = min(14, len(rows))
+    label_indices = sorted({round(i * (len(rows) - 1) / max(label_count - 1, 1))
+                            for i in range(label_count)})
+    for i in label_indices:
+        r = rows[i]
         x = x0 + (x1 - x0) * i / n
         svg.text(x, y1 + 18, str(r.get(x_key, i))[:12], size=10.5, fill=MUTED, anchor="middle")
     return svg.render(footnote)

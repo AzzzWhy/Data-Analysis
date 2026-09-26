@@ -251,7 +251,8 @@ skill_definitions = [
                     "top_k": {
                         "type": "integer",
                         "description": "optional: groupby returns only the top K groups, corr only "
-                                       "the K strongest pairs. Worth setting on large data"
+                                       "the K strongest pairs; default 20. For ALL groups or a "
+                                       "global minimum set K to cover the full group count."
                     },
                     "force_cpu": {
                         "type": "boolean",
@@ -919,6 +920,24 @@ def analyze_dataset(file_path: str, operation: str, by: str = None, agg: str = N
         if not payload.get("ok"):
             return _err(payload.get("error") or "analysis failed", detail=note,
                         exit_code=proc.returncode)
+
+        # A modest categorical result fits the model's 30-row compaction budget. When no
+        # top_k was requested, return all such groups rather than silently omitting the
+        # lowest four hours from a 24-hour analysis. Larger results remain bounded.
+        group = payload.get("groupby", {})
+        groups = group.get("groups", 0)
+        if top_k is None and 0 < groups <= 30 and len(group.get("top_k", [])) < groups:
+            proc = subprocess.run(cmd + ["--top-k", str(groups)], capture_output=True,
+                                  text=True, timeout=1800)
+            payload = json.loads(proc.stdout)
+            if not payload.get("ok"):
+                return _err(payload.get("error") or "complete group analysis failed")
+            group = payload.get("groupby", {})
+        if group and len(group.get("top_k", [])) < group.get("groups", 0):
+            payload["group_coverage_warning"] = (
+                "This is a truncated top-K result, not all groups. Do not infer a global "
+                "minimum or invent omitted rows; request a larger top_k if needed."
+            )
 
         # Strip the echo of the input path (the model already knows it) and compact the rest.
         result = {k: v for k, v in payload.items() if k != "input"}

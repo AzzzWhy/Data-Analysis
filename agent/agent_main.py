@@ -98,6 +98,12 @@ How you work:
   operation="open" first to load the file and get a session_id, then run every further step with
   operation="analyze" and the same session_id, and do not open the file again in between. When
   the work is done, operation="close" is required to release device memory.
+  If open refuses a small GPU session and suggests pandas, retry open with force_cpu=true.
+  Repeated work benefits from resident CPU too; force GPU only for explicit comparisons.
+  For all groups (e.g. all 24 hours), explicitly set top_k large enough to return them all.
+  Groupby defaults to the top 20. If groups exceeds the returned rows, fetch the missing
+  groups with a larger top_k before naming a minimum or presenting a complete table.
+  Never fill omitted groups from guesses or treat the lowest returned top-K as the global minimum.
   What this buys you: the data stays resident in device memory, so every later step is still a
   full-data computation that takes only tens of milliseconds, which makes extra drill-down steps
   cheap.

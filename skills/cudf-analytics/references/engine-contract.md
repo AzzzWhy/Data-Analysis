@@ -104,12 +104,12 @@ Do **not** read this as an unbounded trend, and be careful quoting larger extrap
 - These are single-op end-to-end timings. The multi-step resident-session numbers below are a
   separate effect and are not additive with this.
 
-### Small data: when the GPU still wins, and it is not about rows
+### Repeated work: residency is not GPU acceleration
 
 The crossover above is the verdict for a **one-off** analysis. It is not the verdict for repeated
 work over the same file, and conflating the two got this wrong once. The stateless CPU path
 re-reads and re-parses the whole file on every call, while a resident session reads it once. So a
-small file can win on the GPU as soon as several analyses are wanted.
+file may benefit from residency on either engine; the historical comparison below is asymmetric.
 
 Measured on the GB10, opening a native GPU session on a small file and running 5 operations
 (`profile`, `summary`, `groupby`, `outliers`, `corr`), against the same 5 operations run as 5
@@ -126,13 +126,15 @@ Two consequences, and they pull in opposite directions on purpose:
 - **One query at 1M rows stays on the CPU.** A single operation pays the ~1.5 s GPU startup
   against 0.57 s of pandas work, so the GPU loses (1.83 s vs 0.57 s). This is what `--engine auto`
   decides, and it is why the default is the CPU.
-- **Several queries over that same file belong on the GPU.** The startup is paid once, and each
-  later step costs 0.058 s instead of a full re-read. That is what `force_gpu` opens up, and it is
-  the reason the session tool exists rather than being a convenience wrapper.
+- **Several queries should avoid rereads on either engine.** New five-repeat fair measurements
+  found resident CPU 2.64x faster at 1M rows, and resident GPU 2.92x faster at 20M rows including
+  one load (2.46x including startup). The 1.63x compute-only ratio is unstable (GPU CV >10%).
+  Raw samples are in `benchmark/resident/README.md` in the repository; default pandas only.
 
 Because of this, `dataset_session` open refuses a small file by default but names the escape
 hatch: the refusal carries `suggest_engine`, `route_threshold_rows` and `session_worth_it_if`, and
-its hint says to pass `force_gpu=true` when several analyses are planned. A refusal that does not
+its hint now recommends `force_cpu=true` for repeated work, reserving `force_gpu=true` for
+explicit comparisons. A refusal that does not
 say how to proceed is a dead end, and the first version of the guard was one — it told the caller
 to switch to `analyze_dataset` even when a session was the better answer.
 

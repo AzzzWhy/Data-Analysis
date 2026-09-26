@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Regional Revenue Analysis</title>
+<style>
+:root { --ink:#1a1a1a; --dim:#5c6370; --line:#e3e6ea; --bg:#ffffff; --accent:#0b6b3a;
+        --warn:#8a5a00; --panel:#f7f9fa; }
+* { box-sizing:border-box; }
+body { margin:0; padding:44px 30px 70px; background:var(--bg); color:var(--ink);
+       font:16px/1.65 -apple-system,"Segoe UI",Roboto,"Helvetica Neue",
+            "PingFang SC","Microsoft YaHei",sans-serif; }
+.wrap { max-width:1180px; margin:0 auto; }
+h1 { font-size:31px; line-height:1.25; margin:0 0 6px; letter-spacing:-.4px; }
+h2 { font-size:21px; margin:44px 0 12px; padding-top:20px; border-top:1px solid var(--line); }
+h3 { font-size:16px; margin:26px 0 8px; color:var(--dim); font-weight:600; }
+.sub { color:var(--dim); font-size:14px; margin:0 0 26px; }
+.lede { background:var(--panel); border-left:4px solid var(--accent); padding:16px 20px;
+        border-radius:0 8px 8px 0; margin:22px 0 8px; }
+.lede p { margin:0; }
+table { border-collapse:collapse; width:100%; margin:14px 0; font-size:14.5px; }
+th,td { text-align:left; padding:9px 13px; border-bottom:1px solid var(--line); }
+th { background:var(--panel); font-weight:600; color:var(--dim);
+     text-transform:uppercase; font-size:11.5px; letter-spacing:.6px; }
+td:nth-child(n+2) { font-variant-numeric:tabular-nums; }
+code { background:var(--panel); padding:1.5px 5px; border-radius:4px;
+       font:13.5px/1.5 ui-monospace,Consolas,"Courier New",monospace; }
+li { margin:5px 0; }
+.charts { display:grid; grid-template-columns:repeat(auto-fit,minmax(430px,1fr)); gap:20px; }
+.card { border:1px solid var(--line); border-radius:10px; padding:16px; background:#fff; }
+.card svg { width:100%; height:auto; display:block; }
+.card h3 { margin:0 0 10px; color:var(--ink); font-size:15px; }
+.caption { color:var(--dim); font-size:13px; margin:10px 0 0; }
+.foot { margin-top:56px; padding-top:18px; border-top:1px solid var(--line);
+        color:var(--dim); font-size:13px; }
+.caveat { background:#fffbf0; border-left:4px solid var(--warn); padding:14px 18px;
+          border-radius:0 8px 8px 0; font-size:14.5px; margin:18px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>Regional Revenue Analysis</h1>
+<p class="sub">
+&nbsp;&middot;&nbsp; produced by cudf-analytics</p>
+<div class="lede"><p><strong>Deliberately ran on the CPU</strong> &nbsp;&middot;&nbsp; engine <code>pandas</code></p><p class="caption">file is 0 KB (about 18 bytes per row over roughly 8 rows), below the 400.0 MB crossover measured on this hardware. The GPU is slower at this size because most of its runtime is fixed startup cost (~1.5 s) rather than compute, and the CPU path wins on bytes parsed per second. Pass force_gpu=true to compare anyway.</p></div>
+<div class="caveat"><strong>No GPU acceleration is claimed for this run.</strong> The numbers are exact, but this analysis ran on the CPU &mdash; either because the dataset was too small for the GPU to pay off, or because the GPU path failed.</div>
+<h2>Charts</h2>
+<p class="caption">Every value below is an exact aggregate over the full dataset. Chart rendering is not GPU accelerated &mdash; the charts are drawn from the aggregated rows, where rendering cost is irrelevant.</p>
+<div class="charts"><div class="card"><h3>groupby bar</h3><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 480" role="img" aria-label="revenue__sum by region"><rect width="900" height="480" fill="#ffffff"/><text x="90.00" y="26.00" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="17" fill="#1a1a1a" text-anchor="start" font-weight="700">revenue__sum by region</text><text x="90.00" y="45.00" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="11.5" fill="#666666" text-anchor="start" font-weight="normal">top 3 of 3 groups · full-data aggregates</text><line x1="90.00" y1="410.00" x2="870.00" y2="410.00" stroke="#bbbbbb" stroke-width="1"/><text x="82.00" y="414.00" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="10.5" fill="#666666" text-anchor="end" font-weight="normal">0</text><line x1="90.00" y1="353.33" x2="870.00" y2="353.33" stroke="#e5e5e5" stroke-width="1"/><text x="82.00" y="357.33" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="10.5" fill="#666666" text-anchor="end" font-weight="normal">100</text><line x1="90.00" y1="296.67" x2="870.00" y2="296.67" stroke="#e5e5e5" stroke-width="1"/><text x="82.00" y="300.67" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="10.5" fill="#666666" text-anchor="end" font-weight="normal">200</text><line x1="90.00" y1="240.00" x2="870.00" y2="240.00" stroke="#e5e5e5" stroke-width="1"/><text x="82.00" y="244.00" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="10.5" fill="#666666" text-anchor="end" font-weight="normal">300</text><line x1="90.00" y1="183.33" x2="870.00" y2="183.33" stroke="#e5e5e5" stroke-width="1"/><text x="82.00" y="187.33" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="10.5" fill="#666666" text-anchor="end" font-weight="normal">400</text><line x1="90.00" y1="126.67" x2="870.00" y2="126.67" stroke="#e5e5e5" stroke-width="1"/><text x="82.00" y="130.67" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="10.5" fill="#666666" text-anchor="end" font-weight="normal">500</text><line x1="90.00" y1="70.00" x2="870.00" y2="70.00" stroke="#e5e5e5" stroke-width="1"/><text x="82.00" y="74.00" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="10.5" fill="#666666" text-anchor="end" font-weight="normal">600</text><rect x="188.00" y="70.00" width="64.00" height="340.00" fill="#4C72B0" rx="3"/><text x="220.00" y="63.00" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="10.5" fill="#1a1a1a" text-anchor="middle" font-weight="600">600</text><text x="220.00" y="428.00" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="11" fill="#1a1a1a" text-anchor="middle" font-weight="normal">West</text><rect x="448.00" y="183.33" width="64.00" height="226.67" fill="#DD8452" rx="3"/><text x="480.00" y="176.33" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="10.5" fill="#1a1a1a" text-anchor="middle" font-weight="600">400</text><text x="480.00" y="428.00" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="11" fill="#1a1a1a" text-anchor="middle" font-weight="normal">East</text><rect x="708.00" y="296.67" width="64.00" height="113.33" fill="#55A868" rx="3"/><text x="740.00" y="289.67" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="10.5" fill="#1a1a1a" text-anchor="middle" font-weight="600">200</text><text x="740.00" y="428.00" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="11" fill="#1a1a1a" text-anchor="middle" font-weight="normal">North</text><text x="450" y="470" font-family="system-ui, sans-serif" font-size="10" fill="#666666" text-anchor="middle">computed on pandas · full scan 8 rows · chart rendering is not GPU-accelerated</text></svg></div><div class="card"><h3>groupby line</h3><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 460" role="img" aria-label="aggregates by region"><rect width="900" height="460" fill="#ffffff"/><text x="90.00" y="26.00" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="17" fill="#1a1a1a" text-anchor="start" font-weight="700">aggregates by region</text><text x="90.00" y="45.00" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="11.5" fill="#666666" text-anchor="start" font-weight="normal">top groups, in ranked order</text><line x1="90.00" y1="390.00" x2="770.00" y2="390.00" stroke="#e5e5e5" stroke-width="1"/><text x="82.00" y="394.00" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="10.5" fill="#666666" text-anchor="end" font-weight="normal">100</text><line x1="90.00" y1="326.00" x2="770.00" y2="326.00" stroke="#e5e5e5" stroke-width="1"/><text x="82.00" y="330.00" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="10.5" fill="#666666" text-anchor="end" font-weight="normal">200</text><line x1="90.00" y1="262.00" x2="770.00" y2="262.00" stroke="#e5e5e5" stroke-width="1"/><text x="82.00" y="266.00" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="10.5" fill="#666666" text-anchor="end" font-weight="normal">300</text><line x1="90.00" y1="198.00" x2="770.00" y2="198.00" stroke="#e5e5e5" stroke-width="1"/><text x="82.00" y="202.00" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="10.5" fill="#666666" text-anchor="end" font-weight="normal">400</text><line x1="90.00" y1="134.00" x2="770.00" y2="134.00" stroke="#e5e5e5" stroke-width="1"/><text x="82.00" y="138.00" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="10.5" fill="#666666" text-anchor="end" font-weight="normal">500</text><line x1="90.00" y1="70.00" x2="770.00" y2="70.00" stroke="#e5e5e5" stroke-width="1"/><text x="82.00" y="74.00" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="10.5" fill="#666666" text-anchor="end" font-weight="normal">600</text><polyline points="90.00,70.00 430.00,198.00 770.00,326.00" fill="none" stroke="#4C72B0" stroke-width="2.4" stroke-linejoin="round"/><circle cx="90.00" cy="70.00" r="2.60" fill="#4C72B0"/><circle cx="430.00" cy="198.00" r="2.60" fill="#4C72B0"/><circle cx="770.00" cy="326.00" r="2.60" fill="#4C72B0"/><line x1="780.00" y1="74.00" x2="802.00" y2="74.00" stroke="#4C72B0" stroke-width="3"/><text x="808.00" y="78.00" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="11" fill="#1a1a1a" text-anchor="start" font-weight="normal">revenue__sum</text><polyline points="90.00,326.00 430.00,368.67 770.00,390.00" fill="none" stroke="#DD8452" stroke-width="2.4" stroke-linejoin="round"/><circle cx="90.00" cy="326.00" r="2.60" fill="#DD8452"/><circle cx="430.00" cy="368.67" r="2.60" fill="#DD8452"/><circle cx="770.00" cy="390.00" r="2.60" fill="#DD8452"/><line x1="780.00" y1="92.00" x2="802.00" y2="92.00" stroke="#DD8452" stroke-width="3"/><text x="808.00" y="96.00" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="11" fill="#1a1a1a" text-anchor="start" font-weight="normal">revenue__mean</text><text x="90.00" y="408.00" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="10.5" fill="#666666" text-anchor="middle" font-weight="normal">West</text><text x="430.00" y="408.00" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="10.5" fill="#666666" text-anchor="middle" font-weight="normal">East</text><text x="770.00" y="408.00" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="10.5" fill="#666666" text-anchor="middle" font-weight="normal">North</text><text x="450" y="450" font-family="system-ui, sans-serif" font-size="10" fill="#666666" text-anchor="middle">computed on pandas · full scan 8 rows · chart rendering is not GPU-accelerated</text></svg></div></div>
+<h1>Regional Revenue Analysis</h1>
+<li>Source data: <code>fixture.csv</code></li>
+<li>Rows analysed: <strong>8</strong> (full scan, not a sample)</li>
+<li>Compute engine: <strong>pandas</strong> on none (CPU run)</li>
+<li>Generated: 2026-09-27 02:05:48</li>
+<li>Operation: <code>groupby</code></li>
+<h2>Grouped aggregates</h2>
+<p>Grouped by <code>region</code>, aggregated as <code>revenue:sum,mean</code>. 3 groups in total; top 3 shown, ranked by <code>revenue__sum</code>.</p>
+<table><thead><tr><th><code>region</code></th><th><code>revenue__sum</code></th><th><code>revenue__mean</code></th></tr></thead><tbody>
+<tr><td>West</td><td>600</td><td>200</td></tr>
+<tr><td>East</td><td>400</td><td>133.3</td></tr>
+<tr><td>North</td><td>200</td><td>100</td></tr>
+</tbody></table>
+<h2>Charts</h2>
+<h3>groupby bar</h3>
+<h3>groupby line</h3>
+<h2>How this was produced</h2>
+<p>Statistics were computed by <code>pandas</code> over the full dataset. The numbers in this report are exact aggregates, not estimates from a sample.</p>
+<p>This run used the CPU path, so no GPU acceleration is claimed for it.</p>
+<div class="foot">
+Self-contained single file: charts are inlined, so this opens offline with no server and can be forwarded as-is.
+</div>
+</div>
+</body>
+</html>

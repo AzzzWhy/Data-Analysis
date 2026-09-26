@@ -6,6 +6,21 @@ answer; it never reads the data.
 
 Submitted to the third NVIDIA DGX Spark Hackathon, Agent Skills track.
 
+## Newly verified evidence
+
+- [Fair resident CPU vs resident GPU](benchmark/resident/README.md): five repeats, both load
+  once. At 20M rows / 3.04 GB, GPU workflow median is 2.92x faster (2.46x including startup).
+  At 1M rows, resident CPU is 2.64x faster. Compute-only GPU variability is explicitly flagged.
+- [Real electricity demo](benchmark/real_power_demo/report.md): 2,075,259 genuine UCI minute
+  records, provenance, missing-value handling, independently checked findings and HTML charts.
+  This modest dataset intentionally routes to CPU.
+- [Independent client validation](benchmark/portability/README.md): separate Codex CLI
+  automatically discovered the installed skill and exported checked artifacts without this
+  repository's agent code. This is not a Claude execution test.
+
+Install with `python tools/install_skill.py --project /path/to/project`. Existing installations
+are preserved. `--client claude` selects directory layout only, not verified execution.
+
 ## How it works
 
 A language model cannot analyze a 3 GB CSV on its own. The file does not fit in the context
@@ -78,7 +93,7 @@ file, during the run.
 | :--- | :--- | :--- |
 | Skill invocation: choosing the right tool and arguments unprompted | The model selects from four tools. Given no path it calls `list_datasets` first. A conceptual question invokes nothing. After a bad column name it calls `profile` to get the real names and retries. A multi-step request switches to the session tool and passes its `goal` to claim a plan. | `agent/run_criteria_tests.sh`, 11 cases. The assertions run against the tool-call trace rather than the prose of the answer. |
 | Task completion: natural language in, real results out | All six operations return real statistics. An answer carries conclusions, rankings, tables and key findings, and the run also writes report and chart files the user can keep. | `smoke_test.py` (use the current runner output). `verify_*.py` recomputes the numbers independently. |
-| Innovation | A resident-memory session makes multi-step drill-down an order of magnitude cheaper; plans are system state rather than prompt text; deliverables are generated with no third-party dependency; the speedup is measured in the same conversation that reports it. | The scripted drill-down: 1.861 s in session against 37.933 s on CPU, 20.4x. |
+| Innovation | Resident sessions avoid repeated parsing; plans are system state; portable scripts produce full-data results and deliverables. | Historical 20.4x drill-down compares resident GPU with stateless CPU, not pure acceleration. The fair resident benchmark is 2.92x at 20M rows. |
 | Code usability: deployable, robust, survives bad input | The engine degrades to pandas on its own. No tool ever raises. A session is refused before loading when memory is short. A file that changed underneath a session is refused rather than answered from a stale snapshot. Two-column grouping fails with an explicit message. No GPU, a missing file and a bad column name are all handled gracefully. Memory is released in a `finally` block. | The no-GPU path runs on an ordinary machine. `tool_contract_test.py`, `plan_test.py` and the session tests cover the public contracts. |
 | Demo quality: a smooth end-to-end conversation | A scripted nine-stage demo runs in 176.8 s and shows the measured speedup at every stage, with the deliverables stage and the multi-step drill-down as its two peaks. `--prewarm` removes the first-query wait on stage. | `agent/demo_script.py`. |
 

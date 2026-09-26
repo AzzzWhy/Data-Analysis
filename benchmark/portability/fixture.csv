@@ -1,0 +1,9 @@
+region,revenue,cost,quantity
+East,100,70,1
+West,220,120,2
+East,140,90,3
+North,80,50,1
+West,180,100,4
+North,120,60,2
+East,160,100,2
+West,200,110,3

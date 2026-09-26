@@ -242,16 +242,8 @@ def do_open(req: dict) -> dict:
 
     force_cpu = bool(req.get("force_cpu"))
     force_gpu = bool(req.get("force_gpu"))
-    # Route exactly as the stateless engine does, with the same escape hatch. A resident session
-    # is a GPU-residency mechanism, so opening one for a file the GPU loses on is the worst of
-    # both: slower than pandas and holding device memory for the privilege.
-    #
-    # But the single-query verdict does not cover repeated work, and repeated work is what a
-    # session is for. The GPU's ~1.5 s fixed cost is paid once at open and then amortised across
-    # every later step, while the stateless pandas path re-reads the whole file on each call. So
-    # a small file CAN win on the GPU here -- measured on 2M rows, five analyses cost 3.45 s as
-    # five stateless CPU calls against a single warm session. force_gpu is therefore honoured for
-    # exactly this case, and the default stays CPU because a single query is the commoner case.
+    # Preserve the single-query heuristic. Both engines can keep data resident:
+    # resident GPU versus stateless CPU is not a fair acceleration comparison.
     if not force_cpu and not force_gpu:
         use_gpu, route_reason = GA.pick_engine_for(str(path), "session")
         if not use_gpu:
@@ -261,8 +253,9 @@ def do_open(req: dict) -> dict:
                       "a session would hold device memory for nothing. Call analyze_dataset or "
                       "export_deliverables instead; they will use pandas. If you are going to run "
                       "SEVERAL analyses over this same file, reopening it each time is the cost "
-                      "you are paying -- pass force_gpu=true to open a resident GPU session, "
-                      "which pays the GPU's startup cost once and reuses the loaded data."),
+                      "you are paying -- retry open with force_cpu=true for a resident CPU "
+                      "dataframe. Use force_gpu=true for an explicit comparison only; repeated "
+                      "work alone does not establish GPU superiority."),
                 route_threshold_rows=GA.SMALL_ROWS,
                 suggest_engine="pandas",
                 session_worth_it_if="several analyses over the same file, not one",
@@ -567,7 +560,7 @@ def do_close(req: dict) -> dict:
             "speedup_x": round(naive_cpu / total, 2) if total > 0 else None,
             "note": (
                 f"{sess.steps} full-data steps in this session took {total:.2f}s. Re-reading "
-                f"the file from disk and computing on the CPU at every step, the usual way, "
+                f"the file from disk on the CPU at every step (read time only, no compute), "
                 f"would take about {naive_cpu:.1f}s (one read {sess.cpu_load_seconds:.2f}s x "
                 f"{sess.steps} steps). The factor includes the gain from keeping the frame "
                 f"resident, so it is not a pure GPU compute speedup."

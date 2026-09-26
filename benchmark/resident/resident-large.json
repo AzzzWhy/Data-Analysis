@@ -1,0 +1,1214 @@
+{
+  "schema_version": 1,
+  "created_utc": "2026-09-26T17:56:49Z",
+  "methodology": "fresh process per sample; one load per engine; identical five full-data operations; alternating arm order; warm page cache; synchronized GPU; default pandas",
+  "input": {
+    "name": "sales_demo.csv",
+    "size_bytes": 3039057811,
+    "sha256": "a06bd30db7b86ad1cb4a233a2f5b757abf40c55d8c723cf467c25ee282054c4e"
+  },
+  "host": {
+    "platform": "Linux-6.14.0-1015-nvidia-aarch64-with-glibc2.39",
+    "logical_cores": 20,
+    "cuda_path": "/usr/local/cuda"
+  },
+  "agreement": true,
+  "repeats": 5,
+  "raw_samples": {
+    "cpu": [
+      {
+        "engine": "pandas",
+        "version": "2.3.3",
+        "init_seconds": 0.12368347600568086,
+        "load_seconds": 9.521862952038646,
+        "steps_seconds": {
+          "profile": 0.5510196849936619,
+          "summary": 1.9908981330227107,
+          "groupby": 0.6222107770154253,
+          "corr": 0.3230392240220681,
+          "outliers": 1.6177176949568093
+        },
+        "compute_seconds": 5.104885514010675,
+        "resident_workflow_seconds": 14.626748466049321,
+        "checks": {
+          "rows": 20000000,
+          "summary": {
+            "revenue": {
+              "count": 20000000,
+              "mean": 1073.9835821968995,
+              "median": 403.14206779901144,
+              "min": 0.2353628887891594,
+              "max": 556530.6546104136,
+              "q1": 156.9154243732754,
+              "q3": 1037.0261166064906
+            },
+            "cost": {
+              "count": 20000000,
+              "mean": 405.5547670046687,
+              "median": 221.46496818177522,
+              "min": 0.7025033410791737,
+              "max": 141509.02567068822,
+              "q1": 105.45919148984983,
+              "q3": 464.854352677285
+            },
+            "quantity": {
+              "count": 20000000,
+              "mean": 249.96011945,
+              "median": 250.0,
+              "min": 1,
+              "max": 499,
+              "q1": 125.0,
+              "q3": 375.0
+            }
+          },
+          "groupby": [
+            {
+              "region": "AMER",
+              "revenue__sum": 4299776626.075898,
+              "revenue__mean": 1075.049242582437,
+              "quantity__sum": 999468379
+            },
+            {
+              "region": "APAC",
+              "revenue__sum": 4298033716.377219,
+              "revenue__mean": 1074.4377848099537,
+              "quantity__sum": 999669651
+            },
+            {
+              "region": "EMEA",
+              "revenue__sum": 4286931276.5795007,
+              "revenue__mean": 1072.1225356865973,
+              "quantity__sum": 999591909
+            },
+            {
+              "region": "LATAM",
+              "revenue__sum": 4300004248.136153,
+              "revenue__mean": 1074.594865175002,
+              "quantity__sum": 1000291408
+            },
+            {
+              "region": "MEA",
+              "revenue__sum": 4294925776.7691846,
+              "revenue__mean": 1073.7126542208473,
+              "quantity__sum": 1000181042
+            }
+          ],
+          "corr": {
+            "revenue": {
+              "revenue": 1.0,
+              "cost": -0.00038685026839141694,
+              "quantity": 1.1770255165193575e-05
+            },
+            "cost": {
+              "revenue": -0.00038685026839141694,
+              "cost": 1.0,
+              "quantity": 2.6338627277916642e-05
+            },
+            "quantity": {
+              "revenue": 1.1770255165193575e-05,
+              "cost": 2.6338627277916642e-05,
+              "quantity": 1.0
+            }
+          },
+          "outlier_counts": {
+            "revenue": 2074816,
+            "cost": 1693882,
+            "quantity": 0
+          }
+        },
+        "process_wall_seconds": 14.846327067934908,
+        "repeat": 1,
+        "execution_order": 1
+      },
+      {
+        "engine": "pandas",
+        "version": "2.3.3",
+        "init_seconds": 0.12484854098875076,
+        "load_seconds": 9.538361193030141,
+        "steps_seconds": {
+          "profile": 0.551637347904034,
+          "summary": 2.003819555044174,
+          "groupby": 0.6177486039232463,
+          "corr": 0.3233765069162473,
+          "outliers": 1.6275764510501176
+        },
+        "compute_seconds": 5.124158464837819,
+        "resident_workflow_seconds": 14.66251965786796,
+        "checks": {
+          "rows": 20000000,
+          "summary": {
+            "revenue": {
+              "count": 20000000,
+              "mean": 1073.9835821968995,
+              "median": 403.14206779901144,
+              "min": 0.2353628887891594,
+              "max": 556530.6546104136,
+              "q1": 156.9154243732754,
+              "q3": 1037.0261166064906
+            },
+            "cost": {
+              "count": 20000000,
+              "mean": 405.5547670046687,
+              "median": 221.46496818177522,
+              "min": 0.7025033410791737,
+              "max": 141509.02567068822,
+              "q1": 105.45919148984983,
+              "q3": 464.854352677285
+            },
+            "quantity": {
+              "count": 20000000,
+              "mean": 249.96011945,
+              "median": 250.0,
+              "min": 1,
+              "max": 499,
+              "q1": 125.0,
+              "q3": 375.0
+            }
+          },
+          "groupby": [
+            {
+              "region": "AMER",
+              "revenue__sum": 4299776626.075898,
+              "revenue__mean": 1075.049242582437,
+              "quantity__sum": 999468379
+            },
+            {
+              "region": "APAC",
+              "revenue__sum": 4298033716.377219,
+              "revenue__mean": 1074.4377848099537,
+              "quantity__sum": 999669651
+            },
+            {
+              "region": "EMEA",
+              "revenue__sum": 4286931276.5795007,
+              "revenue__mean": 1072.1225356865973,
+              "quantity__sum": 999591909
+            },
+            {
+              "region": "LATAM",
+              "revenue__sum": 4300004248.136153,
+              "revenue__mean": 1074.594865175002,
+              "quantity__sum": 1000291408
+            },
+            {
+              "region": "MEA",
+              "revenue__sum": 4294925776.7691846,
+              "revenue__mean": 1073.7126542208473,
+              "quantity__sum": 1000181042
+            }
+          ],
+          "corr": {
+            "revenue": {
+              "revenue": 1.0,
+              "cost": -0.00038685026839141694,
+              "quantity": 1.1770255165193575e-05
+            },
+            "cost": {
+              "revenue": -0.00038685026839141694,
+              "cost": 1.0,
+              "quantity": 2.6338627277916642e-05
+            },
+            "quantity": {
+              "revenue": 1.1770255165193575e-05,
+              "cost": 2.6338627277916642e-05,
+              "quantity": 1.0
+            }
+          },
+          "outlier_counts": {
+            "revenue": 2074816,
+            "cost": 1693882,
+            "quantity": 0
+          }
+        },
+        "process_wall_seconds": 14.868167296983302,
+        "repeat": 2,
+        "execution_order": 4
+      },
+      {
+        "engine": "pandas",
+        "version": "2.3.3",
+        "init_seconds": 0.13347572297789156,
+        "load_seconds": 10.022055841051042,
+        "steps_seconds": {
+          "profile": 0.5621596690034494,
+          "summary": 2.0861589199630544,
+          "groupby": 0.6343680180143565,
+          "corr": 0.33065764198545367,
+          "outliers": 1.7163003419991583
+        },
+        "compute_seconds": 5.329644590965472,
+        "resident_workflow_seconds": 15.351700432016514,
+        "checks": {
+          "rows": 20000000,
+          "summary": {
+            "revenue": {
+              "count": 20000000,
+              "mean": 1073.9835821968995,
+              "median": 403.14206779901144,
+              "min": 0.2353628887891594,
+              "max": 556530.6546104136,
+              "q1": 156.9154243732754,
+              "q3": 1037.0261166064906
+            },
+            "cost": {
+              "count": 20000000,
+              "mean": 405.5547670046687,
+              "median": 221.46496818177522,
+              "min": 0.7025033410791737,
+              "max": 141509.02567068822,
+              "q1": 105.45919148984983,
+              "q3": 464.854352677285
+            },
+            "quantity": {
+              "count": 20000000,
+              "mean": 249.96011945,
+              "median": 250.0,
+              "min": 1,
+              "max": 499,
+              "q1": 125.0,
+              "q3": 375.0
+            }
+          },
+          "groupby": [
+            {
+              "region": "AMER",
+              "revenue__sum": 4299776626.075898,
+              "revenue__mean": 1075.049242582437,
+              "quantity__sum": 999468379
+            },
+            {
+              "region": "APAC",
+              "revenue__sum": 4298033716.377219,
+              "revenue__mean": 1074.4377848099537,
+              "quantity__sum": 999669651
+            },
+            {
+              "region": "EMEA",
+              "revenue__sum": 4286931276.5795007,
+              "revenue__mean": 1072.1225356865973,
+              "quantity__sum": 999591909
+            },
+            {
+              "region": "LATAM",
+              "revenue__sum": 4300004248.136153,
+              "revenue__mean": 1074.594865175002,
+              "quantity__sum": 1000291408
+            },
+            {
+              "region": "MEA",
+              "revenue__sum": 4294925776.7691846,
+              "revenue__mean": 1073.7126542208473,
+              "quantity__sum": 1000181042
+            }
+          ],
+          "corr": {
+            "revenue": {
+              "revenue": 1.0,
+              "cost": -0.00038685026839141694,
+              "quantity": 1.1770255165193575e-05
+            },
+            "cost": {
+              "revenue": -0.00038685026839141694,
+              "cost": 1.0,
+              "quantity": 2.6338627277916642e-05
+            },
+            "quantity": {
+              "revenue": 1.1770255165193575e-05,
+              "cost": 2.6338627277916642e-05,
+              "quantity": 1.0
+            }
+          },
+          "outlier_counts": {
+            "revenue": 2074816,
+            "cost": 1693882,
+            "quantity": 0
+          }
+        },
+        "process_wall_seconds": 15.57261918403674,
+        "repeat": 3,
+        "execution_order": 5
+      },
+      {
+        "engine": "pandas",
+        "version": "2.3.3",
+        "init_seconds": 0.1323291789740324,
+        "load_seconds": 9.917099370039068,
+        "steps_seconds": {
+          "profile": 0.5608399659395218,
+          "summary": 2.083280903985724,
+          "groupby": 0.6345588919939473,
+          "corr": 0.33095823891926557,
+          "outliers": 1.706649019033648
+        },
+        "compute_seconds": 5.316287019872107,
+        "resident_workflow_seconds": 15.233386389911175,
+        "checks": {
+          "rows": 20000000,
+          "summary": {
+            "revenue": {
+              "count": 20000000,
+              "mean": 1073.9835821968995,
+              "median": 403.14206779901144,
+              "min": 0.2353628887891594,
+              "max": 556530.6546104136,
+              "q1": 156.9154243732754,
+              "q3": 1037.0261166064906
+            },
+            "cost": {
+              "count": 20000000,
+              "mean": 405.5547670046687,
+              "median": 221.46496818177522,
+              "min": 0.7025033410791737,
+              "max": 141509.02567068822,
+              "q1": 105.45919148984983,
+              "q3": 464.854352677285
+            },
+            "quantity": {
+              "count": 20000000,
+              "mean": 249.96011945,
+              "median": 250.0,
+              "min": 1,
+              "max": 499,
+              "q1": 125.0,
+              "q3": 375.0
+            }
+          },
+          "groupby": [
+            {
+              "region": "AMER",
+              "revenue__sum": 4299776626.075898,
+              "revenue__mean": 1075.049242582437,
+              "quantity__sum": 999468379
+            },
+            {
+              "region": "APAC",
+              "revenue__sum": 4298033716.377219,
+              "revenue__mean": 1074.4377848099537,
+              "quantity__sum": 999669651
+            },
+            {
+              "region": "EMEA",
+              "revenue__sum": 4286931276.5795007,
+              "revenue__mean": 1072.1225356865973,
+              "quantity__sum": 999591909
+            },
+            {
+              "region": "LATAM",
+              "revenue__sum": 4300004248.136153,
+              "revenue__mean": 1074.594865175002,
+              "quantity__sum": 1000291408
+            },
+            {
+              "region": "MEA",
+              "revenue__sum": 4294925776.7691846,
+              "revenue__mean": 1073.7126542208473,
+              "quantity__sum": 1000181042
+            }
+          ],
+          "corr": {
+            "revenue": {
+              "revenue": 1.0,
+              "cost": -0.00038685026839141694,
+              "quantity": 1.1770255165193575e-05
+            },
+            "cost": {
+              "revenue": -0.00038685026839141694,
+              "cost": 1.0,
+              "quantity": 2.6338627277916642e-05
+            },
+            "quantity": {
+              "revenue": 1.1770255165193575e-05,
+              "cost": 2.6338627277916642e-05,
+              "quantity": 1.0
+            }
+          },
+          "outlier_counts": {
+            "revenue": 2074816,
+            "cost": 1693882,
+            "quantity": 0
+          }
+        },
+        "process_wall_seconds": 15.453598527936265,
+        "repeat": 4,
+        "execution_order": 8
+      },
+      {
+        "engine": "pandas",
+        "version": "2.3.3",
+        "init_seconds": 0.12406473804730922,
+        "load_seconds": 9.479460899019614,
+        "steps_seconds": {
+          "profile": 0.5512067170348018,
+          "summary": 2.003281584009528,
+          "groupby": 0.624201396945864,
+          "corr": 0.3235442569712177,
+          "outliers": 1.630000018980354
+        },
+        "compute_seconds": 5.132233973941766,
+        "resident_workflow_seconds": 14.61169487296138,
+        "checks": {
+          "rows": 20000000,
+          "summary": {
+            "revenue": {
+              "count": 20000000,
+              "mean": 1073.9835821968995,
+              "median": 403.14206779901144,
+              "min": 0.2353628887891594,
+              "max": 556530.6546104136,
+              "q1": 156.9154243732754,
+              "q3": 1037.0261166064906
+            },
+            "cost": {
+              "count": 20000000,
+              "mean": 405.5547670046687,
+              "median": 221.46496818177522,
+              "min": 0.7025033410791737,
+              "max": 141509.02567068822,
+              "q1": 105.45919148984983,
+              "q3": 464.854352677285
+            },
+            "quantity": {
+              "count": 20000000,
+              "mean": 249.96011945,
+              "median": 250.0,
+              "min": 1,
+              "max": 499,
+              "q1": 125.0,
+              "q3": 375.0
+            }
+          },
+          "groupby": [
+            {
+              "region": "AMER",
+              "revenue__sum": 4299776626.075898,
+              "revenue__mean": 1075.049242582437,
+              "quantity__sum": 999468379
+            },
+            {
+              "region": "APAC",
+              "revenue__sum": 4298033716.377219,
+              "revenue__mean": 1074.4377848099537,
+              "quantity__sum": 999669651
+            },
+            {
+              "region": "EMEA",
+              "revenue__sum": 4286931276.5795007,
+              "revenue__mean": 1072.1225356865973,
+              "quantity__sum": 999591909
+            },
+            {
+              "region": "LATAM",
+              "revenue__sum": 4300004248.136153,
+              "revenue__mean": 1074.594865175002,
+              "quantity__sum": 1000291408
+            },
+            {
+              "region": "MEA",
+              "revenue__sum": 4294925776.7691846,
+              "revenue__mean": 1073.7126542208473,
+              "quantity__sum": 1000181042
+            }
+          ],
+          "corr": {
+            "revenue": {
+              "revenue": 1.0,
+              "cost": -0.00038685026839141694,
+              "quantity": 1.1770255165193575e-05
+            },
+            "cost": {
+              "revenue": -0.00038685026839141694,
+              "cost": 1.0,
+              "quantity": 2.6338627277916642e-05
+            },
+            "quantity": {
+              "revenue": 1.1770255165193575e-05,
+              "cost": 2.6338627277916642e-05,
+              "quantity": 1.0
+            }
+          },
+          "outlier_counts": {
+            "revenue": 2074816,
+            "cost": 1693882,
+            "quantity": 0
+          }
+        },
+        "process_wall_seconds": 14.83033703896217,
+        "repeat": 5,
+        "execution_order": 9
+      }
+    ],
+    "gpu": [
+      {
+        "engine": "cudf",
+        "version": "25.10.00",
+        "init_seconds": 0.7251575409900397,
+        "load_seconds": 1.8846416949527338,
+        "steps_seconds": {
+          "profile": 0.6195156179601327,
+          "summary": 1.1394282049732283,
+          "groupby": 0.04624412197154015,
+          "corr": 0.7829913989407942,
+          "outliers": 0.9465477089397609
+        },
+        "compute_seconds": 3.534727052785456,
+        "resident_workflow_seconds": 5.41936874773819,
+        "checks": {
+          "rows": 20000000,
+          "summary": {
+            "revenue": {
+              "count": 20000000,
+              "mean": 1073.9835821968977,
+              "median": 403.14206779901144,
+              "min": 0.23536288878915945,
+              "max": 556530.6546104136,
+              "q1": 156.9154243732754,
+              "q3": 1037.0261166064909
+            },
+            "cost": {
+              "count": 20000000,
+              "mean": 405.5547670046678,
+              "median": 221.46496818177525,
+              "min": 0.7025033410791737,
+              "max": 141509.02567068825,
+              "q1": 105.45919148984984,
+              "q3": 464.8543526772851
+            },
+            "quantity": {
+              "count": 20000000,
+              "mean": 249.96011945,
+              "median": 250.0,
+              "min": 1,
+              "max": 499,
+              "q1": 125.0,
+              "q3": 375.0
+            }
+          },
+          "groupby": [
+            {
+              "region": "AMER",
+              "revenue__sum": 4299776626.075897,
+              "revenue__mean": 1075.0492425824368,
+              "quantity__sum": 999468379
+            },
+            {
+              "region": "APAC",
+              "revenue__sum": 4298033716.377215,
+              "revenue__mean": 1074.4377848099525,
+              "quantity__sum": 999669651
+            },
+            {
+              "region": "EMEA",
+              "revenue__sum": 4286931276.5794926,
+              "revenue__mean": 1072.1225356865953,
+              "quantity__sum": 999591909
+            },
+            {
+              "region": "LATAM",
+              "revenue__sum": 4300004248.136154,
+              "revenue__mean": 1074.5948651750025,
+              "quantity__sum": 1000291408
+            },
+            {
+              "region": "MEA",
+              "revenue__sum": 4294925776.7691774,
+              "revenue__mean": 1073.7126542208455,
+              "quantity__sum": 1000181042
+            }
+          ],
+          "corr": {
+            "revenue": {
+              "revenue": 1.0,
+              "cost": -0.0003868502683914444,
+              "quantity": 1.1770255165199836e-05
+            },
+            "cost": {
+              "revenue": -0.0003868502683914444,
+              "cost": 1.0,
+              "quantity": 2.6338627277918513e-05
+            },
+            "quantity": {
+              "revenue": 1.1770255165199836e-05,
+              "cost": 2.6338627277918516e-05,
+              "quantity": 1.0
+            }
+          },
+          "outlier_counts": {
+            "revenue": 2074816,
+            "cost": 1693882,
+            "quantity": 0
+          }
+        },
+        "process_wall_seconds": 6.521835739957169,
+        "repeat": 1,
+        "execution_order": 2
+      },
+      {
+        "engine": "cudf",
+        "version": "25.10.00",
+        "init_seconds": 0.6707542160293087,
+        "load_seconds": 1.8807811400620267,
+        "steps_seconds": {
+          "profile": 0.052908741985447705,
+          "summary": 1.1474047290394083,
+          "groupby": 0.04654517804738134,
+          "corr": 0.37225454405415803,
+          "outliers": 0.9562574920710176
+        },
+        "compute_seconds": 2.575370685197413,
+        "resident_workflow_seconds": 4.45615182525944,
+        "checks": {
+          "rows": 20000000,
+          "summary": {
+            "revenue": {
+              "count": 20000000,
+              "mean": 1073.9835821968977,
+              "median": 403.14206779901144,
+              "min": 0.23536288878915945,
+              "max": 556530.6546104136,
+              "q1": 156.9154243732754,
+              "q3": 1037.0261166064909
+            },
+            "cost": {
+              "count": 20000000,
+              "mean": 405.5547670046678,
+              "median": 221.46496818177525,
+              "min": 0.7025033410791737,
+              "max": 141509.02567068825,
+              "q1": 105.45919148984984,
+              "q3": 464.8543526772851
+            },
+            "quantity": {
+              "count": 20000000,
+              "mean": 249.96011945,
+              "median": 250.0,
+              "min": 1,
+              "max": 499,
+              "q1": 125.0,
+              "q3": 375.0
+            }
+          },
+          "groupby": [
+            {
+              "region": "AMER",
+              "revenue__sum": 4299776626.075897,
+              "revenue__mean": 1075.0492425824368,
+              "quantity__sum": 999468379
+            },
+            {
+              "region": "APAC",
+              "revenue__sum": 4298033716.377214,
+              "revenue__mean": 1074.4377848099523,
+              "quantity__sum": 999669651
+            },
+            {
+              "region": "EMEA",
+              "revenue__sum": 4286931276.5794935,
+              "revenue__mean": 1072.1225356865955,
+              "quantity__sum": 999591909
+            },
+            {
+              "region": "LATAM",
+              "revenue__sum": 4300004248.136162,
+              "revenue__mean": 1074.5948651750043,
+              "quantity__sum": 1000291408
+            },
+            {
+              "region": "MEA",
+              "revenue__sum": 4294925776.7691793,
+              "revenue__mean": 1073.712654220846,
+              "quantity__sum": 1000181042
+            }
+          ],
+          "corr": {
+            "revenue": {
+              "revenue": 1.0,
+              "cost": -0.0003868502683914444,
+              "quantity": 1.1770255165199836e-05
+            },
+            "cost": {
+              "revenue": -0.0003868502683914444,
+              "cost": 1.0,
+              "quantity": 2.6338627277918513e-05
+            },
+            "quantity": {
+              "revenue": 1.1770255165199836e-05,
+              "cost": 2.6338627277918516e-05,
+              "quantity": 1.0
+            }
+          },
+          "outlier_counts": {
+            "revenue": 2074816,
+            "cost": 1693882,
+            "quantity": 0
+          }
+        },
+        "process_wall_seconds": 5.499764185980894,
+        "repeat": 2,
+        "execution_order": 3
+      },
+      {
+        "engine": "cudf",
+        "version": "25.10.00",
+        "init_seconds": 0.7000008509494364,
+        "load_seconds": 1.8719428098993376,
+        "steps_seconds": {
+          "profile": 0.053032608004286885,
+          "summary": 1.1440401750151068,
+          "groupby": 0.04617129894904792,
+          "corr": 0.36778424005024135,
+          "outliers": 0.949898038059473
+        },
+        "compute_seconds": 2.560926360078156,
+        "resident_workflow_seconds": 4.432869169977494,
+        "checks": {
+          "rows": 20000000,
+          "summary": {
+            "revenue": {
+              "count": 20000000,
+              "mean": 1073.9835821968977,
+              "median": 403.14206779901144,
+              "min": 0.23536288878915945,
+              "max": 556530.6546104136,
+              "q1": 156.9154243732754,
+              "q3": 1037.0261166064909
+            },
+            "cost": {
+              "count": 20000000,
+              "mean": 405.5547670046678,
+              "median": 221.46496818177525,
+              "min": 0.7025033410791737,
+              "max": 141509.02567068825,
+              "q1": 105.45919148984984,
+              "q3": 464.8543526772851
+            },
+            "quantity": {
+              "count": 20000000,
+              "mean": 249.96011945,
+              "median": 250.0,
+              "min": 1,
+              "max": 499,
+              "q1": 125.0,
+              "q3": 375.0
+            }
+          },
+          "groupby": [
+            {
+              "region": "AMER",
+              "revenue__sum": 4299776626.075895,
+              "revenue__mean": 1075.0492425824364,
+              "quantity__sum": 999468379
+            },
+            {
+              "region": "APAC",
+              "revenue__sum": 4298033716.377217,
+              "revenue__mean": 1074.437784809953,
+              "quantity__sum": 999669651
+            },
+            {
+              "region": "EMEA",
+              "revenue__sum": 4286931276.5794954,
+              "revenue__mean": 1072.122535686596,
+              "quantity__sum": 999591909
+            },
+            {
+              "region": "LATAM",
+              "revenue__sum": 4300004248.136161,
+              "revenue__mean": 1074.594865175004,
+              "quantity__sum": 1000291408
+            },
+            {
+              "region": "MEA",
+              "revenue__sum": 4294925776.7691793,
+              "revenue__mean": 1073.712654220846,
+              "quantity__sum": 1000181042
+            }
+          ],
+          "corr": {
+            "revenue": {
+              "revenue": 1.0,
+              "cost": -0.0003868502683914444,
+              "quantity": 1.1770255165199836e-05
+            },
+            "cost": {
+              "revenue": -0.0003868502683914444,
+              "cost": 1.0,
+              "quantity": 2.6338627277918513e-05
+            },
+            "quantity": {
+              "revenue": 1.1770255165199836e-05,
+              "cost": 2.6338627277918516e-05,
+              "quantity": 1.0
+            }
+          },
+          "outlier_counts": {
+            "revenue": 2074816,
+            "cost": 1693882,
+            "quantity": 0
+          }
+        },
+        "process_wall_seconds": 5.477083712932654,
+        "repeat": 3,
+        "execution_order": 6
+      },
+      {
+        "engine": "cudf",
+        "version": "25.10.00",
+        "init_seconds": 0.6644964331062511,
+        "load_seconds": 1.8853525290032849,
+        "steps_seconds": {
+          "profile": 0.61878479400184,
+          "summary": 1.1479636890580878,
+          "groupby": 0.04769904806744307,
+          "corr": 0.37173768889624625,
+          "outliers": 0.9564071350032464
+        },
+        "compute_seconds": 3.1425923550268635,
+        "resident_workflow_seconds": 5.027944884030148,
+        "checks": {
+          "rows": 20000000,
+          "summary": {
+            "revenue": {
+              "count": 20000000,
+              "mean": 1073.9835821968977,
+              "median": 403.14206779901144,
+              "min": 0.23536288878915945,
+              "max": 556530.6546104136,
+              "q1": 156.9154243732754,
+              "q3": 1037.0261166064909
+            },
+            "cost": {
+              "count": 20000000,
+              "mean": 405.5547670046678,
+              "median": 221.46496818177525,
+              "min": 0.7025033410791737,
+              "max": 141509.02567068825,
+              "q1": 105.45919148984984,
+              "q3": 464.8543526772851
+            },
+            "quantity": {
+              "count": 20000000,
+              "mean": 249.96011945,
+              "median": 250.0,
+              "min": 1,
+              "max": 499,
+              "q1": 125.0,
+              "q3": 375.0
+            }
+          },
+          "groupby": [
+            {
+              "region": "AMER",
+              "revenue__sum": 4299776626.075902,
+              "revenue__mean": 1075.049242582438,
+              "quantity__sum": 999468379
+            },
+            {
+              "region": "APAC",
+              "revenue__sum": 4298033716.377214,
+              "revenue__mean": 1074.4377848099523,
+              "quantity__sum": 999669651
+            },
+            {
+              "region": "EMEA",
+              "revenue__sum": 4286931276.5794964,
+              "revenue__mean": 1072.1225356865962,
+              "quantity__sum": 999591909
+            },
+            {
+              "region": "LATAM",
+              "revenue__sum": 4300004248.136153,
+              "revenue__mean": 1074.594865175002,
+              "quantity__sum": 1000291408
+            },
+            {
+              "region": "MEA",
+              "revenue__sum": 4294925776.769184,
+              "revenue__mean": 1073.712654220847,
+              "quantity__sum": 1000181042
+            }
+          ],
+          "corr": {
+            "revenue": {
+              "revenue": 1.0,
+              "cost": -0.0003868502683914444,
+              "quantity": 1.1770255165199836e-05
+            },
+            "cost": {
+              "revenue": -0.0003868502683914444,
+              "cost": 1.0,
+              "quantity": 2.6338627277918513e-05
+            },
+            "quantity": {
+              "revenue": 1.1770255165199836e-05,
+              "cost": 2.6338627277918516e-05,
+              "quantity": 1.0
+            }
+          },
+          "outlier_counts": {
+            "revenue": 2074816,
+            "cost": 1693882,
+            "quantity": 0
+          }
+        },
+        "process_wall_seconds": 6.040615003905259,
+        "repeat": 4,
+        "execution_order": 7
+      },
+      {
+        "engine": "cudf",
+        "version": "25.10.00",
+        "init_seconds": 0.7056271019391716,
+        "load_seconds": 1.878289310960099,
+        "steps_seconds": {
+          "profile": 0.6147561159450561,
+          "summary": 1.148917595972307,
+          "groupby": 0.046741952071897686,
+          "corr": 0.37099207600113004,
+          "outliers": 0.9606292849639431
+        },
+        "compute_seconds": 3.142037024954334,
+        "resident_workflow_seconds": 5.020326335914433,
+        "checks": {
+          "rows": 20000000,
+          "summary": {
+            "revenue": {
+              "count": 20000000,
+              "mean": 1073.9835821968977,
+              "median": 403.14206779901144,
+              "min": 0.23536288878915945,
+              "max": 556530.6546104136,
+              "q1": 156.9154243732754,
+              "q3": 1037.0261166064909
+            },
+            "cost": {
+              "count": 20000000,
+              "mean": 405.5547670046678,
+              "median": 221.46496818177525,
+              "min": 0.7025033410791737,
+              "max": 141509.02567068825,
+              "q1": 105.45919148984984,
+              "q3": 464.8543526772851
+            },
+            "quantity": {
+              "count": 20000000,
+              "mean": 249.96011945,
+              "median": 250.0,
+              "min": 1,
+              "max": 499,
+              "q1": 125.0,
+              "q3": 375.0
+            }
+          },
+          "groupby": [
+            {
+              "region": "AMER",
+              "revenue__sum": 4299776626.075903,
+              "revenue__mean": 1075.0492425824382,
+              "quantity__sum": 999468379
+            },
+            {
+              "region": "APAC",
+              "revenue__sum": 4298033716.377213,
+              "revenue__mean": 1074.4377848099518,
+              "quantity__sum": 999669651
+            },
+            {
+              "region": "EMEA",
+              "revenue__sum": 4286931276.5795,
+              "revenue__mean": 1072.122535686597,
+              "quantity__sum": 999591909
+            },
+            {
+              "region": "LATAM",
+              "revenue__sum": 4300004248.136154,
+              "revenue__mean": 1074.5948651750025,
+              "quantity__sum": 1000291408
+            },
+            {
+              "region": "MEA",
+              "revenue__sum": 4294925776.769178,
+              "revenue__mean": 1073.7126542208457,
+              "quantity__sum": 1000181042
+            }
+          ],
+          "corr": {
+            "revenue": {
+              "revenue": 1.0,
+              "cost": -0.0003868502683914444,
+              "quantity": 1.1770255165199836e-05
+            },
+            "cost": {
+              "revenue": -0.0003868502683914444,
+              "cost": 1.0,
+              "quantity": 2.6338627277918513e-05
+            },
+            "quantity": {
+              "revenue": 1.1770255165199836e-05,
+              "cost": 2.6338627277918516e-05,
+              "quantity": 1.0
+            }
+          },
+          "outlier_counts": {
+            "revenue": 2074816,
+            "cost": 1693882,
+            "quantity": 0
+          }
+        },
+        "process_wall_seconds": 6.111404165043496,
+        "repeat": 5,
+        "execution_order": 10
+      }
+    ]
+  },
+  "summary": {
+    "cpu": {
+      "init_seconds": {
+        "samples": [
+          0.12368347600568086,
+          0.12484854098875076,
+          0.13347572297789156,
+          0.1323291789740324,
+          0.12406473804730922
+        ],
+        "median": 0.12484854098875076,
+        "mean": 0.12768033139873297,
+        "sample_stdev": 0.004802727156940272,
+        "cv_percent": 3.7615246642349582
+      },
+      "load_seconds": {
+        "samples": [
+          9.521862952038646,
+          9.538361193030141,
+          10.022055841051042,
+          9.917099370039068,
+          9.479460899019614
+        ],
+        "median": 9.538361193030141,
+        "mean": 9.695768051035703,
+        "sample_stdev": 0.253604002877781,
+        "cv_percent": 2.615615406050179
+      },
+      "compute_seconds": {
+        "samples": [
+          5.104885514010675,
+          5.124158464837819,
+          5.329644590965472,
+          5.316287019872107,
+          5.132233973941766
+        ],
+        "median": 5.132233973941766,
+        "mean": 5.201441912725568,
+        "sample_stdev": 0.11147974433085878,
+        "cv_percent": 2.1432469342418
+      },
+      "resident_workflow_seconds": {
+        "samples": [
+          14.626748466049321,
+          14.66251965786796,
+          15.351700432016514,
+          15.233386389911175,
+          14.61169487296138
+        ],
+        "median": 14.66251965786796,
+        "mean": 14.89720996376127,
+        "sample_stdev": 0.36377328232470185,
+        "cv_percent": 2.4418886704934097
+      },
+      "process_wall_seconds": {
+        "samples": [
+          14.846327067934908,
+          14.868167296983302,
+          15.57261918403674,
+          15.453598527936265,
+          14.83033703896217
+        ],
+        "median": 14.868167296983302,
+        "mean": 15.114209823170677,
+        "sample_stdev": 0.36681251611407584,
+        "cv_percent": 2.4269380960408387
+      }
+    },
+    "gpu": {
+      "init_seconds": {
+        "samples": [
+          0.7251575409900397,
+          0.6707542160293087,
+          0.7000008509494364,
+          0.6644964331062511,
+          0.7056271019391716
+        ],
+        "median": 0.7000008509494364,
+        "mean": 0.6932072286028415,
+        "sample_stdev": 0.02524716108591442,
+        "cv_percent": 3.6420798924442908
+      },
+      "load_seconds": {
+        "samples": [
+          1.8846416949527338,
+          1.8807811400620267,
+          1.8719428098993376,
+          1.8853525290032849,
+          1.878289310960099
+        ],
+        "median": 1.8807811400620267,
+        "mean": 1.8802014969754963,
+        "sample_stdev": 0.005441664329860896,
+        "cv_percent": 0.289419210580057
+      },
+      "compute_seconds": {
+        "samples": [
+          3.534727052785456,
+          2.575370685197413,
+          2.560926360078156,
+          3.1425923550268635,
+          3.142037024954334
+        ],
+        "median": 3.142037024954334,
+        "mean": 2.9911306956084447,
+        "sample_stdev": 0.4180737107893136,
+        "cv_percent": 13.977112782237375
+      },
+      "resident_workflow_seconds": {
+        "samples": [
+          5.41936874773819,
+          4.45615182525944,
+          4.432869169977494,
+          5.027944884030148,
+          5.020326335914433
+        ],
+        "median": 5.020326335914433,
+        "mean": 4.871332192583941,
+        "sample_stdev": 0.42181021065730445,
+        "cv_percent": 8.65903194406375
+      },
+      "process_wall_seconds": {
+        "samples": [
+          6.521835739957169,
+          5.499764185980894,
+          5.477083712932654,
+          6.040615003905259,
+          6.111404165043496
+        ],
+        "median": 6.040615003905259,
+        "mean": 5.930140561563894,
+        "sample_stdev": 0.44318410769186134,
+        "cv_percent": 7.473416575727591
+      }
+    }
+  },
+  "cpu_over_gpu_ratio": {
+    "init_seconds": 0.17835484173971242,
+    "load_seconds": 5.07148917535167,
+    "compute_seconds": 1.6334097698980352,
+    "resident_workflow_seconds": 2.9206307870815413,
+    "process_wall_seconds": 2.461366481288913
+  },
+  "unstable_metrics": [
+    "gpu.compute_seconds"
+  ],
+  "limitations": [
+    "Warm page cache, CSV, this machine and these selected operations only.",
+    "Default pandas baseline; not compared with Polars, DuckDB or tuned CPU parallelism.",
+    "CV >10% is flagged; do not present flagged metrics as stable measurements."
+  ]
+}

@@ -1,0 +1,142 @@
+{
+  "ok": true,
+  "op": "groupby",
+  "input": "power_demo.csv",
+  "engine": "pandas",
+  "accelerated": false,
+  "rows_scanned": 2075259,
+  "total_seconds": 0.8122996039455757,
+  "routing_reason": "file is 143.5 MB (about 71 bytes per row over roughly 2,024,392 rows), below the 400.0 MB crossover measured on this hardware. The GPU is slower at this size because most of its runtime is fixed startup cost (~1.5 s) rather than compute, and the CPU path wins on bytes parsed per second. Pass force_gpu=true to compare anyway.",
+  "fallback_reason": null,
+  "groupby": {
+    "by": "hour",
+    "agg": "Global_active_power:mean,count",
+    "groups": 24,
+    "sorted_by": "Global_active_power__mean",
+    "top_k": [
+      {
+        "hour": "h20",
+        "Global_active_power__mean": 1.899064135957484,
+        "Global_active_power__count": 85615
+      },
+      {
+        "hour": "h21",
+        "Global_active_power__mean": 1.877697459341276,
+        "Global_active_power__count": 85529
+      },
+      {
+        "hour": "h19",
+        "Global_active_power__mean": 1.73333506347759,
+        "Global_active_power__count": 85542
+      },
+      {
+        "hour": "h07",
+        "Global_active_power__mean": 1.502246329909479,
+        "Global_active_power__count": 85284
+      },
+      {
+        "hour": "h08",
+        "Global_active_power__mean": 1.461016495691424,
+        "Global_active_power__count": 85295
+      },
+      {
+        "hour": "h22",
+        "Global_active_power__mean": 1.4126147300503782,
+        "Global_active_power__count": 85553
+      },
+      {
+        "hour": "h09",
+        "Global_active_power__mean": 1.3316453420225982,
+        "Global_active_power__count": 85316
+      },
+      {
+        "hour": "h18",
+        "Global_active_power__mean": 1.3264510996285752,
+        "Global_active_power__count": 85347
+      },
+      {
+        "hour": "h10",
+        "Global_active_power__mean": 1.2606274399399398,
+        "Global_active_power__count": 85248
+      },
+      {
+        "hour": "h11",
+        "Global_active_power__mean": 1.2458220016891892,
+        "Global_active_power__count": 85248
+      },
+      {
+        "hour": "h12",
+        "Global_active_power__mean": 1.2070750260792105,
+        "Global_active_power__count": 85317
+      },
+      {
+        "hour": "h13",
+        "Global_active_power__mean": 1.144532153737989,
+        "Global_active_power__count": 85340
+      },
+      {
+        "hour": "h14",
+        "Global_active_power__mean": 1.0828393185410692,
+        "Global_active_power__count": 85405
+      },
+      {
+        "hour": "h17",
+        "Global_active_power__mean": 1.0551093585206366,
+        "Global_active_power__count": 85334
+      },
+      {
+        "hour": "h15",
+        "Global_active_power__mean": 0.9907604535126144,
+        "Global_active_power__count": 85378
+      },
+      {
+        "hour": "h16",
+        "Global_active_power__mean": 0.9489045760824983,
+        "Global_active_power__count": 85335
+      },
+      {
+        "hour": "h23",
+        "Global_active_power__mean": 0.902141608228144,
+        "Global_active_power__count": 85560
+      },
+      {
+        "hour": "h06",
+        "Global_active_power__mean": 0.7915996434394024,
+        "Global_active_power__count": 85259
+      },
+      {
+        "hour": "h00",
+        "Global_active_power__mean": 0.6594341860546724,
+        "Global_active_power__count": 85491
+      },
+      {
+        "hour": "h01",
+        "Global_active_power__mean": 0.5393251638576779,
+        "Global_active_power__count": 85440
+      },
+      {
+        "hour": "h02",
+        "Global_active_power__mean": 0.48062055969756196,
+        "Global_active_power__count": 85439
+      },
+      {
+        "hour": "h05",
+        "Global_active_power__mean": 0.4536735397607319,
+        "Global_active_power__count": 85260
+      },
+      {
+        "hour": "h03",
+        "Global_active_power__mean": 0.4448663201760547,
+        "Global_active_power__count": 85428
+      },
+      {
+        "hour": "h04",
+        "Global_active_power__mean": 0.4438472520130806,
+        "Global_active_power__count": 85317
+      }
+    ],
+    "notes": [],
+    "rows_scanned": 2075259,
+    "compute_seconds": 0.066378
+  }
+}

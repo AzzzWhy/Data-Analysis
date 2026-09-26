@@ -1,0 +1,30 @@
+{
+  "passed": true,
+  "client": "Codex CLI",
+  "implicit_skill_selection": true,
+  "installed_skill_read": true,
+  "repository_agent_imported": false,
+  "rows_checked": 8,
+  "fixture_sha256": "b94695830417d356c7924f72aa38f7701805770ee0c7ccbe777f000c5ba1e188",
+  "engine": "pandas",
+  "engine_version": "3.0.1",
+  "independent_numeric_agreement": true,
+  "ranked_regions": [
+    "West",
+    "East",
+    "North"
+  ],
+  "csv_and_actual_tool_output_verified": true,
+  "inline_svg_count": 2,
+  "successful_commands": 9,
+  "failed_commands": 0,
+  "artifacts": [
+    "groupby.csv",
+    "report.html"
+  ],
+  "limitations": [
+    "One CPU-only fixture on Windows; no remote GPU or Claude client validation.",
+    "First execution-policy attempt failed; retry completed with workspace approvals.",
+    "WebSocket failed and the CLI fell back to HTTPS; raw traces retained outside the public repo."
+  ]
+}
