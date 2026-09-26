@@ -46,9 +46,11 @@ class SparkTUI(App):
     $muted: #a49c93;
     $accent: #d99a76;
     Screen { background: $surface; color: $ink; padding: 0 2; }
-    #brand { height: 2; padding-top: 1; color: $ink; }
-    #brand-icon { width: 6; height: 1; color: $accent; text-style: bold; }
-    #brand-title { width: 1fr; height: 1; color: $ink; text-style: bold; }
+    #brand { height: 3; padding-top: 1; color: $ink; }
+    #brand-icon { width: 6; height: 2; content-align: left middle; color: $accent; text-style: bold; }
+    #brand-copy { width: 1fr; height: 2; }
+    #brand-eyebrow { height: 1; color: $accent; text-style: bold; }
+    #brand-title { height: 1; color: $ink; text-style: bold; }
     #context { height: 1; color: $muted; }
     #body { height: 1fr; layout: vertical; }
     #sidebar { width: 1fr; height: 7; padding: 0 1; border: round #57504a; }
@@ -77,7 +79,7 @@ class SparkTUI(App):
     #prompt:disabled { opacity: 60%; }
     #shortcuts { height: 1; background: $surface; color: $muted; }
     .tiny { padding: 0 1; }
-    .tiny #brand { height: 1; padding-top: 0; }
+    .tiny #brand { height: 2; padding-top: 0; }
     .tiny #context { height: 1; }
     '''
 
@@ -107,8 +109,10 @@ class SparkTUI(App):
 
     def compose(self) -> ComposeResult:
         with Horizontal(id='brand'):
-            yield Static('▁▃▆', id='brand-icon', markup=False)
-            yield Static(self.brand_name(), id='brand-title', markup=False)
+            yield Static('//✦', id='brand-icon', markup=False)
+            with Vertical(id='brand-copy'):
+                yield Static('GPU × DATA', id='brand-eyebrow', markup=False)
+                yield Static(self.brand_title(), id='brand-title', markup=False)
         yield Static(self.context_text(), id='context', markup=False)
         with Horizontal(id='body'):
             with Vertical(id='sidebar'):
@@ -148,7 +152,10 @@ class SparkTUI(App):
         return '  ·  '.join(part for part in (self.model or self.t('未配置模型'), host, dataset) if part)
 
     def brand_text(self):
-        return '▁▃▆  ' + self.brand_name()
+        return '//✦  GPU × DATA  ' + self.brand_title()
+
+    def brand_title(self):
+        return 'Acceleration & Data Analysis' if self.language == 'en' else '加速与数据分析'
 
     def brand_name(self):
         return ('GPU Data Analysis' if self.language == 'en' else 'GPU加速与数据分析') \
@@ -166,7 +173,7 @@ class SparkTUI(App):
 
     def refresh_language(self):
         self.title = self.t('GPU加速与数据分析')
-        self.query_one('#brand-title', Static).update(self.brand_name())
+        self.query_one('#brand-title', Static).update(self.brand_title())
         for selector, key in (('#file-label', '选择数据文件  ·  Enter 确认 / Esc 返回'),
                               ('#file-hint', 'F3 选择文件\nEnter 确认路径\nTab 切换区域')):
             self.query_one(selector, Static).update(self.t(key))
@@ -209,7 +216,7 @@ class SparkTUI(App):
         self.set_class(width < 100, 'compact')
         self.set_class(width < 65, 'tiny')
         if self.query('#brand'):
-            self.query_one('#brand-title', Static).update(self.brand_name())
+            self.query_one('#brand-title', Static).update(self.brand_title())
 
     def refresh_status(self):
         # A timer event may already be queued when terminal teardown removes widgets.

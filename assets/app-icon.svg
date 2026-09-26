@@ -1,18 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
   <title id="title">GPU加速与数据分析</title>
-  <desc id="desc">Three ascending warm-orange data columns on a dark rounded square.</desc>
+  <desc id="desc">Two parallel acceleration strokes lead to a warm four-point insight spark.</desc>
   <defs>
     <linearGradient id="surface" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#252321"/>
       <stop offset="1" stop-color="#191919"/>
     </linearGradient>
-    <linearGradient id="bars" x1="0" y1="1" x2="1" y2="0">
+    <linearGradient id="motion" x1="0" y1="1" x2="1" y2="0">
       <stop offset="0" stop-color="#c3785c"/>
       <stop offset="1" stop-color="#efbc96"/>
     </linearGradient>
   </defs>
   <rect x="4" y="4" width="120" height="120" rx="29" fill="url(#surface)" stroke="#443a35" stroke-width="2"/>
-  <rect x="25" y="74" width="20" height="30" rx="5" fill="#886f65"/>
-  <rect x="54" y="55" width="20" height="49" rx="5" fill="#b18a78"/>
-  <rect x="83" y="31" width="20" height="73" rx="5" fill="url(#bars)"/>
+  <path d="M24 90 55 39 M49 90 80 39" fill="none" stroke="url(#motion)" stroke-linecap="round" stroke-width="11"/>
+  <path d="M96 54 101 68 115 73 101 78 96 92 91 78 77 73 91 68Z" fill="#efbc96"/>
 </svg>
