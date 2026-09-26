@@ -32,6 +32,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 
@@ -209,6 +210,34 @@ def execute_tool(name: str, raw_args: str) -> tuple[str, float]:
     return result, time.perf_counter() - started
 
 
+def _reason_clause(text: str) -> str:
+    """Condense a routing reason to the decision's numbers, for one trace line.
+
+    The reasons are written for the model to read, so they are explanatory prose: a real one runs
+    to 260 characters and describes what the file is before saying why it went to the CPU. Truncating
+    that prose still filled a terminal line while conveying very little, because the part a demo
+    audience needs is the comparison, not the narrative leading up to it.
+
+    So this pulls the two figures out instead -- the size and the threshold it fell below -- and
+    states the comparison. Falls back to a plain truncation when the sentence does not contain that
+    shape, so an unrecognised reason is shortened rather than lost.
+    """
+    flat = " ".join(str(text).split())
+    # The live reasons read: "file is 42.5 MB (about 41 bytes per row over roughly 1,033,930 rows),
+    # below the 400.0 MB crossover measured on ...". Pull the two figures out of that, tolerating
+    # the optional "measured"/"threshold" words so the pattern does not depend on exact phrasing.
+    size = re.search(r"(?:^|\bis\s)(\d+(?:\.\d+)?\s*[KMGT]B)\b", flat)
+    threshold = re.search(r"\b(?:the\s+)?(\d+(?:\.\d+)?\s*[KMGT]B)\s+(?:crossover|threshold)\b", flat)
+    if size and threshold and size.group(1) != threshold.group(1):
+        return f"{size.group(1)} < {threshold.group(1)} crossover"
+    for sep in (". ", "; "):
+        if sep in flat:
+            head = flat.split(sep)[0]
+            if len(head) <= 60:
+                return head + ("." if sep == ". " else "")
+    return flat if len(flat) <= 60 else flat[:59].rstrip() + "…"
+
+
 def summarize_tool_result(result_json: str) -> str:
     """Short human-readable line for the console, so a demo shows what actually ran."""
     try:
@@ -223,6 +252,17 @@ def summarize_tool_result(result_json: str) -> str:
     secs = payload.get("seconds")
     secs_txt = f"{secs:.2f}s" if isinstance(secs, (int, float)) else ""
     bits = [f"engine={payload.get('engine')}", rows_txt, secs_txt]
+
+    # Why this engine. The engine choice is the decision this project is actually about, and without
+    # this line a deliberate CPU route is indistinguishable on screen from the GPU having failed --
+    # the trace shows `engine=pandas` either way, which reads as a defect rather than as a judgement.
+    # Appended as its own segment; Agent.log decides whether it fits on the main line or needs one
+    # of its own, because a reason long enough to be useful usually does not fit.
+    route = payload.get("routing_reason") or payload.get("engine_note")
+    if route and payload.get("engine") == "pandas":
+        bits.append(f"| CPU BY CHOICE: {_reason_clause(route)}")
+    elif payload.get("fallback_reason"):
+        bits.append(f"| FALLBACK: {_reason_clause(payload['fallback_reason'])}")
 
     # Session calls have their own shape: a load, cheap per-step timings, and a
     # workflow-level figure on close. Surface those so a demo shows the multi-step
@@ -285,6 +325,114 @@ def _system_prompt() -> str:
     )
 
 
+class Tui:
+    """Terminal presentation layer, with a plain-text fallback.
+
+    rich is present in the GB10 environment but not on every machine that runs this agent, so it
+    is imported defensively and never becomes a hard dependency: without it everything still runs
+    and prints, just in one colour. The one thing the layer must not do is change behaviour --
+    it only decides how a line looks, never what runs.
+
+    Colours carry meaning, and only the meanings that matter for this project:
+      - ROUTED TO CPU BY CHOICE is green, because it is a decision, not a failure
+      - FALLBACK is red, because the GPU was tried and failed
+      - speedup figures are bold, because they are the claim being made
+    """
+
+    def __init__(self, enabled: bool = True, stream=None):
+        self.stream = stream
+        self.rich = None
+        self.console = None
+        self._Text = None
+        self.enabled = False
+        if not enabled:
+            return
+        try:
+            from rich.console import Console  # noqa: PLC0415 - optional at runtime
+            from rich.text import Text  # noqa: PLC0415
+            self.console = Console(highlight=False, soft_wrap=False)
+            self._Text = Text
+            self.enabled = True
+        except ImportError:
+            self.enabled = False
+
+    # -- prompts ---------------------------------------------------------------------
+    @property
+    def prompt_text(self) -> str:
+        return "\n[?] 请输入问题 / Enter your question: "
+
+    def banner(self) -> None:
+        if not self.enabled:
+            return
+        from rich.panel import Panel
+        from rich.text import Text
+
+        body = Text()
+        body.append("DGX Spark 数据分析 Agent", style="bold")
+        body.append("  ·  由 Agent Skill 驱动\n\n", style="dim")
+        body.append("引擎会自己判断该不该用 GPU,并说明理由。\n", style="")
+        body.append("输入 ", style="dim")
+        body.append("exit", style="bold")
+        body.append(" 或 ", style="dim")
+        body.append("quit", style="bold")
+        body.append(" 退出。", style="dim")
+        self.console.print(Panel(body, border_style="cyan", padding=(1, 2)))
+
+    def ask(self, question: str) -> None:
+        if not self.enabled:
+            return
+        self.console.rule("[bold cyan]User[/bold cyan]", align="left")
+        self.console.print(question, style="white")
+
+    def answer(self, text: str) -> None:
+        if not self.enabled:
+            return
+        from rich.markdown import Markdown
+        from rich.panel import Panel
+
+        self.console.print()
+        try:
+            rendered = Markdown(text)
+        except Exception:
+            rendered = text
+        self.console.print(Panel(rendered, title="[bold green]Agent[/bold green]",
+                                 border_style="green", padding=(1, 2)))
+
+    # -- trace -----------------------------------------------------------------------
+    def trace(self, msg: str) -> None:
+        """Style one trace line. Falls through to plain print when rich is unavailable.
+
+        Every branch builds a plain `Text` object and applies a style to it, rather than using
+        `Text.from_markup`. That is deliberate: markup would parse the content, so a bracket in a
+        file path or an LLM answer would be read as a style tag and could swallow the rest of the
+        line or raise. Plain Text cannot be injected into.
+        """
+        if not self.enabled:
+            print(msg, flush=True)
+            return
+        Text = self._Text
+        text = msg.rstrip()
+
+        if "ROUTED TO CPU BY CHOICE" in text:
+            out = Text("✔ ", style="green")
+            out.append(text, style="green")
+        elif "FALLBACK" in text or "FAILED" in text:
+            out = Text("✖ ", style="red")
+            out.append(text, style="red")
+        elif text.strip().startswith("[warn]"):
+            out = Text("! ", style="yellow")
+            out.append(text, style="yellow")
+        elif text.strip().startswith("[api error]"):
+            out = Text(text, style="red")
+        elif "->" in text:
+            out = Text(text.strip(), style="cyan")
+        elif "=" in text and "x" in text and "OK" in text:
+            out = Text(text, style="bold")
+        else:
+            out = Text(text, style="dim")
+        self.console.print(out, highlight=False)
+
+
 class Agent:
     def __init__(self, client: OpenAI, verbose: bool = True):
         self.client = client
@@ -305,8 +453,26 @@ class Agent:
                 print(f"[agent] skills available to the model: {', '.join(names)}")
 
     def log(self, msg: str) -> None:
-        if self.verbose:
-            print(msg, flush=True)
+        if not self.verbose:
+            return
+        # A trace line must not wrap: during a live demo the audience is reading a stream of tool
+        # calls, and a wrapped line breaks that rhythm. The engine decision is the one part worth a
+        # line of its own, so when the combined line would not fit in a standard terminal the reason
+        # moves to an indented second line instead of being truncated further.
+        lines = [msg]
+        marker = "| CPU BY CHOICE: " if "| CPU BY CHOICE: " in msg else (
+            "| FALLBACK: " if "| FALLBACK: " in msg else None)
+        if marker and len(msg.rstrip()) > 78:
+            head, _, reason = msg.rstrip().partition(marker)
+            lines = [head.rstrip(), " " * 6 + marker.lstrip("| ").rstrip() + " " + reason]
+
+        tui = globals().get("TUI")
+        if tui is not None and getattr(tui, "enabled", False):
+            for line in lines:
+                tui.trace(line)
+        else:
+            for line in lines:
+                print(line, flush=True)
 
     def run(self, user_query: str) -> str:
         """Answer one question. Any session left open is released on the way out."""
@@ -400,21 +566,38 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="DGX Spark data-analysis agent with Agent Skills")
     ap.add_argument("--ask", help="ask one question and exit (non-interactive demo)")
     ap.add_argument("--quiet", action="store_true", help="suppress tool-call tracing")
+    ap.add_argument("--plain", action="store_true",
+                    help="plain-text trace (no colour); the default uses the terminal UI when "
+                         "rich is installed, and falls back to plain text when it is not")
     args = ap.parse_args()
 
     client = build_client()
     agent = Agent(client, verbose=not args.quiet)
 
+    # Module-level so Agent.log can reach it without threading a reference through every call.
+    global TUI
+    tui = Tui(enabled=not args.plain)
+    TUI = tui
+
     if args.ask:
-        print(f"\n=== User ===\n{args.ask}")
+        if tui.enabled:
+            tui.ask(args.ask)
+        else:
+            print(f"\n=== User ===\n{args.ask}")
         answer = agent.run(args.ask)
-        print(f"\n=== Agent ===\n{answer}")
+        if tui.enabled:
+            tui.answer(answer)
+        else:
+            print(f"\n=== Agent ===\n{answer}")
         return 0
 
-    print("\nType 'exit' or 'quit' to leave.")
+    if tui.enabled:
+        tui.banner()
+    else:
+        print("\nType 'exit' or 'quit' to leave.")
     while True:
         try:
-            task = input("\nEnter your question: ")
+            task = input(tui.prompt_text)
         except (EOFError, KeyboardInterrupt):
             print("\nGoodbye.")
             break
@@ -423,8 +606,13 @@ def main() -> int:
             break
         if not task.strip():
             continue
+        if tui.enabled:
+            tui.ask(task)
         answer = agent.run(task)
-        print(f"\n=== Agent Reply ===\n{answer}")
+        if tui.enabled:
+            tui.answer(answer)
+        else:
+            print(f"\n=== Agent Reply ===\n{answer}")
     return 0
 
 

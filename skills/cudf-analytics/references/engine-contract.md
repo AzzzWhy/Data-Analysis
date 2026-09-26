@@ -12,6 +12,7 @@ wrong.
 | `gpu_analytics.py` | Stateless engine. One operation per process; re-reads the file every time. | `python gpu_analytics.py --input FILE --op OP [...]` |
 | `gpu_session.py` | Resident session worker. NDJSON commands on stdin/stdout; loads once, serves many steps. | `python gpu_session.py`, then one JSON command per line |
 | `make_deliverables.py` | Turns an engine result into `report.md`, `.svg` charts and CSV/JSON exports. | `python make_deliverables.py --input - --out-dir DIR --source-file FILE [--lang zh\|en\|auto] [--lang-context TEXT]` |
+| `build_html_report.py` | Folds the deliverables above into one self-contained `report.html` with every SVG inlined, led by the engine decision. | `python build_html_report.py --out-dir DIR [--lang zh\|en\|auto] [--title "..."]` |
 | `analysis_plan.py` | Plan catalog and progress bookkeeping. Imported, not run directly. | `import analysis_plan` |
 
 ### Which engine runs, and why it is not always the GPU
@@ -308,6 +309,13 @@ or `-` for stdin, and writes into `--out-dir`:
 - `*.svg` — grouped bar, multi-series line, scatter, histogram, correlation heatmap
 - `*.csv` / `*.json` — the numbers behind each chart
 - a manifest listing what was produced
+
+`build_html_report.py` then reads that directory and writes `report.html`, a single file with the
+Markdown rendered and every SVG inlined. Nothing is fetched at view time, so it opens offline, and
+the chart markup is inlined rather than linked because a mailed file has no directory beside it for
+a relative `<img>` to resolve against. It is also why the page carries the engine decision in a
+banner at the top: a reader who receives only this file has no console output to tell them whether
+the GPU was used, let alone whether a CPU result was a choice or a fallback.
 
 Identifier-like columns are excluded from value charts, by column name or by the
 "min == 0 and mean == max/2" pattern. Without that rule a surrogate key flattens every real

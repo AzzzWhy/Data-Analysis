@@ -232,7 +232,24 @@ steps in a different order, is legitimate analysis rather than divergence.
 `make_deliverables.py` turns an engine result into files a user can keep: `report.md`, one or
 more `.svg` charts, and CSV/JSON of the underlying numbers.
 
-It imports **only the standard library**. That is a deliberate choice over matplotlib:
+`build_html_report.py` then folds those into a **single self-contained `report.html`**: every SVG
+is inlined, so the page opens by double-click with no server, no network and no Markdown viewer,
+and it can be mailed to someone who was not in the room. Markdown with relative image links needs a
+viewer that renders Markdown *and* resolves the links beside it; an HTML file needs nothing.
+
+The page leads with the **engine decision** — whether the GPU was used, and if not, whether that
+was a deliberate route or a failure. That is the part of this skill that is not self-evident from
+the numbers, so it goes above the findings rather than in a footnote.
+
+```bash
+python build_html_report.py --out-dir deliverables [--lang zh|en|auto] [--title "..."]
+```
+
+It imports only the standard library, like the other scripts, and its Markdown subset covers
+headings, tables, bold, code spans and list items — the six constructs the report actually uses.
+
+`make_deliverables.py` imports **only the standard library**. That is a deliberate choice over
+matplotlib:
 
 - matplotlib is not present on GB10 and pulling it onto aarch64 drags in a wheel stack;
 - hand-rolled SVG renders identically everywhere — no font discovery, no backend, no DPI

@@ -14,6 +14,24 @@ DATA = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("DEMO_DATA", "sales_
 HERE = os.path.dirname(os.path.abspath(__file__))
 FAILS = []
 
+# Fail before starting the worker when the dataset is not where the test expects it.
+#
+# Without this the missing file surfaced as `open succeeded` failing and then 19 cascading failures
+# ("no such session: None" for every operation), with the actual cause buried in one detail line.
+# A 20-line failure list reads like the code is broken when the real problem is that this test was
+# invoked without its dataset. It also needs a large file on purpose: the session path is only
+# routed to the GPU above the measured crossover, so a small fixture would be refused by design and
+# this test could not exercise what it exists to exercise.
+if not os.path.isfile(DATA):
+    print(f"no dataset at {os.path.abspath(DATA)}")
+    print()
+    print("This test needs a large file (tens of millions of rows): the session path is routed to")
+    print("the GPU only above the measured crossover, so a small fixture is refused by design.")
+    print()
+    print("  python session_worker_test.py /path/to/large.csv")
+    print("  DEMO_DATA=/path/to/large.csv python session_worker_test.py")
+    sys.exit(2)
+
 
 def check(label, ok, detail=""):
     print(f"  [{'PASS' if ok else 'FAIL'}] {label}{'  ' + detail if detail else ''}")
