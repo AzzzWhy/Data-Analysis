@@ -105,7 +105,7 @@ class SparkTUI(App):
 
     def on_mount(self):
         self.query_one('#details').display = False
-        self.set_interval(0.25, self.refresh_status)
+        self.clock = self.set_interval(0.25, self.refresh_status)
         if self.initial_file:
             self.query_one('#file-path', Input).value = self.initial_file
             self.select_file()
@@ -120,9 +120,17 @@ class SparkTUI(App):
         self.set_class(width < 65, 'tiny')
 
     def refresh_status(self):
+        # A timer event may already be queued when terminal teardown removes widgets.
+        statuses = list(self.query('#status'))
+        if not statuses:
+            return
         seconds = time.monotonic() - self.started if self.started else self.elapsed
         elapsed = f' · {seconds:.1f}s' if seconds else ''
-        self.query_one('#status', Static).update(f'{self.phase} · {self.engine}{elapsed}')
+        statuses[0].update(f'{self.phase} · {self.engine}{elapsed}')
+
+    def on_unmount(self):
+        if hasattr(self, 'clock'):
+            self.clock.stop()
 
     def select_file(self):
         value = self.query_one('#file-path', Input).value.strip()

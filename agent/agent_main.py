@@ -577,8 +577,8 @@ def main() -> int:
     ap.add_argument("--ask", help="ask one question and exit (non-interactive demo)")
     ap.add_argument("--quiet", action="store_true", help="suppress tool-call tracing")
     ap.add_argument("--plain", action="store_true",
-                    help="plain-text trace (no colour); the default uses the terminal UI when "
-                         "rich is installed, and falls back to plain text when it is not")
+                    help="disable the full-screen interface and colour; interactive terminals "
+                         "use Textual when installed, otherwise the basic terminal")
     args = ap.parse_args()
 
     client = build_client()
