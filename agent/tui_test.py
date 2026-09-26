@@ -43,6 +43,10 @@ async def main():
                 await pilot.pause()
                 assert app.selected_file == str(data.resolve())
                 assert app.engine == '尚未执行'
+                await pilot.press('f3')
+                assert app.focused.id == 'file-path'
+                await pilot.press('f4')
+                assert app.focused.id == 'prompt'
                 app.query_one('#prompt', Input).value = '按地区统计收入'
                 await pilot.press('enter')
                 await wait_done(app, pilot)
@@ -75,7 +79,7 @@ async def main():
             assert app.busy
             await app.submit_question()
             assert len(agent.prompts) == 1
-            await pilot.press('ctrl+q')
+            await pilot.press('f10')
             assert app.quit_pending and app.busy
             agent.release.set()
             await wait_done(app, pilot)

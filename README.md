@@ -12,7 +12,10 @@ Interactive SSH sessions now open a full-screen workbench: dataset path sidebar,
 Markdown results, fixed question input, actual CPU/GPU status, elapsed time and F2 execution
 details. Install `pip install -r requirements-tui.txt`, then run `python agent/agent_main.py`.
 Paste a server-side path in the left input and press Enter, then ask your question below.
-F2 toggles raw execution details; Ctrl+L focuses the question input; Ctrl+Q exits safely.
+The classic ANSI-blue layout uses character-framed panes and compact reverse-video status
+bars, including on terminals without true-color support. F1 shows help, F2 toggles logs,
+F3 focuses the file path, F4 focuses the question, and F10 exits safely. Ctrl+L / Ctrl+Q
+remain available. The previous modern interface is preserved at commit `c5bd101`.
 On narrow terminals the layout adapts. `--plain`, non-TTY input and `--ask` retain the original
 CLI behavior. Ctrl+Q waits for any running analysis and memory cleanup before exiting; it does
 not pretend to cancel an in-flight CUDA/API operation.

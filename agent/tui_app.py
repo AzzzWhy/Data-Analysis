@@ -25,45 +25,56 @@ class Finished(Message):
 
 
 class SparkTUI(App):
-    TITLE = 'Data / Spark'
-    BINDINGS = [('ctrl+q', 'safe_quit', '退出'), ('f2', 'details', '执行详情'),
-                ('ctrl+l', 'focus_prompt', '输入问题'),
+    TITLE = 'Data Analysis / GB10'
+    ENABLE_COMMAND_PALETTE = False
+    BINDINGS = [('f1', 'help', '帮助'), ('f2', 'details', '日志'),
+                ('f3', 'focus_file', '文件'), ('f4', 'focus_prompt', '输入'),
+                ('f10', 'safe_quit', '退出'),
+                Binding('ctrl+q', 'safe_quit', '退出', show=False),
+                Binding('ctrl+l', 'focus_prompt', '输入问题', show=False),
                 Binding('ctrl+c', 'safe_quit', '退出', show=False, priority=True)]
     CSS = '''
-    Screen { background: #10161d; color: #dce5ee; }
-    #brand { height: 3; padding: 1 2 0 2; background: #17212b; color: #7dd3fc; text-style: bold; }
+    $classic-blue: #000080;
+    $classic-white: #c0c0c0;
+    $classic-black: #000000;
+    $classic-yellow: #ffff00;
+    Screen { background: $classic-blue; color: $classic-white; }
+    #brand { height: 1; padding: 0 1; background: $classic-white; color: $classic-black; text-style: bold; }
     #body { height: 1fr; }
-    #sidebar { width: 29; padding: 1 2; background: #141c25; border-right: solid #253343; }
-    .section { color: #8ca4ba; margin-bottom: 1; }
+    #sidebar { width: 30; padding: 0 1; background: $classic-blue; border: solid $classic-white; }
+    .section { color: $classic-yellow; margin-bottom: 0; text-style: bold; }
     #dataset { height: auto; margin: 1 0; }
     #file-path { width: 1fr; }
-    #use-file { width: 1fr; margin-top: 1; }
-    #file-hint { height: auto; color: #8197ab; margin-top: 1; }
-    #session { height: auto; color: #8197ab; margin-top: 2; }
+    #use-file { width: 1fr; margin-top: 0; }
+    #file-hint { height: auto; color: $classic-white; margin-top: 1; }
+    #session { height: auto; color: $classic-white; margin-top: 1; }
     #main { width: 1fr; }
-    #conversation { height: 1fr; padding: 1 3; scrollbar-size: 1 1; }
-    .question { height: auto; color: #7dd3fc; margin: 1 0; }
-    .answer { height: auto; margin: 0 0 2 0; }
-    Markdown { background: transparent; }
-    #details { height: 9; padding: 0 2; background: #141c25; border-top: solid #253343; }
-    #status { height: 2; padding: 0 2; color: #9bb3c9; background: #17212b; }
-    #composer { height: 5; padding: 0 2; background: #17212b; }
+    #conversation { height: 1fr; padding: 0 1; border: solid $classic-white; scrollbar-size: 1 1; }
+    .question { height: auto; color: $classic-yellow; margin: 1 0 0 0; }
+    .answer { height: auto; margin: 0 0 1 0; }
+    Markdown { background: $classic-blue; color: $classic-white; padding: 0; }
+    MarkdownH1, MarkdownH2, MarkdownH3 { color: #ffffff; text-style: bold; }
+    #details { height: 8; padding: 0 1; background: $classic-black; color: $classic-white; border: solid $classic-white; }
+    #status { height: 1; padding: 0 1; color: $classic-black; background: $classic-white; }
+    #composer { height: 3; padding: 0; background: $classic-blue; }
     #prompt { width: 1fr; }
-    #send { width: 9; margin-left: 1; }
-    Input { border: tall #2c4054; background: #10161d; }
-    Input:focus { border: tall #5cadd6; }
-    Button { background: #263a4d; border: none; color: #dce5ee; }
-    Button:focus { text-style: bold; }
-    Footer { background: #141c25; }
+    #send { width: 10; margin-left: 0; }
+    Input { border: solid $classic-white; background: $classic-blue; color: #ffffff; padding: 0 1; }
+    Input:focus { border: solid $classic-yellow; }
+    Button { background: $classic-blue; border: solid $classic-white; color: $classic-white; height: 3; }
+    Button:focus, Button:hover { background: $classic-white; color: $classic-black; text-style: bold; }
+    Footer { background: $classic-black; color: $classic-white; }
+    Footer > .footer--key { background: $classic-white; color: $classic-black; text-style: bold; }
+    Footer > .footer--description { background: $classic-black; color: $classic-white; }
     .compact #sidebar { width: 22; padding: 1; }
     .compact #conversation { padding: 0 1; }
     .tiny #body { layout: vertical; }
-    .tiny #sidebar { width: 1fr; height: 7; padding: 0 1; border: none; }
+    .tiny #sidebar { width: 1fr; height: 4; padding: 0; border: none; }
     .tiny #dataset, .tiny #session, .tiny #file-hint, .tiny .section { display: none; }
     .tiny #use-file { display: none; }
     .tiny #file-path { margin: 0; }
-    .tiny #brand { height: 2; padding: 0 1; }
-    .tiny #composer { padding: 0 1; }
+    .tiny #brand { height: 1; padding: 0 1; }
+    .tiny #composer { padding: 0; }
     .tiny #status { padding: 0 1; }
     '''
 
@@ -84,26 +95,29 @@ class SparkTUI(App):
         self.agent.event_sink = lambda text: self.post_message(Trace(text))
 
     def compose(self) -> ComposeResult:
-        yield Static('DATA / SPARK   ·   数据分析工作台', id='brand', markup=False)
+        yield Static(' DATA ANALYSIS / GB10  |  数据分析终端', id='brand', markup=False)
         with Horizontal(id='body'):
             with Vertical(id='sidebar'):
-                yield Static('数据文件', classes='section', markup=False)
-                yield Input(placeholder='服务器上的文件路径', id='file-path')
-                yield Button('使用此文件', id='use-file')
-                yield Static('未选择文件', id='dataset', markup=False)
-                yield Static('路径指向当前机器上的文件。\n也可直接在问题中写绝对路径。', id='file-hint', markup=False)
+                yield Static('文件路径', classes='section', markup=False)
+                yield Input(placeholder='/home/Developer/data.csv', id='file-path')
+                yield Button('[ 加载 ]', id='use-file')
+                yield Static('文件：未选择\n大小：—', id='dataset', markup=False)
+                yield Static('F3 选择文件\nEnter 确认路径\nTab 切换区域', id='file-hint', markup=False)
                 yield Static(f'当前会话\n{self.model}\n本机 · {platform.node()}\n0 次分析', id='session', markup=False)
             with Vertical(id='main'):
                 with VerticalScroll(id='conversation'):
-                    yield Markdown('## 从一个问题开始\n\n选一个数据文件，然后告诉我你想了解什么。\n\n例如：按地区比较收入，找出异常值，或生成可分享的报告。', classes='answer', id='welcome')
+                    yield Markdown('**DATA ANALYSIS READY**\n\nF3：输入本机数据文件路径，Enter 加载。\n\nF4：输入分析问题，Enter 执行。\n\n支持统计、分组、相关性、异常检测与报告导出。\n\n示例：按地区统计收入总和与均值。', classes='answer', id='welcome')
                 yield RichLog(id='details', wrap=True, markup=False, max_lines=500)
         yield Static('待命 · 引擎尚未执行', id='status', markup=False)
         with Horizontal(id='composer'):
-            yield Input(placeholder='输入分析问题，按 Enter 发送…', id='prompt')
-            yield Button('发送', id='send')
+            yield Input(placeholder='> 输入问题，Enter 执行', id='prompt')
+            yield Button('[ 执行 ]', id='send')
         yield Footer()
 
     def on_mount(self):
+        self.query_one('#sidebar').border_title = '数据 / 会话'
+        self.query_one('#conversation').border_title = '分析结果'
+        self.query_one('#details').border_title = '执行日志 · F2 收起'
         self.query_one('#details').display = False
         self.clock = self.set_interval(0.25, self.refresh_status)
         if self.initial_file:
@@ -236,6 +250,13 @@ class SparkTUI(App):
 
     def action_focus_prompt(self):
         self.query_one('#prompt', Input).focus()
+
+    def action_focus_file(self):
+        if not self.busy:
+            self.query_one('#file-path', Input).focus()
+
+    def action_help(self):
+        self.notify('F3 文件 · F4 问题 · Enter 执行 · F2 日志 · F10 退出；分析运行时退出会等待内存清理。', title='快捷键帮助', timeout=8)
 
     def action_safe_quit(self):
         if self.busy:
