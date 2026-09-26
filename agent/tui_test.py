@@ -43,8 +43,8 @@ async def main():
                 await pilot.pause()
                 assert app.selected_file == str(data.resolve())
                 assert app.engine == '尚未执行'
-                assert ('▦' if size[0] < 65 else '▁▃▆') in app.brand_text()
-                assert app.query_one('#brand').region.height == (1 if size[0] < 65 else 3)
+                assert '▁▃▆' in app.brand_text()
+                assert app.query_one('#brand').region.height == (1 if size[0] < 65 else 2)
                 assert not app.query_one('#sidebar').display
                 await pilot.press('f3')
                 assert app.focused.id == 'file-path'

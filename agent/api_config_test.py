@@ -227,7 +227,7 @@ async def language_checks(folder):
             assert app.language == 'en' and not app.agent.prompts
             assert 'Start' in app.export_screenshot() and 'question' in app.export_screenshot()
             expected_brand = 'GPU Data Analysis' if size[0] < 65 else 'GPU Acceleration & Data Analysis'
-            assert expected_brand in str(app.query_one('#brand').render())
+            assert expected_brand in str(app.query_one('#brand-title').render())
             assert 'No file selected' in app.context_text()
             assert 'Ready' in str(app.query_one('#status').render())
             assert 'Details' in str(app.query_one('#shortcuts').render())
