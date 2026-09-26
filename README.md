@@ -8,6 +8,16 @@ Submitted to the third NVIDIA DGX Spark Hackathon, Agent Skills track.
 
 ## Newly verified evidence
 
+Interactive SSH sessions now open a full-screen workbench: dataset path sidebar, scrollable
+Markdown results, fixed question input, actual CPU/GPU status, elapsed time and F2 execution
+details. Install `pip install -r requirements-tui.txt`, then run `python agent/agent_main.py`.
+Paste a server-side path in the left input and press Enter, then ask your question below.
+F2 toggles raw execution details; Ctrl+L focuses the question input; Ctrl+Q exits safely.
+On narrow terminals the layout adapts. `--plain`, non-TTY input and `--ask` retain the original
+CLI behavior. Ctrl+Q waits for any running analysis and memory cleanup before exiting; it does
+not pretend to cancel an in-flight CUDA/API operation.
+Test the interface without API calls: `python agent/tui_test.py` (requires the optional UI dependency).
+
 - [Fair resident CPU vs resident GPU](benchmark/resident/README.md): five repeats, both load
   once. At 20M rows / 3.04 GB, GPU workflow median is 2.92x faster (2.46x including startup).
   At 1M rows, resident CPU is 2.64x faster. Compute-only GPU variability is explicitly flagged.

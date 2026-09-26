@@ -1,0 +1,2 @@
+# Optional full-screen SSH interface. The analytical backend is unchanged.
+textual>=0.89,<2

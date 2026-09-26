@@ -440,9 +440,10 @@ class Tui:
 
 
 class Agent:
-    def __init__(self, client: OpenAI, verbose: bool = True):
+    def __init__(self, client: OpenAI, verbose: bool = True, event_sink=None):
         self.client = client
         self.verbose = verbose
+        self.event_sink = event_sink
         self.messages: list[dict] = [{"role": "system", "content": _system_prompt()}]
         # Control condition for the comparison experiment: the same model, same prompt, no skills.
         # Nothing else changes, so any difference in the answer is attributable to the tools rather
@@ -459,6 +460,9 @@ class Agent:
                 print(f"[agent] skills available to the model: {', '.join(names)}")
 
     def log(self, msg: str) -> None:
+        if self.event_sink is not None:
+            self.event_sink(msg)
+            return
         if not self.verbose:
             return
         # A trace line must not wrap: during a live demo the audience is reading a stream of tool
@@ -578,6 +582,17 @@ def main() -> int:
     args = ap.parse_args()
 
     client = build_client()
+    # Full screen is only for an interactive terminal. Scripted --ask runs and pipes keep
+    # their stable line-oriented output; --plain explicitly opts out.
+    if not args.ask and not args.plain and sys.stdin.isatty() and sys.stdout.isatty():
+        try:
+            from tui_app import SparkTUI
+        except ImportError as exc:
+            print(f'Full-screen UI unavailable ({exc}); using the basic terminal. '
+                  'Install requirements-tui.txt for the new interface.', file=sys.stderr)
+        else:
+            SparkTUI(Agent(client, verbose=False), MODEL_NAME, record_details=not args.quiet).run()
+            return 0
     agent = Agent(client, verbose=not args.quiet)
 
     # Module-level so Agent.log can reach it without threading a reference through every call.
