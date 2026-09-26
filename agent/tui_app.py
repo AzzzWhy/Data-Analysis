@@ -106,7 +106,7 @@ class SparkTUI(App):
                 yield Static(f'当前会话\n{self.model}\n本机 · {platform.node()}\n0 次分析', id='session', markup=False)
             with Vertical(id='main'):
                 with VerticalScroll(id='conversation'):
-                    yield Markdown('### 从一个问题开始。\n\n选择数据，直接说你想了解什么。\n\n`/file` 选择服务器文件 · `/help` 查看帮助\n\n例如：按地区比较收入，找出异常值，并导出报告。\n\n执行时显示实际 CPU / GPU 引擎；详细过程按 Ctrl+O 查看。', classes='answer', id='welcome')
+                    yield Markdown('### 从一个问题开始。\n\n`/file` 选择服务器文件 · `/help` 查看帮助\n\n例如：按地区比较收入，找出异常值，并导出报告。\n\n执行时显示实际 CPU / GPU 引擎；详细过程按 Ctrl+O 查看。', classes='answer', id='welcome')
                 yield RichLog(id='details', wrap=True, markup=False, max_lines=500)
         yield Static('待命 · 引擎尚未执行', id='status', markup=False)
         with Horizontal(id='composer'):
