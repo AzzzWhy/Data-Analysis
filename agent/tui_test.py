@@ -43,6 +43,8 @@ async def main():
                 await pilot.pause()
                 assert app.selected_file == str(data.resolve())
                 assert app.engine == '尚未执行'
+                assert ('▦' if size[0] < 65 else '▁▃▆') in app.brand_text()
+                assert app.query_one('#brand').region.height == (1 if size[0] < 65 else 3)
                 assert not app.query_one('#sidebar').display
                 await pilot.press('f3')
                 assert app.focused.id == 'file-path'
@@ -70,7 +72,8 @@ async def main():
                 await wait_done(app, pilot)
                 assert len(agent.prompts) == 1 and str(data.resolve()) in agent.prompts[0]
                 assert app.engine == 'CPU · pandas' and app.turns == 1
-                assert app.elapsed > 0
+                # Windows monotonic clocks can return the same tick for an instant fake run.
+                assert app.elapsed >= 0 and app.started == 0
                 assert len(app.query(Markdown)) >= 2
                 assert not app.query_one('#details').display
                 await pilot.press('ctrl+o')

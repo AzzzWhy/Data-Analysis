@@ -1,5 +1,7 @@
 # GPU加速与数据分析
 
+![GPU加速与数据分析图标](assets/app-icon.svg)
+
 [使用说明（中文 / English）](docs/USAGE.md) · [User guide](docs/USAGE.md#english)
 
 A tool-calling agent that runs exact statistical analysis over large local datasets. On a

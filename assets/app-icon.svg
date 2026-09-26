@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">GPU加速与数据分析</title>
+  <desc id="desc">Warm orange processor with three ascending data columns on a dark rounded square.</desc>
+  <defs>
+    <linearGradient id="surface" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#292522"/>
+      <stop offset="1" stop-color="#171717"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#efbc96"/>
+      <stop offset="1" stop-color="#cf7558"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#surface)" stroke="#4d403a" stroke-width="2"/>
+  <g fill="none" stroke="#ad7560" stroke-width="5" stroke-linecap="round">
+    <path d="M20 45h10M18 64h12M20 83h10M98 45h10M98 64h12M98 83h10"/>
+    <path d="M45 20v10M64 18v12M83 20v10M45 98v10M64 98v12M83 98v10"/>
+  </g>
+  <rect x="30" y="30" width="68" height="68" rx="15" fill="#201d1c" stroke="url(#accent)" stroke-width="4"/>
+  <path d="M42 84h44" stroke="#6a5247" stroke-width="3" stroke-linecap="round"/>
+  <rect x="44" y="67" width="10" height="17" rx="2.5" fill="#917265"/>
+  <rect x="59" y="55" width="10" height="29" rx="2.5" fill="#bb8c75"/>
+  <rect x="74" y="43" width="10" height="41" rx="2.5" fill="url(#accent)"/>
+</svg>
