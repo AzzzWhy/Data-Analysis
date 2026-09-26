@@ -1,5 +1,6 @@
 """Full-screen presentation; the existing Agent remains the sole execution backend."""
 from pathlib import Path
+from dataclasses import replace
 import re
 import time
 from urllib.parse import urlsplit
@@ -9,7 +10,8 @@ from textual.binding import Binding
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
-from textual.widgets import Button, Footer, Input, Markdown, RichLog, Static
+from textual.widgets import Button, Input, Markdown, RichLog, Static
+from ui_i18n import tr, status_text
 
 
 class Trace(Message):
@@ -31,6 +33,7 @@ class SparkTUI(App):
                 Binding('f2', 'details', '日志', show=False),
                 ('ctrl+o', 'details', '执行详情'), ('f3', 'focus_file', '文件'),
                 ('f5', 'settings', '设置'),
+                ('f6', 'language', 'EN/中文'),
                 Binding('f4', 'focus_prompt', '输入', show=False),
                 Binding('escape', 'close_file', '返回', show=False),
                 Binding('f10', 'safe_quit', '退出', show=False),
@@ -70,17 +73,14 @@ class SparkTUI(App):
     Input:focus { border: tall $accent; }
     #prompt:focus { border: none; }
     #prompt:disabled { opacity: 60%; }
-    Footer { background: $surface; color: $muted; }
-    Footer > .footer--key { background: $surface; color: $muted; }
-    Footer > .footer--description { background: $surface; color: $muted; }
-    Footer > .footer--highlight { background: #34302c; }
+    #shortcuts { height: 1; background: $surface; color: $muted; }
     .tiny { padding: 0 1; }
     .tiny #context { height: 1; }
     '''
 
     def __init__(self, agent, model: str, initial_file: str = '', record_details: bool = True,
                  connection=None, agent_factory=None, persist_config=None, force_setup=False,
-                 model_loader=None):
+                 model_loader=None, language=None):
         super().__init__()
         self.agent, self.model = agent, model
         self.selected_file = ''
@@ -89,6 +89,9 @@ class SparkTUI(App):
         self.connection, self.agent_factory = connection, agent_factory
         self.persist_config, self.force_setup = persist_config, force_setup
         self.model_loader = model_loader
+        self.language = language or (connection.language if connection else 'zh')
+        if self.language not in ('zh', 'en'):
+            raise ValueError('language must be zh or en')
         self.busy = False
         self.quit_pending = False
         self.started = 0.0
@@ -100,30 +103,30 @@ class SparkTUI(App):
         self.agent.event_sink = lambda text: self.post_message(Trace(text))
 
     def compose(self) -> ComposeResult:
-        yield Static('✳  GPU加速与数据分析', id='brand', markup=False)
+        yield Static('✳  ' + self.t('GPU加速与数据分析'), id='brand', markup=False)
         yield Static(self.context_text(), id='context', markup=False)
         with Horizontal(id='body'):
             with Vertical(id='sidebar'):
-                yield Static('选择数据文件  ·  Enter 确认 / Esc 返回', classes='section', markup=False)
+                yield Static(self.t('选择数据文件  ·  Enter 确认 / Esc 返回'), classes='section', id='file-label', markup=False)
                 yield Input(placeholder='/home/Developer/data.csv', id='file-path')
-                yield Button('[ 加载 ]', id='use-file')
-                yield Static('文件：未选择\n大小：—', id='dataset', markup=False)
-                yield Static('F3 选择文件\nEnter 确认路径\nTab 切换区域', id='file-hint', markup=False)
-                yield Static(f'当前模型 · {self.model or "未配置"}', id='session', markup=False)
+                yield Button(self.t('[ 加载 ]'), id='use-file')
+                yield Static(self.t('文件：未选择\n大小：—'), id='dataset', markup=False)
+                yield Static(self.t('F3 选择文件\nEnter 确认路径\nTab 切换区域'), id='file-hint', markup=False)
+                yield Static(self.session_text(), id='session', markup=False)
             with Vertical(id='main'):
                 with VerticalScroll(id='conversation'):
-                    yield Markdown('### 从一个问题开始。\n\n`/file` 选择本机文件 · `/settings` 连接设置\n\n例如：按地区比较收入，找出异常值，并导出报告。\n\n执行时显示实际 CPU / GPU 引擎；详细过程按 Ctrl+O 查看。', classes='answer', id='welcome')
+                    yield Markdown(self.t('welcome'), classes='answer', id='welcome')
                 yield RichLog(id='details', wrap=True, markup=False, max_lines=500)
-        yield Static('待命 · 引擎尚未执行', id='status', markup=False)
+        yield Static('', id='status', markup=False)
         with Horizontal(id='composer'):
             yield Static('❯', id='chevron', markup=False)
-            yield Input(placeholder='输入分析问题，或 /help', id='prompt')
-            yield Button('[ 执行 ]', id='send')
-        yield Footer()
+            yield Input(placeholder=self.t('输入分析问题，或 /help'), id='prompt')
+            yield Button(self.t('[ 执行 ]'), id='send')
+        yield Static(self.t('shortcuts'), id='shortcuts', markup=False)
 
     def on_mount(self):
         self.query_one('#sidebar').display = False
-        self.query_one('#details').border_title = '执行日志 · F2 收起'
+        self.refresh_language()
         self.query_one('#details').display = False
         self.clock = self.set_interval(0.25, self.refresh_status)
         if self.initial_file:
@@ -136,8 +139,56 @@ class SparkTUI(App):
 
     def context_text(self):
         host = urlsplit(self.connection.base_url).netloc if self.connection else ''
-        dataset = Path(self.selected_file).name if self.selected_file else '未选择文件'
-        return '  ·  '.join(part for part in (self.model or '未配置模型', host, dataset) if part)
+        dataset = Path(self.selected_file).name if self.selected_file else self.t('未选择文件')
+        return '  ·  '.join(part for part in (self.model or self.t('未配置模型'), host, dataset) if part)
+
+    def t(self, key, **values):
+        return tr(self.language, key, **values)
+
+    def session_text(self):
+        return f'{self.t("当前模型")} · {self.model or self.t("未配置")}\n{self.turns} {self.t("次分析")}'
+
+    def notify(self, message, **kwargs):
+        kwargs['title'] = self.t(kwargs.get('title') or '提示')
+        return super().notify(self.t(message), **kwargs)
+
+    def refresh_language(self):
+        self.title = self.t('GPU加速与数据分析')
+        for selector, key in (('#brand', 'GPU加速与数据分析'),
+                              ('#file-label', '选择数据文件  ·  Enter 确认 / Esc 返回'),
+                              ('#file-hint', 'F3 选择文件\nEnter 确认路径\nTab 切换区域')):
+            self.query_one(selector, Static).update(('✳  ' if selector == '#brand' else '') + self.t(key))
+        self.query_one('#context', Static).update(self.context_text())
+        self.query_one('#session', Static).update(self.session_text())
+        if not self.selected_file:
+            self.query_one('#dataset', Static).update(self.t('文件：未选择\n大小：—'))
+        self.query_one('#prompt', Input).placeholder = self.t('输入分析问题，或 /help')
+        self.query_one('#use-file', Button).label = self.t('[ 加载 ]')
+        self.query_one('#send', Button).label = self.t('[ 执行 ]')
+        self.query_one('#welcome', Markdown).update(self.t('welcome'))
+        self.query_one('#details').border_title = self.t('执行日志 · F2 收起')
+        self.query_one('#shortcuts', Static).update(self.t('shortcuts'))
+        self.refresh_status()
+
+    def set_language(self, language):
+        if language not in ('zh', 'en'):
+            self.notify('用法：/language zh 或 /language en；不带参数则切换语言。', severity='warning')
+            return
+        if self.connection is not None:
+            from api_config import save_config
+            config = replace(self.connection, language=language)
+            try:
+                (self.persist_config or save_config)(config)
+            except OSError:
+                self.notify('语言偏好无法保存，请检查配置目录权限。', severity='error')
+                return
+            self.connection = config
+        self.language = language
+        self.refresh_language()
+        self.notify('语言已切换。')
+
+    def action_language(self):
+        self.set_language('en' if self.language == 'zh' else 'zh')
 
     def on_resize(self, event):
         self.adapt_layout(event.size.width)
@@ -155,7 +206,7 @@ class SparkTUI(App):
         elapsed = f' · {seconds:.1f}s' if seconds else ''
         pulse = ('✳', '✻', '✽', '✻')[int(time.monotonic() * 3) % 4] if self.busy else '·'
         statuses[0].set_class(self.busy, 'working')
-        statuses[0].update(f'{pulse} {self.phase} · {self.engine}{elapsed}')
+        statuses[0].update(f'{pulse} {status_text(self.language, self.phase)} · {self.t(self.engine)}{elapsed}')
 
     def on_unmount(self):
         if hasattr(self, 'clock'):
@@ -166,10 +217,13 @@ class SparkTUI(App):
         try:
             path = Path(value).expanduser().resolve()
             if not value or not path.is_file():
-                raise ValueError('请填写服务器上已有的数据文件路径')
+                raise ValueError('请填写本机已有的数据文件路径')
             size = path.stat().st_size
-        except (OSError, ValueError) as exc:
+        except ValueError as exc:
             self.notify(str(exc), severity='error')
+            return
+        except OSError:
+            self.notify('文件无法访问，请检查路径与权限。', severity='error')
             return
         self.selected_file = str(path)
         self.query_one('#dataset', Static).update(f'{path.name}  ·  {size / 1e6:.1f} MB')
@@ -205,6 +259,12 @@ class SparkTUI(App):
                     self.select_file()
                 else:
                     self.action_focus_file()
+            elif command == '/language':
+                widget.value = ''
+                if argument.strip():
+                    self.set_language(argument.strip().lower())
+                else:
+                    self.action_language()
             elif command in ('/help', '/logs', '/settings'):
                 widget.value = ''
                 {'/help': self.action_help, '/logs': self.action_details,
@@ -214,7 +274,7 @@ class SparkTUI(App):
             else:
                 # Absolute paths may begin with '/'; keep them as normal analysis input.
                 if '/' not in command[1:] and not Path(command).is_file():
-                    self.notify('未知命令。可用：/file、/settings、/logs、/help、/quit', severity='warning')
+                    self.notify('未知命令。可用：/file、/settings、/language、/logs、/help、/quit', severity='warning')
                     return
                 # A path-only prompt is ambiguous; let the existing agent interpret it.
                 command = ''
@@ -247,7 +307,7 @@ class SparkTUI(App):
             answer = self.agent.run(prompt)
             failed = answer.startswith(('[model call failed]', '[tool round limit'))
         except Exception as exc:
-            answer, failed = f'分析失败：{type(exc).__name__}: {exc}', True
+            answer, failed = f'{self.t("分析失败")}: {type(exc).__name__}: {exc}', True
         self.post_message(Finished(answer, failed))
 
     def on_trace(self, message: Trace):
@@ -270,17 +330,17 @@ class SparkTUI(App):
         self.refresh_status()
 
     async def on_finished(self, message: Finished):
-        await self.query_one('#conversation', VerticalScroll).mount(Markdown(message.answer, classes='answer'))
+        await self.query_one('#conversation', VerticalScroll).mount(Markdown(self.t(message.answer), classes='answer'))
         self.query_one('#conversation', VerticalScroll).scroll_end(animate=False)
+        # Commit completion metadata before publishing the idle state to observers.
+        self.elapsed = time.monotonic() - self.started
+        self.started = 0
         self.busy = False
         self.turns += 1
         self.phase = '分析失败' if message.failed else '分析完成'
         for selector in ('#prompt', '#send', '#file-path', '#use-file'):
             self.query_one(selector).disabled = False
-        self.query_one('#session', Static).update(f'当前模型 · {self.model or "未配置"}\n{self.turns} 次分析')
-        # Freeze elapsed time at completion; no fake progress percentage.
-        self.elapsed = time.monotonic() - self.started
-        self.started = 0
+        self.query_one('#session', Static).update(self.session_text())
         self.refresh_status()
         self.action_focus_prompt()
         if self.quit_pending:
@@ -303,7 +363,7 @@ class SparkTUI(App):
         self.action_focus_prompt()
 
     def action_help(self):
-        self.notify('/file 路径：选择本机文件（SSH 时指服务器文件，不上传）\n/settings 或 F5：修改 API 地址、密钥与模型\n/logs 或 Ctrl+O：执行详情\nEnter：发送 · F3：文件 · Esc：返回 · Ctrl+Q：安全退出\n分析运行时退出会等待任务完成与内存清理。', title='GPU加速与数据分析 · 帮助', timeout=12)
+        self.notify(self.t('help'), title=self.t('GPU加速与数据分析') + ' · ' + self.t('帮助'), timeout=12)
 
     def action_settings(self):
         if self.busy:
@@ -333,8 +393,8 @@ class SparkTUI(App):
             self.phase, self.engine, self.elapsed = '待命', '尚未执行', 0.0
             self.notify('连接已切换。旧对话仍可查看，但不会发送给新的服务。')
         self.connection, self.model = config, config.model
-        self.query_one('#context', Static).update(self.context_text())
-        self.refresh_status()
+        self.language = config.language
+        self.refresh_language()
         self.action_focus_prompt()
 
     def action_safe_quit(self):

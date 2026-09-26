@@ -16,6 +16,7 @@ class APIConfig:
     model: str = ''
     skip_setup: bool = False
     remember_key: bool = False
+    language: str = 'zh'
 
     @property
     def ready(self):
@@ -59,6 +60,8 @@ def load_config(path=None):
         raise ValueError('本机 API 配置字段类型无效')
     if not all(isinstance(getattr(config, key), bool) for key in ('skip_setup', 'remember_key')):
         raise ValueError('本机 API 提示偏好类型无效')
+    if config.language not in ('zh', 'en'):
+        raise ValueError('UI language must be zh or en / 界面语言必须是 zh 或 en')
     # Treat credentials as an address-bound bundle: never send an old provider's key
     # to a newly selected endpoint just because it remains in the environment.
     generic_url = os.environ.get('GPU_API_BASE_URL') or os.environ.get('OPENAI_BASE_URL')
@@ -94,7 +97,10 @@ def save_config(config, path=None):
     path = Path(path) if path else config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     data = dict(base_url=normalize_url(config.base_url), model=config.model.strip(),
-                skip_setup=bool(config.skip_setup), remember_key=bool(config.remember_key))
+                skip_setup=bool(config.skip_setup), remember_key=bool(config.remember_key),
+                language=config.language)
+    if config.language not in ('zh', 'en'):
+        raise ValueError('UI language must be zh or en / 界面语言必须是 zh 或 en')
     if config.remember_key:
         data['api_key'] = config.api_key
     # Atomic replacement and owner-only permissions on POSIX. Windows inherits the

@@ -24,10 +24,10 @@ class FakeAgent:
         return self.answer
 
 
-async def wait_done(app, pilot):
+async def wait_done(app, pilot, previous_turns=0):
     for _ in range(50):
         await pilot.pause(0.05)
-        if not app.busy:
+        if not app.busy and app.turns > previous_turns:
             return
     raise AssertionError('UI did not finish')
 

@@ -588,10 +588,13 @@ def main() -> int:
     ap.add_argument('--configure', action='store_true', help='open API connection settings even when startup prompts are disabled')
     ap.add_argument('--base-url', help='OpenAI-compatible API base URL (changing it clears inherited credentials)')
     ap.add_argument('--model', help='model ID to use for this run')
+    ap.add_argument('--language', choices=['zh', 'en'], help='TUI language (中文 / English) for this run')
     args = ap.parse_args()
 
     try:
         config = load_config()
+        if args.language:
+            config.language = args.language
         if args.base_url:
             from api_config import normalize_url
             url = normalize_url(args.base_url)

@@ -9,6 +9,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, Input, Select, Static
 
 from api_config import discover_models, normalize_url
+from ui_i18n import tr
 
 
 class ModelsLoaded(Message):
@@ -18,13 +19,13 @@ class ModelsLoaded(Message):
 
 
 class APISetup(ModalScreen):
-    BINDINGS = [('escape', 'cancel', '暂时跳过')]
+    BINDINGS = [('escape', 'cancel', 'Skip / 跳过'), ('f6', 'language', 'EN/中文')]
     DEFAULT_CSS = '''
     APISetup { align: center middle; background: #000000 65%; padding: 0; }
     #api-dialog { width: 82; max-width: 100%; height: 35; max-height: 100%;
                   background: #191919; color: #e4ded6; border: round #d99a76; padding: 0 2; }
     #api-title { color: #d99a76; text-style: bold; height: 2; padding-top: 1; }
-    .api-label { height: 1; color: #a49c93; }
+    .api-label { height: auto; min-height: 1; color: #a49c93; }
     #api-note { height: auto; margin-bottom: 1; color: #a49c93; }
     #api-feedback { height: auto; min-height: 2; color: #d99a76; }
     APISetup Input, APISetup Select { height: 3; margin: 0; }
@@ -45,26 +46,34 @@ class APISetup(ModalScreen):
         self.persist, self.model_loader = persist, model_loader
         self.generation = 0
         self.fetching = False
+        self.feedback_key = '默认仅保存地址、模型与提示偏好，密钥只在本次进程中使用。'
+        self.feedback_values = {}
+
+    def t(self, key, **values):
+        return tr(self.config.language, key, **values)
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(id='api-dialog'):
-            yield Static('GPU加速与数据分析 · 连接设置', id='api-title', markup=False)
-            yield Static('支持 OpenAI 兼容接口。密钥只发送到你填写的地址；模型须支持工具调用。', id='api-note', markup=False)
-            yield Static('API 基础地址（含 /v1 或服务指定的前缀）', classes='api-label')
+            yield Static(self.t('GPU加速与数据分析') + ' · ' + self.t('连接设置'), id='api-title', markup=False)
+            yield Static(self.t('支持 OpenAI 兼容接口。密钥只发送到你填写的地址；模型须支持工具调用。'), id='api-note', markup=False)
+            yield Static(self.t('界面语言 / UI language'), id='api-language-label', classes='api-label')
+            yield Select([('中文', 'zh'), ('English', 'en')], value=self.config.language,
+                         allow_blank=False, id='api-language')
+            yield Static(self.t('API 基础地址（含 /v1 或服务指定的前缀）'), id='api-url-label', classes='api-label')
             yield Input(self.config.base_url, id='api-url', placeholder='https://example.com/v1')
-            yield Static('API Key（隐藏输入；本机无鉴权服务可填 local）', classes='api-label')
+            yield Static(self.t('API Key（隐藏输入；本机无鉴权服务可填 local）'), id='api-key-label', classes='api-label')
             yield Input(self.config.api_key, password=True, id='api-key')
-            yield Button('读取此地址的模型列表', id='fetch-models')
-            yield Select([], prompt='先读取列表，再选择模型', id='api-model-list')
-            yield Static('模型名（选择后填入；服务不支持列表时可手填）', classes='api-label')
+            yield Button(self.t('读取此地址的模型列表'), id='fetch-models')
+            yield Select([], prompt=self.t('先读取列表，再选择模型'), id='api-model-list')
+            yield Static(self.t('模型名（选择后填入；服务不支持列表时可手填）'), id='api-model-label', classes='api-label')
             yield Input(self.config.model, id='api-model')
-            yield Checkbox('以后不再弹出启动设置', value=self.config.skip_setup, id='api-skip')
-            yield Checkbox('保存密钥到本机明文文件（请勿共享）', value=self.config.remember_key, id='api-remember')
-            yield Static('默认仅保存地址、模型与提示偏好，密钥只在本次进程中使用。', id='api-feedback', markup=False)
+            yield Checkbox(self.t('以后不再弹出启动设置'), value=self.config.skip_setup, id='api-skip')
+            yield Checkbox(self.t('保存密钥到本机明文文件（请勿共享）'), value=self.config.remember_key, id='api-remember')
+            yield Static(self.t(self.feedback_key), id='api-feedback', markup=False)
             with Horizontal(id='api-buttons'):
-                yield Button('保存并进入', id='api-save')
-                yield Button('暂时跳过', id='api-cancel')
-                yield Button('忽略，不再提示', id='api-ignore')
+                yield Button(self.t('保存并进入'), id='api-save')
+                yield Button(self.t('暂时跳过'), id='api-cancel')
+                yield Button(self.t('忽略，不再提示'), id='api-ignore')
 
     def on_mount(self):
         self.set_class(self.size.width < 65, 'compact')
@@ -83,8 +92,31 @@ class APISetup(ModalScreen):
                 self.query_one('#api-model', Input).value = ''
 
     def on_select_changed(self, event):
+        if event.select.id == 'api-language' and event.value in ('zh', 'en'):
+            self.config = replace(self.config, language=event.value)
+            self.refresh_language()
         if event.select.id == 'api-model-list' and event.value is not Select.BLANK:
             self.query_one('#api-model', Input).value = str(event.value)
+
+    def refresh_language(self):
+        self.query_one('#api-title', Static).update(self.t('GPU加速与数据分析') + ' · ' + self.t('连接设置'))
+        for selector, key in (
+            ('#api-note', '支持 OpenAI 兼容接口。密钥只发送到你填写的地址；模型须支持工具调用。'),
+            ('#api-language-label', '界面语言 / UI language'),
+            ('#api-url-label', 'API 基础地址（含 /v1 或服务指定的前缀）'),
+            ('#api-key-label', 'API Key（隐藏输入；本机无鉴权服务可填 local）'),
+            ('#api-model-label', '模型名（选择后填入；服务不支持列表时可手填）')):
+            self.query_one(selector, Static).update(self.t(key))
+        for selector, key in (('#fetch-models', '读取此地址的模型列表'), ('#api-save', '保存并进入'),
+                              ('#api-cancel', '暂时跳过'), ('#api-ignore', '忽略，不再提示')):
+            self.query_one(selector, Button).label = self.t(key)
+        self.query_one('#api-skip', Checkbox).label = self.t('以后不再弹出启动设置')
+        self.query_one('#api-remember', Checkbox).label = self.t('保存密钥到本机明文文件（请勿共享）')
+        self.query_one('#api-model-list', Select).prompt = self.t('先读取列表，再选择模型')
+        self.query_one('#api-feedback', Static).update(self.t(self.feedback_key, **self.feedback_values))
+
+    def action_language(self):
+        self.query_one('#api-language', Select).value = 'en' if self.config.language == 'zh' else 'zh'
 
     def values(self):
         return replace(self.config,
@@ -131,8 +163,9 @@ class APISetup(ModalScreen):
             return
         self.dismiss(config)
 
-    def feedback(self, text):
-        self.query_one('#api-feedback', Static).update(text)
+    def feedback(self, text, **values):
+        self.feedback_key, self.feedback_values = text, values
+        self.query_one('#api-feedback', Static).update(self.t(text, **values))
 
     @work(thread=True, exit_on_error=False)
     def fetch(self, generation, config):
@@ -156,7 +189,7 @@ class APISetup(ModalScreen):
             self.feedback(event.error)
             return
         self.query_one('#api-model-list', Select).set_options([(name, name) for name in event.models])
-        self.feedback(f'已读取 {len(event.models)} 个模型。请选择一个，或保留手填模型名；列表不代表工具调用已验证。')
+        self.feedback('models_loaded', count=len(event.models))
 
     def action_cancel(self):
         self.dismiss(None)

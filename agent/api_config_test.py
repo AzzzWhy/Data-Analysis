@@ -47,6 +47,8 @@ def config_checks(folder):
             assert moved.api_key == 'second-test-key' and moved.model == 'second-model'
         save_config(replace(config, remember_key=False), path)
         assert 'api_key' not in json.loads(path.read_text())
+        save_config(replace(config, language='en'), path)
+        assert load_config(path).language == 'en'
         legacy = folder / 'legacy.json'
         with patch.dict(os.environ, {'STEPFUN_API_KEY': 'legacy-test-key'}):
             loaded = load_config(legacy)
@@ -168,6 +170,7 @@ async def ui_checks(folder):
             assert not saved[-1].remember_key and 'second-key' not in path.read_text()
             app.query_one('#prompt', Input).value = '/settings'
             await pilot.press('enter')
+            await pilot.pause()
             assert isinstance(app.screen, APISetup)
             await pilot.press('escape')
             assert not isinstance(app.screen, APISetup)
@@ -206,6 +209,60 @@ async def ui_checks(folder):
     print('PASS stale provider model-list response is discarded')
 
 
+async def language_checks(folder):
+    path = folder / 'language' / 'connection.json'
+    config = APIConfig('https://first.example/v1', 'synthetic-key', 'test-model',
+                       skip_setup=True)
+    def persist(value):
+        save_config(value, path)
+    for size in ((120, 40), (45, 22)):
+        app = SparkTUI(FakeAgent(), config.model, connection=config,
+                       agent_factory=lambda _: FakeAgent(), persist_config=persist)
+        async with app.run_test(size=size) as pilot:
+            await pilot.pause()
+            assert '从一个问题开始' in app.query_one('#welcome')._markdown
+            app.query_one('#prompt', Input).value = '/language en'
+            await pilot.press('enter')
+            await pilot.pause()
+            assert app.language == 'en' and not app.agent.prompts
+            assert 'Start' in app.export_screenshot() and 'question' in app.export_screenshot()
+            assert 'GPU Acceleration & Data Analysis' in str(app.query_one('#brand').render())
+            assert 'No file selected' in app.context_text()
+            assert 'Ready' in str(app.query_one('#status').render())
+            assert 'Details' in str(app.query_one('#shortcuts').render())
+            assert load_config(path).language == 'en'
+            await pilot.press('f5')
+            await pilot.pause()
+            assert isinstance(app.screen, APISetup)
+            screen = app.screen
+            assert screen.query_one('#api-language', Select).value == 'en'
+            assert 'Save and continue' in str(screen.query_one('#api-save', Button).label)
+            screen.query_one('#api-language', Select).value = 'zh'
+            await pilot.pause()
+            assert '保存并进入' in str(screen.query_one('#api-save', Button).label)
+            screen.query_one('#api-language', Select).value = 'en'
+            await pilot.pause()
+            screen.query_one('#api-save', Button).press()
+            await pilot.pause()
+            assert app.language == 'en'
+            app.query_one('#prompt', Input).value = '/language zh'
+            await pilot.press('enter')
+            await pilot.pause()
+            assert app.language == 'zh' and load_config(path).language == 'zh'
+            assert '从一个' in app.export_screenshot()
+        print(f'PASS live Chinese/English main UI, setup selector, persistent preference: {size}')
+    config_en = replace(config, language='en')
+    app = SparkTUI(FakeAgent(), config_en.model, connection=config_en,
+                   agent_factory=lambda _: FakeAgent(), persist_config=persist)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert 'Start' in app.export_screenshot() and 'question' in app.export_screenshot()
+        await pilot.press('f6')
+        await pilot.pause()
+        assert app.language == 'zh'
+    print('PASS saved English on startup and F6 toggle')
+
+
 def main():
     with tempfile.TemporaryDirectory() as directory:
         folder = Path(directory)
@@ -213,6 +270,7 @@ def main():
         http_checks()
         entry_checks()
         asyncio.run(ui_checks(folder))
+        asyncio.run(language_checks(folder))
 
 
 if __name__ == '__main__':

@@ -1,8 +1,12 @@
 # GPU加速与数据分析
 
-A tool-calling agent that runs exact statistical analysis over large local datasets on an
-NVIDIA GB10 (DGX Spark) with RAPIDS cuDF. The model decides what to compute and writes the
-answer; it never reads the data.
+[使用说明（中文 / English）](docs/USAGE.md) · [User guide](docs/USAGE.md#english)
+
+A tool-calling agent that runs exact statistical analysis over large local datasets. On a
+configured NVIDIA GPU it can use RAPIDS cuDF; otherwise it reports the actual pandas/CPU path.
+The model decides what to compute and writes the answer from local tool results; raw dataset
+rows are not sent as the model's input. User questions, paths and statistical summaries do reach
+the selected model provider.
 
 Submitted to the third NVIDIA DGX Spark Hackathon, Agent Skills track.
 
@@ -18,6 +22,8 @@ Paths refer to existing files on the machine running the agent (the SSH server w
 remotely); this does not upload local files.
 Enter sends your question. Ctrl+O / F2 / `/logs` toggles execution details; `/help` / F1
 shows help. Ctrl+L / F4 focuses the prompt; Ctrl+Q / F10 / `/quit` exits safely.
+Choose 中文 / English in connection settings, or switch the TUI with `/language zh`,
+`/language en` or F6. This translates interface controls, not model answers or raw logs.
 The previous sidebar and classic layouts are preserved at commits `c5bd101` and `1e6e16b`.
 On narrow terminals the layout adapts. `--plain`, non-TTY input and `--ask` retain the original
 CLI behavior. Ctrl+Q waits for any running analysis and memory cleanup before exiting; it does
@@ -91,7 +97,7 @@ computes every statistic over the entire file:
                     v
      +-------------------------------+
      |  LLM: decides only            |   which skill, which arguments
-     |  step-3.7-flash               |   never sees the data
+     |  configured model             |   receives prompts and tool results
      +--------------+----------------+
                     |  function call
                     v
