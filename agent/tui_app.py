@@ -53,6 +53,7 @@ class SparkTUI(App):
     .question { height: auto; color: $classic-yellow; margin: 1 0 0 0; }
     .answer { height: auto; margin: 0 0 1 0; }
     Markdown { background: $classic-blue; color: $classic-white; padding: 0; }
+    Markdown .code_inline { color: #ffffff; background: $classic-blue; text-style: bold; }
     MarkdownH1, MarkdownH2, MarkdownH3 { color: #ffffff; text-style: bold; }
     #details { height: 8; padding: 0 1; background: $classic-black; color: $classic-white; border: solid $classic-white; }
     #status { height: 1; padding: 0 1; color: $classic-black; background: $classic-white; }
