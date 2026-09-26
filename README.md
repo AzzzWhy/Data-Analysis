@@ -77,9 +77,9 @@ file, during the run.
 | Criterion | What is implemented | Where to check it |
 | :--- | :--- | :--- |
 | Skill invocation: choosing the right tool and arguments unprompted | The model selects from four tools. Given no path it calls `list_datasets` first. A conceptual question invokes nothing. After a bad column name it calls `profile` to get the real names and retries. A multi-step request switches to the session tool and passes its `goal` to claim a plan. | `agent/run_criteria_tests.sh`, 11 cases. The assertions run against the tool-call trace rather than the prose of the answer. |
-| Task completion: natural language in, real results out | All six operations return real statistics. An answer carries conclusions, rankings, tables and key findings, and the run also writes report and chart files the user can keep. | `smoke_test.py`, 59 assertions. `verify_*.py` recomputes the numbers independently. |
+| Task completion: natural language in, real results out | All six operations return real statistics. An answer carries conclusions, rankings, tables and key findings, and the run also writes report and chart files the user can keep. | `smoke_test.py` (use the current runner output). `verify_*.py` recomputes the numbers independently. |
 | Innovation | A resident-memory session makes multi-step drill-down an order of magnitude cheaper; plans are system state rather than prompt text; deliverables are generated with no third-party dependency; the speedup is measured in the same conversation that reports it. | The scripted drill-down: 1.861 s in session against 37.933 s on CPU, 20.4x. |
-| Code usability: deployable, robust, survives bad input | The engine degrades to pandas on its own. No tool ever raises. A session is refused before loading when memory is short. A file that changed underneath a session is refused rather than answered from a stale snapshot. Two-column grouping fails with an explicit message. No GPU, a missing file and a bad column name are all handled gracefully. Memory is released in a `finally` block. | The no-GPU path runs on an ordinary machine. `plan_test.py`, 56 assertions, plus `session_*_test.py`, 41. |
+| Code usability: deployable, robust, survives bad input | The engine degrades to pandas on its own. No tool ever raises. A session is refused before loading when memory is short. A file that changed underneath a session is refused rather than answered from a stale snapshot. Two-column grouping fails with an explicit message. No GPU, a missing file and a bad column name are all handled gracefully. Memory is released in a `finally` block. | The no-GPU path runs on an ordinary machine. `tool_contract_test.py`, `plan_test.py` and the session tests cover the public contracts. |
 | Demo quality: a smooth end-to-end conversation | A scripted nine-stage demo runs in 176.8 s and shows the measured speedup at every stage, with the deliverables stage and the multi-step drill-down as its two peaks. `--prewarm` removes the first-query wait on stage. | `agent/demo_script.py`. |
 
 ### Where the innovation actually is
@@ -376,9 +376,10 @@ Sub_metering_1         169,105  169,105    OK    ties=1,880,175 (IQR=0)
 ### Running the tests yourself
 
 ```bash
-# test suites (the plan layer needs no GPU)
-python skills/cudf-analytics/scripts/plan_test.py            # 56 checks
-python skills/cudf-analytics/scripts/smoke_test.py           # 80 checks
+# test suites (the plan layer and tool-schema contract need no GPU)
+python agent/tool_contract_test.py
+python skills/cudf-analytics/scripts/plan_test.py
+python skills/cudf-analytics/scripts/smoke_test.py
 bash   agent/run_criteria_tests.sh                           # 11 judging-criteria cases
 bash   agent/run_stability_check.sh 3 <your-data.csv>        # reproducibility
 ```
@@ -463,6 +464,7 @@ agent/                              the agent application (the submission proper
   run_criteria_tests.sh             11 judging-criteria cases
   run_stability_check.sh            reproducibility: N runs, session hygiene and plan coverage
   gpu_vs_cpu_demo.py                side-by-side engine comparison
+  tool_contract_test.py             schema/function signature regression checks
   session_skill_test.py             session tool-layer assertions
   env_stepfun.sh                    key loading for non-interactive shells
   verify_*.py                       independent recomputation of the agent's numbers
@@ -480,8 +482,8 @@ skills/cudf-analytics/              the skill itself
     gpu_session.py                  resident session worker
     analysis_plan.py                plan catalog and progress bookkeeping (pure functions)
     make_deliverables.py            zero-dependency SVG charts and Markdown report
-    smoke_test.py                   59 self-checks plus GPU/CPU numeric agreement
-    plan_test.py                    56 plan-layer assertions
+    smoke_test.py                   self-checks plus GPU/CPU numeric agreement
+    plan_test.py                    plan-layer assertions
     session_worker_test.py          worker protocol and guard tests
     attribution_test.py             attribution of I/O against compute
     memory_ceiling_test.py          multi-scale stress test
@@ -524,12 +526,14 @@ error handling can all be verified on an ordinary machine.
 
 ```bash
 pip install -r requirements.txt
-python skills/cudf-analytics/scripts/smoke_test.py        # 80 checks
+python agent/tool_contract_test.py
+python skills/cudf-analytics/scripts/smoke_test.py
 python skills/cudf-analytics/scripts/gpu_analytics.py --input <any.csv> --op auto
 ```
 
-Expect `"accelerated": false` and a `fallback_reason` explaining that cuDF is unavailable. No
-speedup is claimed on this path.
+Expect `"accelerated": false`. A deliberate small-file CPU route carries `routing_reason` and
+no `fallback_reason`; a file routed to the GPU when cuDF is unavailable carries a
+`fallback_reason`. No speedup is claimed on either CPU path.
 
 ```bash
 export STEPFUN_API_KEY=<your key>
@@ -543,8 +547,9 @@ ssh -p <port> <user>@<host>
 source ~/.bashrc                        # provides STEPFUN_API_KEY
 conda activate rapids-cudf              # cuDF 25.10 / pandas 2.3.3 / Python 3.11
 
-# 1) skill self-check: 59 assertions including GPU/CPU numeric agreement
-cd skills/cudf-analytics && python scripts/smoke_test.py
+# 1) tool contract plus skill self-check, including GPU/CPU numeric agreement
+python agent/tool_contract_test.py
+cd skills/cudf-analytics && python scripts/smoke_test.py --require-gpu
 
 # 2) single agent question
 cd ../../agent && python agent_main.py --ask "analyze the outliers in /path/to/data.csv"
@@ -562,8 +567,8 @@ python ../skills/cudf-analytics/evals/run_evals.py
 # 6) reproducibility: the same question three times, checking hygiene and coverage
 bash run_stability_check.sh 3 "$DEMO_DATA"
 
-# 7) plan-layer unit tests (no GPU needed, 56 assertions)
-python skills/cudf-analytics/scripts/plan_test.py
+# 7) plan-layer unit tests (no GPU needed)
+python ../skills/cudf-analytics/scripts/plan_test.py
 ```
 
 `--prewarm` matters. On the first run of any given question the agent also runs it on CPU to
@@ -592,7 +597,7 @@ published skill missing any of them is rejected by the sync pipeline.
 | `SKILL.md` | `skills/cudf-analytics/SKILL.md` | present |
 | `skill-card.md` governance card | `skills/cudf-analytics/skill-card.md` | present, filled in section by section from the official Jinja template |
 | Tier-3 evaluation dataset | `skills/cudf-analytics/evals/evals.json` | present, 13 tasks in the official schema |
-| `BENCHMARK.md` evaluation report | — | not in the repository yet |
+| `BENCHMARK.md` evaluation report | `skills/cudf-analytics/BENCHMARK.md` | present |
 | `skill.oms.sig` detached signature | — | not applicable |
 | `references/` | `skills/cudf-analytics/references/engine-contract.md` | present |
 

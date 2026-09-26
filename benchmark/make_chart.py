@@ -250,7 +250,7 @@ def panel_b(s: Svg, x, y, w, h):
     for i, (lab, b, sp) in enumerate(data):
         cy = py + 10 + i * ((ph - 8) / len(data))
         col = GPU_C if sp >= 1.0 else CPU_C
-        s.text(px - 12, cy + bar_h / 2 + 4, f"{lab}  ·  {b:.2f} GB", size=11.5,
+        s.text(px - 12, cy + bar_h / 2 + 4, f"{lab}  ·  {b / 1e9:.2f} GB", size=11.5,
                fill=INK, anchor="end")
         s.rect(px, cy, max(X(sp) - px, 1.0), bar_h, fill=col, rx=3, op=0.88)
         s.text(X(sp) + 7, cy + bar_h / 2 + 4, f"{sp:.2f}×", size=11.5,

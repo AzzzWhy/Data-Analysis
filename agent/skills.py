@@ -171,6 +171,18 @@ skill_definitions = [
                                        "a plan for that goal and tracks progress after every "
                                        "step; recommended for multi-step requests.",
                     },
+                    "force_cpu": {
+                        "type": "boolean",
+                        "description": "optional when operation='open': force a CPU-backed "
+                                       "session. Default false; mainly useful for validation.",
+                    },
+                    "force_gpu": {
+                        "type": "boolean",
+                        "description": "optional when operation='open': open a resident GPU "
+                                       "session even when a one-off analysis would route to the "
+                                       "CPU. Use this only when several analyses will reuse the "
+                                       "same loaded data, so the GPU startup cost is amortised.",
+                    },
                 },
                 "required": ["operation"],
             },
@@ -246,17 +258,6 @@ skill_definitions = [
                         "description": "optional: force CPU (pandas) so the numbers can be "
                                        "compared against the GPU. Default false"
                     },
-                    "force_gpu": {
-                        "type": "boolean",
-                        "description": "optional: open a resident GPU session even for a small "
-                                       "file. Default false, because for a ONE-OFF analysis the "
-                                       "GPU is slower below ~6.5M rows (its startup cost is about "
-                                       "1.5s and does not shrink with the data). Set this only "
-                                       "when SEVERAL analyses will run over the same file: the "
-                                       "session pays that cost once and then reuses the loaded "
-                                       "data, while each stateless call re-reads the file. "
-                                       "Measured on 20M rows at 0.058-0.187s per step after open."
-                    }
                 },
                 "required": ["file_path", "operation"]
             }

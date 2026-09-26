@@ -53,8 +53,8 @@ Trigger when the user wants **computed facts about a dataset**, and any of these
 **Language:** the skill is driven in English. Its flags, operation names, `--agg` syntax, JSON
 keys and trigger vocabulary are English throughout, and so are the example requests above.
 
-Do **not** trigger for: building charts, training models, querying a remote database,
-or any task where no tabular file is involved.
+Do **not** trigger for: drawing or editing a chart when no tabular dataset needs analysis,
+training models, querying a remote database, or any task where no tabular file is involved.
 
 ## Key concepts
 
@@ -278,8 +278,10 @@ python skills/cudf-analytics/scripts/smoke_test.py
 
 That runs every operation against ground truth computed independently in pandas and
 exits non-zero on any mismatch. On a GPU host it also checks that cuDF and pandas agree.
-Verified on GB10 (cuDF 25.10.00 / pandas 2.3.3): 80 checks pass on the current revision, with
-cuDF and pandas agreeing exactly on mean, median and max.
+On GB10 (cuDF 25.10.00 / pandas 2.3.3), use `--require-gpu` to require the explicit cuDF/pandas
+mean, median and max parity check. A small fixture's normal CPU route does not prove that a
+GPU is unavailable. The runner probes the GPU separately and reports an explained fallback
+when cuDF cannot run; `--require-gpu` makes that condition fail the suite.
 
 The count is deliberately tied to a revision rather than stated as a permanent fact. It has
 already drifted twice: assertions were added without updating this line, so the number here went

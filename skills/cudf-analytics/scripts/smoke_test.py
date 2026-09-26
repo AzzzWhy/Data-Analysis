@@ -98,6 +98,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--rows", type=int, default=20_000)
     ap.add_argument("--keep", action="store_true")
+    ap.add_argument("--require-gpu", action="store_true",
+                    help="fail if the explicit GPU parity check cannot run on cuDF")
     args = ap.parse_args()
 
     tmpdir = tempfile.mkdtemp(prefix="cudf-analytics-smoke-")
@@ -344,6 +346,14 @@ def main() -> int:
             check("routing: forcing the CPU overrides routing",
                   GA.pick_engine_for(tiny, "auto", force_cpu=True)[0] is False)
 
+            rc, routed, err = run(["--input", tiny, "--op", "profile"])
+            check("routing: a deliberate CPU choice completes", rc == 0, err[-120:])
+            check("routing: a deliberate CPU choice is explained",
+                  bool(routed.get("routing_reason")), str(routed.get("routing_reason"))[:80])
+            check("routing: a deliberate CPU choice is never reported as a fallback",
+                  routed.get("fallback_reason") is None,
+                  str(routed.get("fallback_reason"))[:80])
+
             # Density independence: the same row count in a much wider file must still be
             # judged by rows, not bytes.
             dense = os.path.join(tmpdir, "density_dense.csv")
@@ -402,15 +412,28 @@ def main() -> int:
         check("CPU path mean matches independent value",
               close(cpu_rev.get("mean"), truth["revenue_mean"]),
               f"got {cpu_rev.get('mean')} want {truth['revenue_mean']}")
-        if engine == "cudf":
-            check("GPU/CPU means agree", close(rev.get("mean"), cpu_rev.get("mean")),
-                  f"cudf={rev.get('mean')} pandas={cpu_rev.get('mean')}")
-            check("GPU/CPU medians agree", close(rev.get("median"), cpu_rev.get("median")),
-                  f"cudf={rev.get('median')} pandas={cpu_rev.get('median')}")
-            check("GPU/CPU max agree", close(rev.get("max"), cpu_rev.get("max")),
-                  f"cudf={rev.get('max')} pandas={cpu_rev.get('max')}")
+        check("forced CPU is a deliberate choice, not a fallback",
+              bool(cpu_out.get("routing_reason")) and cpu_out.get("fallback_reason") is None)
+        # The tiny fixture routes to CPU even on a healthy GPU host. Probe the actual GPU
+        # explicitly rather than treating that intentional decision as GPU unavailability.
+        code, gpu_out, err = run(["--input", csv, "--op", "summary", "--force-gpu"])
+        check("explicit GPU probe completes", code == 0, err.strip()[-400:])
+        if args.require_gpu:
+            check("GPU required: explicit probe runs on cuDF", gpu_out.get("engine") == "cudf",
+                  str(gpu_out.get("fallback_reason")))
+        if gpu_out.get("engine") == "cudf":
+            gpu_rev = ((gpu_out.get("summary") or {}).get("stats") or {}).get("revenue") or {}
+            check("explicit GPU probe reports acceleration", gpu_out.get("accelerated") is True)
+            check("GPU/CPU means agree", close(gpu_rev.get("mean"), cpu_rev.get("mean")),
+                  f"cudf={gpu_rev.get('mean')} pandas={cpu_rev.get('mean')}")
+            check("GPU/CPU medians agree", close(gpu_rev.get("median"), cpu_rev.get("median")),
+                  f"cudf={gpu_rev.get('median')} pandas={cpu_rev.get('median')}")
+            check("GPU/CPU max agree", close(gpu_rev.get("max"), cpu_rev.get("max")),
+                  f"cudf={gpu_rev.get('max')} pandas={cpu_rev.get('max')}")
         else:
-            print("       (skipped: no GPU here, nothing to cross-check)")
+            check("GPU unavailable is explained as a fallback",
+                  bool(gpu_out.get("fallback_reason")) and gpu_out.get("routing_reason") is None)
+            print(f"       (GPU cross-check skipped: {gpu_out.get('fallback_reason')})")
 
     finally:
         if not args.keep:

@@ -1007,6 +1007,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         }), flush=True)
         return 3
 
+    # `used.reason` explains why detect_engine returned pandas. It is a fallback reason only
+    # when auto-routing had selected the GPU and the GPU was unavailable or failed. When
+    # `route_reason` is present, pandas was chosen deliberately, so surfacing `used.reason`
+    # as a fallback would violate the public contract and make a healthy decision look broken.
+    fallback_reason = fallback
+    if fallback_reason is None and not used.is_gpu and route_reason is None:
+        fallback_reason = used.reason
+
     result: Dict[str, Any] = {
         "ok": True,
         "op": args.op,
@@ -1016,7 +1024,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "engine_version": used.version,
         "gpu": used.gpu_name or ("none (CPU run)" if not used.is_gpu else "CUDA device"),
         "accelerated": used.is_gpu,
-        "fallback_reason": fallback or (None if used.is_gpu else used.reason),
+        "fallback_reason": fallback_reason,
         "routing_reason": route_reason,
         "rows_scanned": rows,
         "op_seconds": round(elapsed, 6),
