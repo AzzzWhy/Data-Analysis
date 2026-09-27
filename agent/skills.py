@@ -264,6 +264,10 @@ skill_definitions = [
                         "description": "optional: force CPU (pandas) so the numbers can be "
                                        "compared against the GPU. Default false"
                     },
+                    "load_backend": {"type": "string", "enum": ["auto", "native", "cpu_gpu"],
+                        "description": "auto uses verified matching calibration if present; native keeps the "
+                        "original reader; cpu_gpu explicitly tests CPU Arrow loading plus GPU compute "
+                        "for numeric Parquet. Conversion cost is included; no guaranteed speedup."},
                 },
                 "required": ["file_path", "operation"]
             }
@@ -1020,7 +1024,8 @@ def dataset_session(operation: str, file_path: str = None, session_id: str = Non
 
 def analyze_dataset(file_path: str, operation: str, by: str = None, agg: str = None,
                     columns: str = None, top_k: int = None,
-                    force_cpu: bool = False, _prefer_resident: bool = False) -> str:
+                    force_cpu: bool = False, _prefer_resident: bool = False,
+                    load_backend: str = "auto") -> str:
     """
     Run the GPU analytics engine and return a compact JSON result.
 
@@ -1042,7 +1047,10 @@ def analyze_dataset(file_path: str, operation: str, by: str = None, agg: str = N
         if os.path.isdir(path):
             return _err(f"this is a directory, not a file: {path}")
 
-        if _prefer_resident and not force_cpu and os.environ.get(
+        if load_backend not in {"auto", "native", "cpu_gpu"}:
+            return _err("load_backend must be auto, native or cpu_gpu")
+        if _prefer_resident and load_backend != "cpu_gpu" and not os.environ.get(
+                "GPU_ANALYSIS_HYBRID_PROFILE") and not force_cpu and os.environ.get(
                 "GPU_ANALYSIS_RESIDENT_INTERACTIVE", "1").strip().lower() not in {
                     "0", "false", "no"}:
             cached = _resident_single_analysis(path, str(operation or "auto"),
@@ -1052,6 +1060,7 @@ def analyze_dataset(file_path: str, operation: str, by: str = None, agg: str = N
 
         engine = _find_engine()
         cmd = [_python_bin(), engine, "--input", path, "--op", str(operation or "auto")]
+        cmd += ["--load-backend", load_backend]
         if by:
             cmd += ["--by", str(by)]
         if agg:
@@ -1131,6 +1140,7 @@ def analyze_dataset(file_path: str, operation: str, by: str = None, agg: str = N
             "seconds": payload.get("total_seconds"),
             "phase_timings": payload.get("phase_timings"),
             "transport_timings": getattr(proc, "transport_timings", None),
+            "loading": payload.get("loading"),
             "execution_decision": payload.get("execution_decision"),
             "result": _compact(result),
         }

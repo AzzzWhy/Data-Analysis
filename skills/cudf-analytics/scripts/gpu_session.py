@@ -818,7 +818,8 @@ def do_oneshot(req: dict) -> dict:
     output = io.StringIO()
     try:
         with contextlib.redirect_stdout(output):
-            code = GA.main(argv)
+            context = "warm" if GA._ENGINE is not None and GA._ENGINE.is_gpu else "cold"
+            code = GA.main(argv, execution_context=context)
         payload = json.loads(output.getvalue())
         return {"ok": True, "payload": payload, "exit_code": code}
     except SystemExit as exc:

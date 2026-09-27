@@ -37,6 +37,7 @@ import time
 import traceback
 import cost_model
 import parquet_cache
+import hybrid_execution
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -1076,11 +1077,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--calibration-file", default=os.environ.get("GPU_ANALYSIS_CALIBRATION_FILE"),
                    help="optional JSONL measurements used for per-operation CPU/GPU routing")
     p.add_argument("--pretty", action="store_true", help="pretty-print the JSON output")
+    p.add_argument("--load-backend", choices=["auto", "native", "cpu_gpu"],
+                   default=os.environ.get("GPU_ANALYSIS_LOAD_BACKEND", "auto"),
+                   help="native reader, explicit CPU Arrow -> GPU, or matched calibration")
+    p.add_argument("--hybrid-profile", default=os.environ.get("GPU_ANALYSIS_HYBRID_PROFILE"),
+                   help="local verified three-path calibration; never runs baselines implicitly")
     p.add_argument("--verbose", action="store_true", help="log engine/fallback decisions to stderr")
     return p
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Optional[Sequence[str]] = None, *, execution_context: str = "cold") -> int:
     args = build_parser().parse_args(argv)
     t_start = time.perf_counter()
 
@@ -1097,11 +1103,28 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     nrows = int(args.limit) if args.limit else None
 
     cache_trace: Dict[str, Any] = {"status": "disabled"}
+    load_attempts = []
+    load_backend = args.load_backend
+    hybrid_route = {"selected": None, "reason": "explicit/native request"}
+    if load_backend == "cpu_gpu" and args.limit:
+        print(json.dumps({"error": "hybrid loading does not support --limit", "input": path}), flush=True)
+        return 2
 
     def load(engine: Engine) -> Any:
         nonlocal cache_trace
-        df, cache_trace = parquet_cache.read(
-            engine, path, args.parquet_cache_dir, usecols=usecols, nrows=nrows)
+        trace = {"load_engine": engine.name, "compute_engine": engine.name,
+                 "read_count": 1, "conversion_count": 0}
+        load_attempts.append(trace)
+        if load_backend == "cpu_gpu" and engine.is_gpu:
+            try:
+                df = hybrid_execution.read_gpu(engine, path, usecols, trace)
+            except hybrid_execution.HybridRefused as exc:
+                if isinstance(exc, (hybrid_execution.HybridMemoryRefused, hybrid_execution.HybridInputChanged)):
+                    raise ValueError(str(exc)) from exc  # never bypass admission via fallback
+                raise OpNotSupported(f"hybrid load/conversion failed: {exc}") from exc
+        else:
+            df, cache_trace = parquet_cache.read(
+                engine, path, args.parquet_cache_dir, usecols=usecols, nrows=nrows)
         if not hasattr(df, "columns") or len(df.columns) == 0:
             raise ValueError(f"no columns could be read from {path}")
         return df
@@ -1109,10 +1132,32 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         force_cpu = bool(args.force_cpu) or (args.engine == "cpu")
         force_gpu = bool(args.force_gpu) or (args.engine == "gpu")
+        if force_cpu and (force_gpu or load_backend == "cpu_gpu"):
+            raise ValueError("force_cpu conflicts with GPU/hybrid request")
+        matched = None
+        if load_backend == "auto" and not force_cpu and not nrows and not args.parquet_cache_dir:
+            matched, hybrid_route = hybrid_execution.choose(
+                args.hybrid_profile, path, usecols, hybrid_execution.single_workflow(args),
+                "oneshot_" + execution_context)
+            if matched == "cpu_gpu":
+                load_backend = "cpu_gpu"
+            elif matched:
+                load_backend = "native"
         route_reason: Optional[str] = None
         route_details: Dict[str, Any] = {}
         mode = "force_cpu" if force_cpu else "force_gpu" if force_gpu else "auto"
-        if not force_cpu and not force_gpu:
+        if load_backend == "cpu_gpu":
+            force_gpu = True
+            route_reason = None
+            route_details["hybrid_calibration"] = hybrid_route
+            if matched:
+                route_details["policy"] = "matched_hybrid_calibration"
+        elif not force_cpu and not force_gpu and matched:
+            force_cpu = matched == "cpu"
+            route_reason = hybrid_route["reason"] if force_cpu else None
+            route_details["policy"] = "matched_hybrid_calibration"
+            route_details["hybrid_calibration"] = hybrid_route
+        elif not force_cpu and not force_gpu:
             use_gpu, route_reason = pick_engine_for(
                 path, args.op, verbose=args.verbose, details=route_details,
                 calibration_file="" if args.parquet_cache_dir or usecols else args.calibration_file,
@@ -1153,7 +1198,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         fallback_reason = used.reason
 
     total_seconds = round(time.perf_counter() - t_start, 6)
-    if not fallback_reason and cache_trace["status"] == "disabled" and not nrows and not usecols:
+    if not fallback_reason and load_backend != "cpu_gpu" and cache_trace["status"] == "disabled" and not nrows and not usecols:
         try:
             cost_model.record(args.calibration_file, op=args.op, source=path,
                               backend=used.name, size=os.path.getsize(path),
@@ -1161,6 +1206,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         except OSError as exc:
             _log(f"calibration measurement not saved: {exc}")
     decision_reason = route_reason or (
+        hybrid_route["reason"] if matched else
+        "CPU Arrow loading and GPU compute explicitly requested" if load_backend == "cpu_gpu" else
         "GPU forced by the caller" if mode == "force_gpu" else
         "the calibrated operation model selected GPU" if
         route_details.get("policy") == "calibrated_cost_model" else
@@ -1212,6 +1259,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     result["phase_timings"] = {**payload.get("phase_timings", {}),
                               "engine_init_seconds": round(init_seconds, 6),
                               "request_seconds": total_seconds}
+    result["loading"] = {"requested": args.load_backend,
+        "actual": "cpu_gpu" if used.is_gpu and load_backend == "cpu_gpu" else
+                  "native_gpu" if used.is_gpu else "cpu",
+        "execution_context": execution_context, "decision": hybrid_route,
+        "attempts": load_attempts}
 
     print(json.dumps(result, indent=2 if args.pretty else None, default=str, ensure_ascii=False), flush=True)
     return 0
