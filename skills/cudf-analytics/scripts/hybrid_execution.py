@@ -152,8 +152,14 @@ def inspect_parquet(path, columns):
 
 def memory_available():
     import cupy
-    import psutil
-    return int(cupy.cuda.runtime.memGetInfo()[0]), int(psutil.virtual_memory().available)
+    if os.path.isfile("/proc/meminfo"):
+        with open("/proc/meminfo", encoding="ascii") as source:
+            entries = dict(line.split(":", 1) for line in source)
+        available = int(entries["MemAvailable"].split()[0]) * 1024
+    else:
+        import psutil
+        available = int(psutil.virtual_memory().available)
+    return int(cupy.cuda.runtime.memGetInfo()[0]), available
 
 
 def read_gpu(engine, path, columns, trace):
