@@ -48,11 +48,13 @@ import skills  # noqa: E402
 AGENT_IMPORT_ERROR = ""
 try:
     from agent_main import Agent, build_client  # noqa: E402
-    from api_config import load_config  # noqa: E402
+    from api_config import load_config, normalize_url, save_config  # noqa: E402
 except Exception as _exc:  # pragma: no cover - depends on the operator's environment
     Agent = None
     build_client = None
     load_config = None
+    normalize_url = None
+    save_config = None
     AGENT_IMPORT_ERROR = f"{type(_exc).__name__}: {_exc}"
 
 GUI_DIR = HERE / "gui"
@@ -221,6 +223,8 @@ class Workbench:
         self.agent = None
         self.config_ready = False
         self.model = None
+        self.base_url = ""
+        self.language = "zh"
         self.last_error = ""
         self.httpd = None
         # The most recent decision record, kept so the session card can say whether the last
@@ -255,11 +259,72 @@ class Workbench:
             config.model = model_override
         self.config_ready = bool(config.ready)
         self.model = config.model or None
+        self.base_url = config.base_url
+        self.language = getattr(config, "language", "zh")
         if self.config_ready:
             try:
                 self.agent = Agent(build_client(config), verbose=False, model=config.model)
             except Exception as exc:
                 self.last_error = f"model client could not start: {type(exc).__name__}: {exc}"
+
+    def apply_settings(self, patch: dict) -> dict:
+        """Write connection settings through api_config, then rebuild the agent.
+
+        The key is accepted once and never returned. The response reports whether one is stored,
+        as a boolean -- a server that echoes a credential can end up with that credential in a
+        browser history entry, a screenshot or a log file, and this screen is designed to be put
+        on camera.
+        """
+        if load_config is None or save_config is None:
+            return {"ok": False, "error": f"settings layer unavailable: {AGENT_IMPORT_ERROR}"}
+        try:
+            config = load_config()
+        except Exception as exc:
+            return {"ok": False, "error": f"could not read current settings: {exc}"}
+
+        warning = ""
+        new_base = str(patch.get("base_url") or "").strip()
+        if new_base:
+            try:
+                target = normalize_url(new_base)
+            except Exception as exc:
+                return {"ok": False, "error": f"base_url rejected: {exc}"}
+            if target != config.base_url:
+                # A different provider must not inherit the previous provider's key, and a model
+                # id from the old provider is meaningless at the new one.
+                config.api_key = ""
+                config.model = ""
+            config.base_url = target
+        for field in ("model", "skip_setup", "remember_key", "language"):
+            if field in patch:
+                setattr(config, field, patch[field])
+        if patch.get("api_key"):
+            if not config.remember_key:
+                warning = ("api_key was not saved: remember_key is false, and storing a "
+                           "plaintext key has to be an explicit choice. It is used for this "
+                           "run only.")
+            config.api_key = str(patch["api_key"])
+
+        try:
+            save_config(config)
+        except Exception as exc:
+            # save_config validates the language and refuses anything but zh/en.
+            return {"ok": False, "error": f"settings not saved: {type(exc).__name__}: {exc}"}
+        if patch.get("api_key") and not config.remember_key:
+            # Do not leave a credential in the live config object after refusing to persist it.
+            config.api_key = ""
+
+        self._configure(self.model)
+        response = {
+            "ok": True,
+            "base_url": config.base_url,
+            "model": config.model or None,
+            "language": config.language,
+            "config_ready": self.config_ready,
+            "api_key_stored": bool(self.config_ready),
+            "warning": warning,
+        }
+        return response
 
     def session_status(self) -> dict:
         """Ask the worker what it holds, with a deadline this module owns.
@@ -307,6 +372,10 @@ class Workbench:
             "agent_import_error": AGENT_IMPORT_ERROR,
             "config_ready": self.config_ready,
             "model": self.model,
+            # The address is not a secret and the settings form needs to show what is configured;
+            # the key itself is never part of this payload.
+            "base_url": self.base_url,
+            "language": self.language,
             "model_error": self.last_error,
             "busy": self.busy,
             "session": {**doc, "reused": decision_is_warm(self.last_decision)},
@@ -593,6 +662,17 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(202, {"job_id": job.id,
                                     "note": "direct tool call, no model involved"})
         return self._json(404, {"error": f"no such route: {url.path}"})
+
+    def do_PATCH(self):                    # noqa: N802
+        url = urlparse(self.path)
+        if url.path != "/api/settings":
+            return self._json(404, {"error": f"no such route: {url.path}"})
+        # A credential in a query string lands in access logs, proxy logs and browser history.
+        # It is only ever accepted in the request body.
+        if "api_key" in parse_qs(url.query):
+            return self._json(400, {"error": "api_key must be sent in the request body, "
+                                             "never in the query string"})
+        return self._json(200, self.workbench.apply_settings(self._body()))
 
     def _static(self, name: str, content: str) -> None:
         root = GUI_DIR.resolve()

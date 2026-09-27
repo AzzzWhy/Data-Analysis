@@ -126,10 +126,11 @@ def main() -> int:
     check("engine readiness is measured by asking the worker",
           state["engine_ready"] is True, state.get("engine_error", ""))
     check("session block is present and typed", isinstance(state["session"], dict))
-    check("an unconfigured model is reported, not hidden",
-          (state["agent_available"] and not state["config_ready"])
-          or not state["agent_available"], json.dumps({k: state[k] for k in
-                                                       ("agent_available", "config_ready")}))
+    check("the state is self-consistent: ready implies a model, not-ready implies a reason",
+          (state["config_ready"] and bool(state["model"]))
+          or (not state["config_ready"]
+              and bool(state["model_error"] or state["agent_import_error"])),
+          json.dumps({k: state[k] for k in ("agent_available", "config_ready", "model")}))
 
     print("=== spec #1: SSE ordering, done last ===")
     code, started = request("/api/run", {"tool": "analyze_dataset",
@@ -348,6 +349,61 @@ def main() -> int:
           request("/api/events?job=nope")[0] == 404)
     check("an unknown tool is refused rather than executed",
           request("/api/run", {"tool": "os_system", "args": {}})[0] == 400)
+
+    print("=== spec #7: /api/settings saves without ever echoing the key ===")
+    # Point the settings layer at a throwaway file. A test that wrote through to the operator's
+    # real connection.json could overwrite a live credential.
+    scratch_cfg = os.path.join(tmp, "connection.json")
+    os.environ["GPU_ANALYSIS_CONFIG"] = scratch_cfg
+    try:
+        secret = "synthetic-key-DO-NOT-LEAK"
+        code, saved = request("/api/settings",
+                              {"base_url": "https://first.example/v1", "api_key": secret,
+                               "model": "chosen-model", "remember_key": True,
+                               "skip_setup": True, "language": "zh"}, method="PATCH")
+        check("settings accepted", code == 200 and saved.get("ok") is True, json.dumps(saved)[:160])
+        def leaks(payload):
+            """A field literally named api_key, or the secret anywhere in the payload.
+
+            Checking the serialized text for "api_key" would be wrong: the honest response has
+            a field called api_key_stored, which is a boolean about whether one exists, and a
+            substring test would call that a leak and miss a real one in a nested field.
+            """
+            blob = json.dumps(payload)
+            return ("api_key" in payload) or (secret in blob)
+
+        check("the response carries neither an api_key field nor the secret",
+              not leaks(saved), json.dumps(saved)[:200])
+        on_disk = Path(scratch_cfg).read_text(encoding="utf-8")
+        check("the key reached the file only because remember_key was set", secret in on_disk)
+        if os.name != "nt":
+            check("the file is owner-only", os.stat(scratch_cfg).st_mode & 0o777 == 0o600,
+                  oct(os.stat(scratch_cfg).st_mode & 0o777))
+        # A different provider must not inherit the previous provider's credential.
+        code, moved = request("/api/settings", {"base_url": "https://second.example/v1"},
+                              method="PATCH")
+        after = json.loads(Path(scratch_cfg).read_text(encoding="utf-8"))
+        check("changing the endpoint drops the inherited key",
+              secret not in json.dumps(after), json.dumps({k: v for k, v in after.items()
+                                                           if k != "api_key"})[:160])
+        check("and the second response does not carry one either", not leaks(moved),
+              json.dumps(moved)[:200])
+        code, refused = request("/api/settings?api_key=sneaky", {"language": "en"},
+                                method="PATCH")
+        check("a key in the query string is refused outright", code == 400,
+              f"{code} {json.dumps(refused)[:90]}")
+        code, bad = request("/api/settings", {"language": "klingon"}, method="PATCH")
+        check("an unsupported language is rejected, not silently stored",
+              code == 200 and bad.get("ok") is False, json.dumps(bad)[:140])
+        code, noKey = request("/api/settings",
+                              {"api_key": "temp-only", "remember_key": False}, method="PATCH")
+        check("a key offered without consent to persist it warns",
+              noKey.get("ok") is True and "not saved" in noKey.get("warning", ""),
+              json.dumps(noKey)[:200])
+        check("and it is genuinely not on disk",
+              "temp-only" not in Path(scratch_cfg).read_text(encoding="utf-8"))
+    finally:
+        os.environ.pop("GPU_ANALYSIS_CONFIG", None)
 
     httpd.shutdown()
     gui._shutdown(wb)

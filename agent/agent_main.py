@@ -622,6 +622,11 @@ def main() -> int:
     ap.add_argument('--configure', action='store_true', help='open API connection settings even when startup prompts are disabled')
     ap.add_argument('--base-url', help='OpenAI-compatible API base URL (changing it clears inherited credentials)')
     ap.add_argument('--model', help='model ID to use for this run')
+    ap.add_argument('--gui', action='store_true',
+                    help='serve the browser workbench instead of a terminal frontend. It starts '
+                         'even with no model configured, and says which part is unavailable')
+    ap.add_argument('--gui-port', type=int, default=None,
+                    help='port for --gui (default 8765, or GPU_GUI_PORT)')
     ap.add_argument('--language', choices=['zh', 'en'], help='TUI language (中文 / English) for this run')
     args = ap.parse_args()
 
@@ -641,6 +646,17 @@ def main() -> int:
     except ValueError as exc:
         print(f'[error] {exc}', file=sys.stderr)
         return 2
+    # The workbench is its own frontend, so it is chosen before any terminal decision and before
+    # the "configure me first" gate: it stays useful with no model at all (listing data, running
+    # tools directly, reporting honestly why the question box is closed). --ask and piped input
+    # are scripted runs and must not silently start a server nobody asked to stop.
+    if args.gui:
+        if args.ask or not sys.stdin.isatty():
+            print('[error] --gui starts an interactive server; it cannot be combined with --ask '
+                  'or piped input. Run agent/gui.py directly if you need that.', file=sys.stderr)
+            return 2
+        import gui
+        return gui.serve(port=args.gui_port or gui.DEFAULT_PORT, model=args.model)
     client = build_client(config) if config.ready else None
     # Full screen is only for an interactive terminal. Scripted --ask runs and pipes keep
     # their stable line-oriented output; --plain explicitly opts out.

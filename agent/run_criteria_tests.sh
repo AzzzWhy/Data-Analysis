@@ -46,6 +46,11 @@ FAILED_CASES=""
 ONLY=""
 [ "$1" = "--only" ] && ONLY="$2"
 
+# The header promises the interpreter can be chosen, so honour it: `python` on PATH is whatever
+# the machine happens to have, and on a box with several Pythons that is often one without
+# pandas or openai -- which fails every case for a reason that has nothing to do with the agent.
+PYTHON="${PYTHON:-python}"
+
 run_case() {
   local name="$1" question="$2" expect="$3" forbid="${4:-}"
   if [ -n "$ONLY" ] && [[ "$name" != *"$ONLY"* ]]; then return; fi
@@ -54,7 +59,7 @@ run_case() {
   echo "CASE: $name"
   local out="$WORK/$name.log"
 
-  timeout 900 python agent_main.py --ask "$question" > "$out" 2>&1
+  timeout 900 "$PYTHON" agent_main.py --ask "$question" > "$out" 2>&1
   local code=$?
 
   echo "ASK : $question"

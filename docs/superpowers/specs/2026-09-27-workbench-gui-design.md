@@ -502,10 +502,10 @@ what the workbench does instead.
 
 | Item | Why it is out | What happens today |
 | :--- | :--- | :--- |
-| `PATCH /api/settings` + test #7 | The first round was explicitly "no LLM wired up", so there was nothing for a settings screen to configure, and it could not be verified | Credentials come from `agent_main.py --configure` or `GPU_API_*`. The workbench reads whatever config exists and reports the state honestly |
-| `--gui` / `--gui-port` on `agent_main.py` | Reaching `main()` already requires the model SDK, so the flag could not be exercised on the verification machine | `python agent/gui.py` serves the same standalone |
+| `PATCH /api/settings` + test #7 | The first round was explicitly "no LLM wired up", so there was nothing for a settings screen to configure, and it could not be verified | **Built and verified in the second round**, together with test #7. The key is accepted once, never echoed, and changing the endpoint drops the previous provider's credential |
+| `--gui` / `--gui-port` on `agent_main.py` | Reaching `main()` already requires the model SDK, so that entry point could not be exercised without it | **Built and verified in the second round**, once an isolated venv with `openai` made `main()` importable. It is placed before the `not config.ready` gate, so the workbench still boots with no key |
 | Markdown rendering of the model answer | Deferred with the model round; a parser written without a real answer to test it against is a parser waiting to be wrong | The answer is shown as authored plain text, which is faithful if unstyled |
 | Full visual parity with the mockup (drawer, settings modal, i18n chrome keys) | Layout was approved; the vocabulary for plan steps, chip labels and session states does not exist in `ui_i18n.py` yet | The shipped page is plainer but every figure is real |
 | GB10-only acceptance: cuDF chip, `retained`, `warm_cache`, ~0.06 s/step | Needs the node | Rendered as explicitly unobservable rather than substituted |
-| `run_criteria_tests.sh` 11/11 | Spends API calls; no key on the verification machine | Not run. `tui_test.py` runs in every sweep (SKIP + exit 0 without Textual), which is not the same thing and is not claimed as such |
+| `run_criteria_tests.sh` 11/11 | Spends API calls; no key on the verification machine | **Run and passing 11/11** in the second round against `step-3.7-flash` over a real 200,000-row CSV, asserted on the tool-call trace. Note it needs `PYTHONIOENCODING=utf-8` on a Windows console with a GBK code page, where `rich` cannot encode its status glyphs and every case dies on the way out |
 
