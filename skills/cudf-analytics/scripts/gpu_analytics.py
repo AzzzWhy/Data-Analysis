@@ -965,7 +965,9 @@ OPS: Ops = {
 
 
 def execute(eng: Engine, load: Callable[[Engine], Any], op: str,
-            args: argparse.Namespace) -> Tuple[Dict[str, Any], Engine, float, Optional[str], int]:
+            args: argparse.Namespace,
+            statistics_for: Optional[Callable[[Engine], Dict[str, Any]]] = None,
+            ) -> Tuple[Dict[str, Any], Engine, float, Optional[str], int]:
     """
     Load the table and run `op`, retrying on pandas if cuDF cannot do it.
 
@@ -984,6 +986,12 @@ def execute(eng: Engine, load: Callable[[Engine], Any], op: str,
                 "outliers": op_outliers(df, engine, args, max_columns=args.auto_columns,
                                          summary_stats=summary["stats"]),
             }
+        elif op == "outliers" and statistics_for is not None:
+            prior = statistics_for(engine)
+            payload = op_outliers(df, engine, args, summary_stats=prior)
+            payload["statistics_reused_columns"] = [
+                name for name in payload.get("columns", []) if name in prior
+            ]
         else:
             payload = OPS[op](df, engine, args)
         dt = t_elapsed()

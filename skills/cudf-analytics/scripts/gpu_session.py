@@ -84,6 +84,7 @@ PLANS_MODULE = _import_plans()
 MAX_SESSIONS = int(os.environ.get("SESSION_MAX", "4"))
 WARM_CACHE_MB = max(0, int(os.environ.get("SESSION_WARM_CACHE_MB", "4096")))
 WARM_TTL_SECONDS = max(0, int(os.environ.get("SESSION_WARM_TTL_SECONDS", "900")))
+STATISTICS_CACHE_COLUMNS = max(0, int(os.environ.get("SESSION_STATISTICS_CACHE_COLUMNS", "128")))
 
 # Refuse an open when the device would be left too tight to finish the work.
 # The multiplier covers the parsed frame plus transient intermediates and result copies.
@@ -136,6 +137,9 @@ class Session:
     # The strategy this session is following, if a goal was supplied at open time. Held on
     # the session so progress survives across analyze calls without the model tracking it.
     plan: Any = None
+    # Only scalar quartiles, bounded per session; never retain masks or result frames.
+    # Engine is part of the key so a pandas fallback cannot inherit cuDF quartiles.
+    statistics: Dict[tuple, dict] = field(default_factory=dict)
 
 
 SESSIONS: Dict[str, Session] = {}
@@ -596,12 +600,30 @@ def do_analyze(req: dict) -> dict:
 
     try:
         payload, used, _elapsed, fallback, rows = GA.execute(
-            sess.engine, load_for, op, args
+            sess.engine, load_for, op, args,
+            statistics_for=lambda engine: {
+                column: values for (backend, column), values in sess.statistics.items()
+                if backend == engine.name
+            },
         )
     except Exception as exc:
         return _err(f"{op} failed: {type(exc).__name__}: {exc}")
 
     step_seconds = time.perf_counter() - started
+    # Commit statistics only after a successful operation. The file identity guard
+    # above protects both the frame and these exact statistics on every request.
+    stats = (payload.get("stats", {}) if op == "summary" else
+             payload.get("summary", {}).get("stats", {}) if op == "auto" else
+             payload.get("results", {}) if op == "outliers" else {})
+    if STATISTICS_CACHE_COLUMNS:
+        for column, values in stats.items():
+            if "q1" not in values or "q3" not in values:
+                continue
+            key = (used.name, column)
+            sess.statistics.pop(key, None)
+            sess.statistics[key] = {"q1": values["q1"], "q3": values["q3"]}
+            while len(sess.statistics) > STATISTICS_CACHE_COLUMNS:
+                sess.statistics.pop(next(iter(sess.statistics)))
     sess.steps += 1
     sess.analysis_seconds += step_seconds
 
@@ -628,6 +650,8 @@ def do_analyze(req: dict) -> dict:
             observed={"phase": "session_step", "elapsed_seconds": round(step_seconds, 6),
                       "compute_seconds": payload.get("compute_seconds"),
                       "rows_scanned": rows,
+                      "statistics_reused_columns": payload.get("statistics_reused_columns", []),
+                      "statistics_cache_entries": len(sess.statistics),
                       "reread_for_fallback": reread_for_fallback},
             fallback_reason=fallback,
         ),
