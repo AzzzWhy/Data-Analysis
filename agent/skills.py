@@ -1077,12 +1077,14 @@ def _data_search_roots() -> list:
     Depth matters as much as location. Searching the home directory recursively returned 264
     "datasets", almost all of them irrelevant files inside tool installations, which would bury
     the one 3 GB file the caller wanted. The current directory gets a bounded walk (two levels
-    below it); other roots get one.
+    below it); other roots get one. The home cap outranks the workspace one: launching from
+    `cd ~` makes home the current directory, and handing it the workspace's two-level walk there
+    would reopen exactly the hole that cap exists to close.
     """
     home = os.path.abspath(os.path.expanduser("~"))
     roots = []
     cwd = os.path.abspath(os.getcwd())
-    roots.append((cwd, 2))                          # workspace: two levels below it
+    roots.append((cwd, 0 if cwd == home else 2))   # workspace, unless the workspace is home
     for d in _data_search_dirs():
         if d == cwd:
             continue

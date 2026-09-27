@@ -424,11 +424,59 @@ print("=== discovery depth is a real bound, not a payload truncation ===")
 # "len(files) <= 40" could never fail: list_datasets truncates its payload to 40 regardless of
 # how far it walked. A bound is only proven by a file that sits past it and is not found, so
 # markers are planted at each side of the limit and the untruncated `count` is what is asserted.
-_outside = [p for p in _paths
-            if p.startswith(_home + os.sep)
-            and not p.startswith(os.path.abspath(os.getcwd()) + os.sep)]
-check("discovery does not descend into the home directory", not _outside,
-      f"{len(_outside)} path(s) from a home subdirectory, e.g. {_outside[:1]}")
+_home_marker = [None]
+
+
+def home_descent_found():
+    """Plant one CSV a level below home and report whether discovery reached it.
+
+    Counted by delta rather than by membership: a missing basename proves nothing when the
+    payload is truncated. A file the walk really touches moves the untruncated `count`.
+
+    Exactly one directory below home, not two. "Depth 0" forbids descending at all, so one
+    level is the first place a violation can show; at two levels the file sits past even a
+    depth-2 walk and the check would pass no matter how the bound is set.
+
+    And at least 1 KB: list_datasets drops anything under 1024 bytes as noise, so a two-line
+    fixture is invisible for a reason that has nothing to do with depth and the delta would
+    read 0 -> 0 even with the walk wide open.
+    """
+    before = call_discovery().get("count")
+    stem = os.path.join(_home, f"_homebound_{os.getpid()}")
+    os.makedirs(stem, exist_ok=True)
+    _home_marker[0] = stem
+    with open(os.path.join(stem, "marker_below_home.csv"), "wb") as fh:
+        fh.write(b"a,b\n" + b"1,2\n" * 600)
+    after = call_discovery().get("count")
+    shutil.rmtree(stem, ignore_errors=True)
+    _home_marker[0] = None
+    return after > before, before, after
+
+
+_found, _before, _after = home_descent_found()
+check("discovery does not descend into the home directory", not _found,
+      f"cwd={os.getcwd()} count {_before} -> {_after}")
+
+# Both facts above hold only while the process starts somewhere *other* than home. Launch the
+# workbench or the demo from `cd ~` and home becomes the workspace root -- which is exactly
+# where the bound inverted: _data_search_roots appends the workspace entry at depth 2 and then
+# skips home as "already present", so the one directory that must never be descended gets
+# walked two levels deep, and a 5 GB file sitting in a subfolder is offered to the model.
+_prior_cwd = os.getcwd()
+try:
+    os.chdir(_home)
+    _roots_at_home = skills._data_search_roots()
+    check("home stays at depth 0 when home *is* the current directory",
+          any(os.path.abspath(d) == _home and depth == 0 for d, depth in _roots_at_home)
+          and not any(os.path.abspath(d) == _home and depth > 0 for d, depth in _roots_at_home),
+          f"roots={_roots_at_home}")
+    _found2, _b2, _a2 = home_descent_found()
+    check("and still is not descended when launched from home", not _found2,
+          f"count {_b2} -> {_a2}")
+finally:
+    os.chdir(_prior_cwd)
+    if _home_marker[0]:
+        shutil.rmtree(_home_marker[0], ignore_errors=True)
 
 if not pd:
     skip("depth markers", "pandas unavailable")
