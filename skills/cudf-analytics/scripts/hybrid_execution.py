@@ -44,8 +44,19 @@ def fingerprint():
             packages[package] = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:
             pass
-    return {"host": platform.node(), "arch": platform.machine(),
+    devices = []
+    try:
+        for device in os.scandir("/proc/driver/nvidia/gpus"):
+            with open(os.path.join(device.path, "information"), encoding="utf-8") as source:
+                devices.append([line.strip() for line in source
+                                if line.startswith(("Model:", "GPU UUID:"))])
+    except OSError:
+        pass
+    affinity = sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count()
+    return {"host": platform.node(), "arch": platform.machine(), "devices": sorted(devices),
             "python": platform.python_version(), "packages": packages,
+            "cpu_affinity": affinity, "omp_threads": os.environ.get("OMP_NUM_THREADS"),
+            "arrow_threads_env": os.environ.get("ARROW_NUM_THREADS"),
             "visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES", "default")}
 
 
@@ -83,6 +94,9 @@ def choose(profile_path, path, columns, workflow, context):
     try:
         profile = read_profile(profile_path)
         entry = profile["entries"][signature(path, columns, workflow, context)]
+        if (not isinstance(entry["created"], (int, float)) or isinstance(entry["created"], bool)
+                or not math.isfinite(entry["created"])):
+            raise ValueError("invalid calibration timestamp")
         age = time.time() - entry["created"]
         if age < 0 or age > MAX_AGE_SECONDS or entry.get("verified_equal") is not True:
             raise ValueError("expired or unverified calibration")
@@ -93,7 +107,8 @@ def choose(profile_path, path, columns, workflow, context):
                 raise ValueError("calibration requires 2-20 runs per path")
             for run in runs:
                 for key in ("seconds", "read_seconds", "compute_seconds"):
-                    if not isinstance(run[key], (float, int)) or not math.isfinite(run[key]) or run[key] < 0:
+                    if (not isinstance(run[key], (float, int)) or isinstance(run[key], bool)
+                            or not math.isfinite(run[key]) or run[key] < 0):
                         raise ValueError("non-finite or negative calibration")
                 if run["seconds"] <= 0:
                     raise ValueError("zero wall time")

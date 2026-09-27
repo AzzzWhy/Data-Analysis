@@ -8,6 +8,8 @@ venv/
 # GPU/CPU comparison cache: machine-specific timings, useless in version control
 .gpu_vs_cpu_cache.json
 agent/.gpu_vs_cpu_cache.json
+# Local measured hybrid profiles contain host identities and dataset paths.
+/hybrid-profiles/
 
 # Generated demo datasets (multi-GB CSV). Produce one with:
 #   scripts/memory_ceiling_test.py --rows 20000000 --columns 8
