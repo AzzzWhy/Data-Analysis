@@ -1038,29 +1038,42 @@ def _data_search_dirs() -> list:
 
 
 def _data_search_roots() -> list:
-    """(directory, max_depth) pairs for dataset discovery.
+    """(directory, max_depth) pairs for dataset *listing*.
+
+    Roots and dirs are deliberately not the same list. _data_search_dirs() is what
+    _resolve_data_path uses to turn a dataset name the user typed into a path; that lookup only
+    tests one candidate per directory, so it may include the home directory. Listing is
+    different: a root here is walked, so the home directory is capped at depth 0 -- a dataset
+    placed directly in it stays discoverable (the demo dataset lives there on GB10), but whatever
+    CSV happens to sit in ~/Downloads is not offered to the model as "your data".
 
     Depth matters as much as location. Searching the home directory recursively returned 264
     "datasets", almost all of them irrelevant files inside tool installations, which would bury
-    the one 3 GB file the caller wanted. The current directory is small and worth a full walk;
-    a parent or home directory is not, so those are bounded.
+    the one 3 GB file the caller wanted. The current directory gets a bounded walk (two levels
+    below it); other roots get one.
     """
+    home = os.path.abspath(os.path.expanduser("~"))
     roots = []
     cwd = os.path.abspath(os.getcwd())
-    roots.append((cwd, None))                       # workspace: walk it all
+    roots.append((cwd, 2))                          # workspace: two levels below it
     for d in _data_search_dirs():
-        if d != cwd:
-            roots.append((d, 1))                    # parents and home: top level plus one
+        if d == cwd:
+            continue
+        if d == home:
+            roots.append((d, 0))                    # home: its own files only, never descended
+        else:
+            roots.append((d, 1))                    # parents and /data: top level plus one
     return roots
 
 
 def list_datasets(directory: str = None) -> str:
     """List analysable data files with sizes, so the agent can pick a target.
 
-    With no argument, searches every directory _data_search_dirs() returns rather than only
-    the current one, so discovery finds the dataset the resolver would also find. Pass an
-    explicit directory to look somewhere else. Deliberately not a machine-specific absolute
-    path, so the skill works on any checkout.
+    With no argument, searches the bounded roots from _data_search_roots() rather than only the
+    current one, so discovery finds the dataset the resolver would also find. Pass an explicit
+    directory to look somewhere else. Deliberately not a machine-specific absolute path, so the
+    skill works on any checkout. Note that the listing roots are narrower than the resolver's
+    search dirs on purpose -- see _data_search_roots.
     """
     try:
         exts = {".csv", ".tsv", ".parquet", ".pq", ".jsonl", ".json", ".xlsx", ".xls"}

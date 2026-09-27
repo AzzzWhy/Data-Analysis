@@ -88,6 +88,7 @@ python agent/agent_main.py --ask "分析 /absolute/path/to/sales.csv 的异常�
 - **模型不能调用工具**：换用支持 Chat Completions 工具/函数调用的模型；只出现在列表里不够。
 - **文件找不到**：确认文件在执行 Agent 的机器上，而不是仅在你登录所用的电脑上；检查绝对路径及读取权限。
 - **状态显示 CPU**：小数据或 GPU/依赖不可用时可能正常走 pandas。以执行详情里的实际引擎与路由理由为准。
+- **没给路径时找不到数据文件**：`list_datasets` 只列举受控范围——当前目录及其下两层、上一级目录，以及设置了 `DEMO_DATA_DIR` 时的该目录。主目录只列**直接放在里面的文件**，不会进入它的子目录，所以下载目录里的无关 CSV 不会当成候选数据端给你。放在主目录顶层的数据集仍然能被发现；不在上述范围时请直接给绝对路径。
 - **关闭启动提示后无法分析**：默认没有保存密钥，使用 `/settings` 重新输入，或提供环境变量。F5 设置入口始终保留。
 
 ## English
@@ -154,3 +155,5 @@ python agent/agent_main.py --ask "Find outliers in /absolute/path/to/sales.csv" 
 `--plain` runs the basic terminal. `--language en` / `--language zh` sets the full-screen TUI language; it does not translate all text in the basic terminal. `GPU_ANALYSIS_CONFIG` overrides the config-file path; `XDG_CONFIG_HOME` changes the default config directory.
 
 If model discovery fails, check the URL, key and network, or enter a model ID manually if `/models` is unavailable. If tool calling fails, choose a compatible model. If a file is missing, check its path **on the agent machine** and its read permissions. A CPU status can be correct for small inputs or when GPU dependencies are unavailable. If startup setup was disabled and no key was saved, reopen `/settings` or supply one through the environment.
+
+When a question names no file, the agent looks for candidates with `list_datasets`, which lists the working directory down two levels, its parent one level, and `DEMO_DATA_DIR` when set. The home directory is listed at its top level only -- a dataset sitting directly in it is still found, but `list_datasets` never descends into it, so an unrelated download is not offered as your data. If the file you mean is outside that range, give its absolute path.
