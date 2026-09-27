@@ -30,7 +30,7 @@ The previous sidebar and classic layouts are preserved at commits `c5bd101` and 
 On narrow terminals the layout adapts. `--plain`, non-TTY input and `--ask` retain the original
 CLI behavior. Ctrl+Q waits for any running analysis and memory cleanup before exiting; it does
 not pretend to cancel an in-flight CUDA/API operation.
-Test the interface without API calls: `python agent/tui_test.py` (requires the optional UI dependency).
+Test the interface without API calls: `python agent/tui_test.py`. It needs the optional UI dependency; without it the file prints `SKIP` and exits 0, because a machine that never installed the full-screen layer has nothing to fail. Install it with `pip install -r requirements-tui.txt` to run the assertions.
 
 ## API connection and startup setup
 
@@ -453,14 +453,33 @@ Sub_metering_1         169,105  169,105    OK    ties=1,880,175 (IQR=0)
 
 ### Running the tests yourself
 
+Everything below runs on a machine with no GPU, no cuDF and no API key. The session suites
+generate a small fixture when you do not pass a dataset, so nothing here needs `sales_demo.csv` to
+exist first.
+
 ```bash
-# test suites (the plan layer and tool-schema contract need no GPU)
+# offline suites -- all pass on CPU, device-only assertions report SKIP with a reason
 python agent/tool_contract_test.py
-python skills/cudf-analytics/scripts/plan_test.py
+python agent/group_coverage_test.py
+python agent/session_skill_test.py
+python skills/cudf-analytics/scripts/session_worker_test.py
 python skills/cudf-analytics/scripts/smoke_test.py
-bash   agent/run_criteria_tests.sh                           # 11 judging-criteria cases
-bash   agent/run_stability_check.sh 3 <your-data.csv>        # reproducibility
+python skills/cudf-analytics/scripts/plan_test.py
+python skills/cudf-analytics/scripts/execution_decision_test.py
+python skills/cudf-analytics/scripts/optimization_test.py
+
+# need something this laptop does not have
+python agent/tui_test.py            # optional layer: SKIPs and exits 0 without requirements-tui.txt
+python agent/api_config_test.py     # needs openai from requirements.txt; prints the install command
+bash   agent/run_criteria_tests.sh  # 11 judging-criteria cases; spends API calls
+bash   agent/run_stability_check.sh 3 <your-data.csv>   # reproducibility
 ```
+
+On GB10, add `--require-gpu` to `smoke_test.py`, `session_skill_test.py` and
+`session_worker_test.py`. Without it each SKIPs the assertions that genuinely need a device
+(engine identity, cuDF/pandas parity, `resident_mb`); with it those same assertions fail loudly,
+so a GPU run cannot quietly lose its coverage. Per-suite results and counts are in
+`benchmark/VERIFICATION.md`.
 
 ## The agent application
 

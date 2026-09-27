@@ -21,7 +21,7 @@ python skills/cudf-analytics/scripts/benchmark_cpu_vs_gpu.py --rows 1m 5m 20m --
 | `skills/cudf-analytics/SKILL.md` | The skill: frontmatter (`name` / `description` trigger conditions) + workflow |
 | `skills/cudf-analytics/scripts/gpu_analytics.py` | Core engine: cuDF analysis, pandas fallback, JSON output |
 | `skills/cudf-analytics/scripts/benchmark_cpu_vs_gpu.py` | CPU vs GPU timing, produces the submission tables |
-| `skills/cudf-analytics/scripts/smoke_test.py` | 59 self-checks against independently computed truth |
+| `skills/cudf-analytics/scripts/smoke_test.py` | Core engine self-checks against independently computed truth |
 | `benchmark/` | GB10 results: comparison table, JSON, raw logs |
 | `README.md` | Full guide: usage, output contract, verification, submission notes |
 
@@ -38,8 +38,15 @@ users ask in either language.
 
 ## Status
 
-- Verified on GB10 (cuDF 25.10.00 / pandas 2.3.3): `smoke_test.py` passes all 80 checks, with
-  cuDF and pandas agreeing exactly on mean, median and max.
+- Verified on GB10 (cuDF 25.10.00 / pandas 2.3.3): `smoke_test.py` exits 0 with no `[FAIL]` line,
+  with cuDF and pandas agreeing exactly on mean, median and max. Use `--require-gpu` there to
+  make the cuDF/pandas parity check mandatory rather than an explained skip.
+- The suite's **check count is deliberately not quoted here**. It has drifted twice already --
+  assertions were added and this line was not updated -- and the count also differs by machine,
+  because a CPU-only run skips the parity check. The invariant is exit code 0 and no `[FAIL]`;
+  read the current count with
+  `python skills/cudf-analytics/scripts/smoke_test.py | grep -c '\[PASS\]'`.
+  See `benchmark/VERIFICATION.md` for what each machine actually reported.
 - End-to-end speedup of 6.45× on a 30,000,000-row CSV (5.67 GB): 19.286 s → 2.988 s, with
   zero difference in results between engines. **Note:** only about 3× of this is GPU compute;
   the read stage dominates. See the attribution table in `README.md`.
