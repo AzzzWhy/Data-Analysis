@@ -25,6 +25,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import threading
 
 import pandas as pd
@@ -1244,13 +1245,28 @@ def export_deliverables(file_path: str = None, operation: str = "auto", by: str 
 
         # One subprocess rather than importing: keeps this module dependency-free of the
         # skill's internals and means a failure here cannot corrupt the agent process.
-        proc2 = subprocess.run(
-            [_python_bin(), script, "--input", "/dev/stdin", "--out-dir", target,
-             "--source-file", path]
-            + (["--lang", str(lang)] if lang else [])
-            + (["--lang-context", str(lang_context or _request_text())]
-               if (lang_context or _request_text()) else []),
-            input=proc.stdout, capture_output=True, text=True, timeout=600)
+        #
+        # The analysis JSON goes over as a temp file, not `/dev/stdin`. That path only exists on
+        # POSIX, so on Windows the deliverables tool failed before reaching the generator -- and
+        # the tool is one of the four the agent offers on any platform, so the reviewer's laptop
+        # hit it immediately. A file also avoids the deadlock a large stdin payload can cause if
+        # the child never reads it.
+        fd, analysis_path = tempfile.mkstemp(prefix="deliverables-analysis-", suffix=".json")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                stream.write(proc.stdout)
+            proc2 = subprocess.run(
+                [_python_bin(), script, "--input", analysis_path, "--out-dir", target,
+                 "--source-file", path]
+                + (["--lang", str(lang)] if lang else [])
+                + (["--lang-context", str(lang_context or _request_text())]
+                   if (lang_context or _request_text()) else []),
+                capture_output=True, text=True, timeout=600)
+        finally:
+            try:
+                os.remove(analysis_path)
+            except OSError:
+                pass
         if proc2.returncode != 0:
             detail = (proc2.stderr or "").strip().splitlines()
             return _err(f"could not generate the deliverables: "
