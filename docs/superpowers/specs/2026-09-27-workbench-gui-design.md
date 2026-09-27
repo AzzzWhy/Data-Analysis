@@ -441,11 +441,18 @@ renders, and the language round-trip leaves model prose untouched. No pixel test
 | 8 | i18n boundary | chrome + numbers translated, prose not | translate everything | matches `docs/USAGE.md:41`; translating model output in the frontend would fabricate a translation |
 | 9 | Charts | hand-written SVG / embed the artifact | matplotlib, Chart.js | one renderer, text-diffable, no dependency |
 | 10 | Engine state source | `result_sink` → `execution_decision` | regex on trace text; rev 1's flat-field heuristics | the decision record is the documented stable contract and separates choice from fallback exactly (§6.3) |
+| 11 | Session worker pipe encoding | `encoding="utf-8"` on both ends, `PYTHONIOENCODING` for the child | inherit the locale | the worker answers with `ensure_ascii=False`, so a Chinese analysis goal comes back as multi-byte text; on a GBK-codepage Windows host `readline()` raised `UnicodeDecodeError` and every goal-bearing session failed. Found while building the plan card, and now asserted by `gui_test` spec #4b |
 
 ## 12. Assumptions (confirm or override during spec review)
 
 1. Reference hardware is the documented GB10 (aarch64, driver 580.126.09, 121 GB, cuDF 25.10.00);
-   port `8765` is free. **On a no-GPU box, cross-turn warmth does not happen at all.** An earlier
+   port `8765` is free. **Measured 2026-09-27, that last part is not safe to assume even on the
+   operator's own laptop**: Qoder's Remote-SSH process had already bound `127.0.0.1:8765` (and
+   `[::1]:8765`) for the Spark node tunnel, so two `gui.py` servers were listening on the same
+   port at once and requests went to whichever the stack picked. `serve()` already exits with a
+   readable "cannot bind / try --port" message, and `GUI_PORT`/`--port` is the fix -- but a second
+   listener surviving on the same number means the port must be confirmed, not assumed, before a
+   demo. **On a no-GPU box, cross-turn warmth does not happen at all.** An earlier
    revision of this document claimed "resident reuse still occurs on pandas frames"; that is not
    what the code does. `_retain()` (`gpu_session.py:186-188`) returns `False` unless
    `sess.engine.is_gpu`, and `WARM_CACHE` is only ever inserted there, so a pandas frame never
@@ -504,8 +511,9 @@ what the workbench does instead.
 | :--- | :--- | :--- |
 | `PATCH /api/settings` + test #7 | The first round was explicitly "no LLM wired up", so there was nothing for a settings screen to configure, and it could not be verified | **Built and verified in the second round**, together with test #7. The key is accepted once, never echoed, and changing the endpoint drops the previous provider's credential |
 | `--gui` / `--gui-port` on `agent_main.py` | Reaching `main()` already requires the model SDK, so that entry point could not be exercised without it | **Built and verified in the second round**, once an isolated venv with `openai` made `main()` importable. It is placed before the `not config.ready` gate, so the workbench still boots with no key |
-| Markdown rendering of the model answer | Deferred with the model round; a parser written without a real answer to test it against is a parser waiting to be wrong | The answer is shown as authored plain text, which is faithful if unstyled |
-| Full visual parity with the mockup (drawer, settings modal, i18n chrome keys) | Layout was approved; the vocabulary for plan steps, chip labels and session states does not exist in `ui_i18n.py` yet | The shipped page is plainer but every figure is real |
+| Markdown rendering of the model answer | Deferred with the model round; a parser written without a real answer to test it against is a parser waiting to be wrong | **Built and verified in the third round.** Escape-first renderer mirroring `build_html_report._inline`: adversarial input (`<img src=x onerror=…>`, `<script>`, `javascript:` hrefs) produced zero `script`/`img`/`js-href` nodes in the answer, and a real `step-3.7-flash` answer rendered as paragraphs, a list and `<code>` spans |
+| Full visual parity with the mockup (drawer, settings modal, i18n chrome keys) | Layout was approved; the vocabulary for plan steps, chip labels and session states does not exist in `ui_i18n.py` yet | **Built in the third round**, with one caveat: the palette is copied verbatim from `tui_app.py:43-84`, the drawer, settings modal, plan card and KPI strip work, and `ui_i18n.py` now carries 120 chrome keys shared by terminal and browser. **What is *not* done is a pixel-level comparison against the mockup** -- the in-app browser surface was never visible during verification, so no screenshot could be taken. Structure, content and language behaviour were verified in the live DOM instead, which is not the same claim |
+| Plan card tracks the engine's own plan | Needs the terse/verbose asymmetry of the plan replies to be handled somewhere | **Built and verified in the third round** (`gui_test` spec #4b, plus a live run): the verbose `open` reply supplies the step list, terse `analyze` replies tick steps off by `recorded_step`, out-of-order steps and `off_plan_step` rows render as the engine recorded them, and reopening a resident file now replays the plan it is part way through |
 | GB10-only acceptance: cuDF chip, `retained`, `warm_cache`, ~0.06 s/step | Needs the node | Rendered as explicitly unobservable rather than substituted |
 | `run_criteria_tests.sh` 11/11 | Spends API calls; no key on the verification machine | **Run and passing 11/11** in the second round against `step-3.7-flash` over a real 200,000-row CSV, asserted on the tool-call trace. Note it needs `PYTHONIOENCODING=utf-8` on a Windows console with a GBK code page, where `rich` cannot encode its status glyphs and every case dies on the way out |
 

@@ -67,6 +67,32 @@ STRINGS = {
     'API 地址的端口无效': 'Invalid port in the API URL.',
     '[model call failed] 尚未配置 API 地址、密钥与模型。请输入 /settings 打开连接设置。':
         '[model call failed] API URL, key and model are not configured. Use /settings.',
+
+    # Browser workbench chrome. Kept here rather than in app.js so the terminal and the browser
+    # translate from one table; two vocabularies is how they drift apart. These label the
+    # interface only -- model prose and raw engine values are never rewritten through this table.
+    '数据文件': 'Data files', '会话': 'Session', '状态': 'Status', '会话数': 'Sessions',
+    '步数': 'Steps', '占用': 'Held', '保留帧': 'Warm frames', '释放会话': 'Release session',
+    '计划': 'Plan', '类型': 'Kind', '进度': 'Progress',
+    '未设定分析目标，因此没有计划': 'No goal was set, so there is no plan.',
+    '计划外步骤': 'off-plan step',
+    '提问': 'Ask', '发送': 'Send', '直接工具调用': 'Direct tool call',
+    '工具': 'Tool', '会话操作': 'Session operation', '分析操作': 'Operation',
+    '分组列': 'Group by', '聚合': 'Aggregate', '输出': 'Output', '结果': 'Result',
+    '设置': 'Settings', '连接设置': 'Connection settings', 'API 地址': 'API base URL',
+    '模型': 'Model', 'API 密钥': 'API key', '取消': 'Cancel', '保存': 'Save',
+    '执行详情': 'Execution details', '收起': 'hide', '展开': 'show',
+    '扫描行数': 'Rows scanned', '引擎': 'Engine', '本次耗时': 'This run',
+    '纯计算': 'Compute only', '离群点': 'Outliers', '跨轮复用': 'Resident reuse',
+    '分组数': 'Groups', '驻留内存': 'Resident', '打开报告': 'Open report',
+    '未选择数据文件': 'No dataset selected', '运行失败': 'Run failed',
+    'active（会话打开中）': 'active (session open)', 'cold / released': 'cold / released',
+    'worker 未响应': 'worker not responding',
+    '目标（可选，仅 open 用）': 'Goal (optional, open only)',
+    '例如：找出 revenue 离群点的成因': 'e.g. find the cause of the revenue outliers',
+    '本机不可观测（需 cuDF）': 'Not observable here (needs cuDF)',
+    '暂无产物': 'No artifacts yet', '暂无结果表': 'No result tables yet',
+    '留空表示不修改': 'Leave empty to keep unchanged',
 }
 
 ZH_SPECIAL = {

@@ -57,6 +57,22 @@ except Exception as _exc:  # pragma: no cover - depends on the operator's enviro
     save_config = None
     AGENT_IMPORT_ERROR = f"{type(_exc).__name__}: {_exc}"
 
+# Chrome vocabulary. Imported from the same module the TUI uses so both frontends translate from
+# one table. It is UI labels only: model prose and engine values never pass through it.
+try:
+    import ui_i18n
+except Exception:  # pragma: no cover - the table has no third-party dependencies
+    ui_i18n = None
+
+
+def chrome(language: str) -> dict:
+    """The label table for one language. Chinese is the source, so it maps to itself."""
+    if ui_i18n is None:
+        return {}
+    if language == "en":
+        return {zh: ui_i18n.tr("en", zh) for zh in ui_i18n.STRINGS}
+    return {zh: zh for zh in ui_i18n.STRINGS}
+
 GUI_DIR = HERE / "gui"
 DEFAULT_PORT = 8765
 EVENT_BUFFER = 200          # a reload re-attaches and replays; it is not a run log
@@ -376,6 +392,7 @@ class Workbench:
             # the key itself is never part of this payload.
             "base_url": self.base_url,
             "language": self.language,
+            "i18n": chrome(self.language),
             "model_error": self.last_error,
             "busy": self.busy,
             "session": {**doc, "reused": decision_is_warm(self.last_decision)},

@@ -9,8 +9,13 @@ needed to reach a code path, `_stub_openai_module()` installs a double at the *S
 clearly named, never used to fake an answer the UI shows. The distinction is the whole point of
 the previous attempt at this screen, which had no backend at all.
 
-Spec §10 case #7 (`/api/settings` must not echo the key) is not here because that endpoint is not
-built yet; it belongs to the round that wires up a real model client.
+Spec §10 case #7 (`/api/settings` must not echo the key) runs below against the real config file:
+the key is accepted once, never returned, rejected outright in a query string, and reaches disk
+only when `remember_key` is set.
+
+Nothing here covers the browser-side Markdown renderer in `gui/app.js`; Python cannot execute it.
+It needs a DOM probe against a running server, which is how the paragraph loop was found to spin
+forever on any line containing a `|` that does not start a table.
 """
 import json
 import os
@@ -214,6 +219,66 @@ def main() -> int:
     check("release did not use the retaining verb",
           released.get("closed", 0) >= 1, str(released))
     _ = sid
+
+    print("=== spec #4b: the plan contract the plan card is built on ===")
+    # The card keeps the step list it got at open time and ticks steps off from the terse
+    # analyze replies. If the engine ever changes which reply carries `steps`, the card silently
+    # stops updating, so the asymmetry is asserted here rather than discovered in a demo.
+    code, started = request("/api/run", {"tool": "dataset_session", "args": {
+        "operation": "open", "file_path": data, "force_cpu": True,
+        "goal": "检查数据质量，有没有缺失值"}})
+    check("a goal-bearing open was accepted", code == 202, json.dumps(started))
+    opened = dict(events(started["job_id"]))["tool_result"]["result"]
+    sid_open = opened.get("session_id")
+    plan_open = opened.get("plan") or {}
+    check("open replies with the whole step list",
+          isinstance(plan_open.get("steps"), list) and len(plan_open["steps"]) >= 2,
+          json.dumps({k: plan_open.get(k) for k in ("kind", "total_steps", "completed")}))
+    # The goal travels as text through the worker pipe and decides the plan kind by matching
+    # Chinese trigger words. A mangled round trip used to fail here as a decode error; now it
+    # would silently pick the default plan, so the exact string is what is asserted.
+    check("the goal survived the worker pipe intact",
+          plan_open.get("goal") == "检查数据质量，有没有缺失值"
+          and plan_open.get("kind") == "data_quality",
+          json.dumps({k: plan_open.get(k) for k in ("goal", "kind")}, ensure_ascii=False))
+    check("every step carries what the card renders",
+          all({"step", "op", "reason", "done"} <= set(s) for s in plan_open["steps"]),
+          json.dumps(plan_open["steps"][:1]))
+    check("the engine states the next instruction in its own words",
+          bool(plan_open.get("do_next")) and "analyze" in plan_open["do_next"],
+          plan_open.get("do_next", ""))
+    first_op = plan_open["steps"][0]["op"]
+    code, started = request("/api/run", {"tool": "dataset_session", "args": {
+        "operation": "analyze", "op": first_op, "session_id": sid_open}})
+    check("analyze accepted", code == 202, json.dumps(started))
+    an = dict(events(started["job_id"]))["tool_result"]["result"]
+    plan_run = an.get("plan") or {}
+    check("the analyze reply advanced the plan",
+          plan_run.get("completed", 0) >= 1 and isinstance(plan_run.get("recorded_step"), int),
+          json.dumps({k: plan_run.get(k) for k in
+                      ("completed", "total_steps", "recorded_step", "next_step")}))
+    check("and it stays terse, which is why the card caches the open reply",
+          "steps" not in plan_run, json.dumps(sorted(plan_run)))
+    # Re-opening a file that is already resident must still report the plan the session is
+    # following. It used to answer with none, so a page reload plus one reopen left the card --
+    # and the model -- staring at a session with no plan at all.
+    code, started = request("/api/run", {"tool": "dataset_session", "args": {
+        "operation": "open", "file_path": data, "force_cpu": True,
+        "goal": "检查数据质量，有没有缺失值"}})
+    check("reopen accepted", code == 202, json.dumps(started))
+    again = dict(events(started["job_id"]))["tool_result"]["result"]
+    check("the reopen reused the resident frame instead of loading twice",
+          again.get("reused_existing_session") is True, json.dumps({
+              k: again.get(k) for k in ("reused_existing_session", "session_id", "rows")}))
+    check("and it carried the plan that session is already part way through",
+          (again.get("plan") or {}).get("completed") == 1
+          and isinstance((again.get("plan") or {}).get("steps"), list),
+          json.dumps({k: (again.get("plan") or {}).get(k)
+                      for k in ("completed", "total_steps", "kind")}))
+    request("/api/run", {"tool": "dataset_session",
+                         "args": {"operation": "close", "session_id": an.get("session_id")
+                                  or sid_open or "all"}})
+    wait_idle()
 
     print("=== spec #5: the card repeats the worker instead of keeping its own books ===")
     doc = wb.session_doc({"count": 1, "warm_cache_count": 2, "warm_cache_mb": 37.5,

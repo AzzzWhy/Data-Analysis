@@ -21,9 +21,11 @@ const els = {
   files: $("files"), card: $("sess-card"), state: $("sess-state"), count: $("sess-count"),
   steps: $("sess-steps"), mb: $("sess-mb"), frames: $("sess-frames"), hint: $("sess-hint"),
   release: $("release"), run: $("run"), log: $("log"), answer: $("answer"),
-  charts: $("charts"), tables: $("tables"), phase: $("phase"), chip: $("chip"),
-  elapsed: $("elapsed"), tool: $("tool"), sessionOp: $("session-op"), op: $("op"),
-  by: $("by"), agg: $("agg"), forceCpu: $("force-cpu"), forceGpu: $("force-gpu"),
+  charts: $("charts"), tables: $("tables"), kpis: $("kpis"), phase: $("phase"),
+  chip: $("chip"), elapsed: $("elapsed"), tool: $("tool"), sessionOp: $("session-op"),
+  op: $("op"),
+  by: $("by"), agg: $("agg"), goal: $("goal"),
+  forceCpu: $("force-cpu"), forceGpu: $("force-gpu"),
   prompt: $("prompt"), ask: $("ask"), askHint: $("ask-hint"),
 };
 
@@ -31,6 +33,7 @@ let selected = null;      // absolute path of the chosen dataset
 let session = null;       // last session_id we opened, so "analyze" can reuse it
 let stream = null;        // active EventSource
 let canAsk = false;       // whether /api/state says a configured client exists
+let logVisible = true;    // the execution drawer
 
 /* ---------------------------------------------------------------- text helpers */
 
@@ -56,6 +59,120 @@ function cell(row, value, numeric) {
   return td;
 }
 
+/* ------------------------------------------------------------------- chrome i18n */
+
+let I18N = {};
+let LANG = "zh";
+
+/* Labels only. Model prose and engine values never pass through this table -- translating a
+   model's answer in the frontend would be fabricating a translation it did not produce. */
+function t(key) {
+  return (LANG === "en" && I18N[key]) ? I18N[key] : key;
+}
+
+function applyChrome() {
+  document.querySelectorAll(".lt, h1, h2, button, .row .k, .kpi .l").forEach((node) => {
+    // Guard, not paranoia: assigning textContent destroys child elements. A label that wraps a
+    // select used to be rewritten here and the control vanished with it, which silently broke
+    // the tool form. Only leaf nodes are ever translated.
+    if (node.children.length) return;
+    if (node.dataset.label === undefined) node.dataset.label = node.textContent.trim();
+    const translated = t(node.dataset.label);
+    if (translated !== node.textContent) node.textContent = translated;
+  });
+  document.documentElement.lang = LANG === "en" ? "en" : "zh";
+  $("lang").textContent = LANG === "zh" ? "中文" : "English";
+  $("prompt").placeholder = LANG === "en"
+    ? "e.g. Compare total and average revenue by region" : "例如：按地区统计 revenue 的总和与均值";
+  $("goal").placeholder = t("例如：找出 revenue 离群点的成因");
+  $("drawer-toggle").textContent = t("执行详情") + " · "
+    + (logVisible ? t("收起") : t("展开"));
+  // Plan rows are built once per reply, so the chrome sweep above never reaches them; redraw
+  // them from the cached list rather than replaying the reply, which would double the off-plan
+  // rows.
+  renderPlanRows();
+}
+
+/* ------------------------------------------------------------- markdown (escape first) */
+
+const HTML_ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" };
+const escapeHtml = (value) => String(value).replace(/[&<>"]/g, (c) => HTML_ESCAPES[c]);
+
+/*
+ * Mirrors build_html_report._inline: escape the whole string FIRST, then substitute the inline
+ * constructs. The order is the entire safety property. Substituting first would let text from the
+ * model open a tag, and innerHTML would then honour an onerror= attribute in it. After escaping,
+ * no angle bracket can survive to become a tag, so every tag below is one this file created.
+ */
+function inlineMarkdown(value) {
+  let out = escapeHtml(value);
+  out = out.replace(/`([^`]+)`/g, "<code>$1</code>");
+  out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  out = out.replace(/(^|[^*\w])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+  return out;
+}
+
+const splitRow = (line) => line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+const isTableRule = (line) => /^\s*\|?[\s:|-]*\|[\s:|-]+[-|:\s]*$/.test(line) && line.includes("-");
+
+function renderMarkdown(container, source) {
+  container.textContent = "";
+  const lines = String(source || "").split("\n");
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.trim()) { i++; continue; }
+
+    if (line.includes("|") && i + 1 < lines.length && isTableRule(lines[i + 1])) {
+      const table = container.appendChild(document.createElement("table"));
+      const head = table.createTHead().insertRow();
+      splitRow(line).forEach((h) => {
+        head.appendChild(document.createElement("th")).innerHTML = inlineMarkdown(h);
+      });
+      i += 2;
+      while (i < lines.length && lines[i].includes("|")) {
+        const row = table.insertRow();
+        splitRow(lines[i]).forEach((c) => {
+          row.appendChild(document.createElement("td")).innerHTML = inlineMarkdown(c);
+        });
+        i++;
+      }
+      continue;
+    }
+
+    const heading = /^(#{1,3})\s+(.*)$/.exec(line);
+    if (heading) {
+      container.appendChild(document.createElement("h" + (heading[1].length + 2)))
+        .innerHTML = inlineMarkdown(heading[2]);
+      i++;
+      continue;
+    }
+
+    if (/^\s*[-*]\s+/.test(line)) {
+      const list = container.appendChild(document.createElement("ul"));
+      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
+        list.appendChild(document.createElement("li"))
+          .innerHTML = inlineMarkdown(lines[i].replace(/^\s*[-*]\s+/, ""));
+        i++;
+      }
+      continue;
+    }
+
+    const paragraph = [];
+    // A pipe only ends the paragraph when that line actually starts a table. Excluding every
+    // pipe-bearing line wedged the loop: nothing else advanced i, so prose such as
+    // "engine=cudf | rows=2075259" emitted empty paragraphs forever.
+    while (i < lines.length && lines[i].trim()
+           && !(lines[i].includes("|") && i + 1 < lines.length && isTableRule(lines[i + 1]))
+           && !/^\s*[-*]\s+/.test(lines[i]) && !/^#{1,3}\s/.test(lines[i])) {
+      paragraph.push(lines[i]);
+      i++;
+    }
+    container.appendChild(document.createElement("p"))
+      .innerHTML = inlineMarkdown(paragraph.join("\n"));
+  }
+}
+
 /* -------------------------------------------------------------------- chrome */
 
 function setChip(chip) {
@@ -65,8 +182,12 @@ function setChip(chip) {
 }
 
 function renderState(state) {
-  els.model.textContent = state.model || "未配置";
+  I18N = state.i18n || {};
+  LANG = state.language === "en" ? "en" : "zh";
+  applyChrome();
+  els.model.textContent = state.model || t("未配置模型");
   els.host.textContent = location.host;
+  if (!selected) els.file.textContent = t("未选择数据文件");
 
   const notes = [];
   if (!state.agent_available) {
@@ -112,8 +233,11 @@ function renderSession(doc) {
   const wedged = Boolean(doc.error);
   const active = (doc.sessions_detail || [])[0] || null;
   els.card.dataset.state = wedged ? "unknown" : (active ? "active" : "released");
-  els.state.textContent = wedged ? "worker 未响应"
-    : (active ? "active（会话打开中）" : (doc.sessions ? "active" : "cold / released"));
+  // Status text goes through the chrome table like every other label; the worker's own words
+  // are quoted verbatim elsewhere and are never translated.
+  els.state.textContent = wedged ? t("worker 未响应")
+    : (active ? t("active（会话打开中）")
+      : (doc.sessions ? t("active（会话打开中）") : t("cold / released")));
   els.count.textContent = doc.sessions === null ? "未知" : doc.sessions;
   els.steps.textContent = active ? active.steps : "—";
   els.mb.textContent = active
@@ -126,6 +250,143 @@ function renderSession(doc) {
 }
 
 /* ------------------------------------------------------------------- results */
+
+/* KPI tiles are built from fields the engine actually emitted. A field that is not there produces
+   no tile -- the strip gets shorter, it never fills a gap with a plausible zero. */
+function renderKpis(result) {
+  const decision = result.execution_decision || {};
+  const observed = decision.observed || {};
+  const inner = result.result || {};
+  const tiles = [];
+  const add = (label, value, unit) => {
+    if (value === null || value === undefined || value === "") return;
+    tiles.push([label, value, unit || ""]);
+  };
+
+  add("扫描行数", typeof result.rows_scanned === "number"
+    ? result.rows_scanned.toLocaleString() : result.rows_scanned);
+  add("引擎", result.engine || observed.actual_backend);
+  if (typeof result.seconds === "number") add("本次耗时", result.seconds.toFixed(2), "s");
+  if (typeof observed.compute_seconds === "number"
+      && observed.compute_seconds !== result.seconds) {
+    add("纯计算", observed.compute_seconds.toFixed(3), "s");
+  }
+  if (inner.groupby && inner.groupby.groups !== undefined) {
+    add("分组数", inner.groupby.groups);
+  }
+  if (inner.outliers && inner.outliers.results) {
+    const total = Object.values(inner.outliers.results)
+      .reduce((sum, entry) => sum + (entry && entry.outlier_count || 0), 0);
+    if (total) add("离群点", total.toLocaleString());
+  }
+  if (result.steps_this_session !== undefined) add("步数", result.steps_this_session);
+  if (typeof result.resident_mb === "number" && result.resident_mb > 0) {
+    add("驻留内存", result.resident_mb, "MB");
+  }
+  const workflow = result.workflow_comparison || {};
+  if (typeof workflow.speedup_x === "number") add("跨轮复用", workflow.speedup_x + "×");
+
+  const strip = els.kpis;
+  strip.textContent = "";
+  tiles.forEach(([label, value, unit]) => {
+    const box = document.createElement("div");
+    box.className = "kpi";
+    const l = document.createElement("div");
+    l.className = "l";
+    // Store the untranslated key and let applyChrome() localise it. Baking the translation in
+    // here meant a language flip left every tile in the previous language until the next run.
+    l.dataset.label = label;
+    l.textContent = label;
+    const v = document.createElement("div");
+    v.className = "v";
+    v.textContent = String(value);
+    if (unit) {
+      const u = document.createElement("span");
+      u.className = "u";
+      u.textContent = " " + unit;
+      v.appendChild(u);
+    }
+    box.appendChild(l);
+    box.appendChild(v);
+    strip.appendChild(box);
+  });
+}
+
+let planSteps = [];   // last step list the engine actually sent, see renderPlan
+let lastPlan = null;  // the plan object those steps belong to, kept so a language flip can redraw
+
+function clearPlanCard() {
+  planSteps = [];
+  lastPlan = null;
+  $("plan-kind").textContent = "—";
+  $("plan-progress").textContent = "—";
+  $("plan-steps").textContent = "";
+  $("plan-next").textContent = "";
+}
+
+function renderPlan(plan) {
+  if (!plan) return;
+  if (Array.isArray(plan.steps)) {
+    // `open` replies are verbose and carry the whole list.
+    planSteps = plan.steps.map((s) => Object.assign({}, s));
+  } else if (Number.isInteger(plan.recorded_step) && planSteps[plan.recorded_step]) {
+    // Analyze replies are terse -- the same dict is sent to the model every turn, so it drops
+    // the step list and keeps only the index it just ticked off. Seconds are deliberately not
+    // filled in here: the reply reports the whole round's duration, not that step's.
+    planSteps[plan.recorded_step].done = true;
+  }
+  if (plan.off_plan_step && plan.off_plan_step.op) {
+    planSteps.push({ op: plan.off_plan_step.op, note: plan.off_plan_note || "",
+                     off_plan: true, done: true });
+  }
+  lastPlan = plan;
+  $("plan-kind").textContent = plan.kind || "—";
+  $("plan-progress").textContent = `${plan.completed ?? "—"} / ${plan.total_steps ?? "—"}`;
+  renderPlanRows();
+  // `do_next` is the engine's own instruction, including the columns it read out of the data.
+  $("plan-next").textContent = plan.do_next || "";
+}
+
+/* Separate from renderPlan because redrawing must not re-apply the reply: calling renderPlan
+   again would push the off-plan row a second time. */
+function renderPlanRows() {
+  const plan = lastPlan;
+  if (!plan) return;
+  const list = $("plan-steps");
+  list.textContent = "";
+  planSteps.forEach((step) => {
+    const li = document.createElement("li");
+    li.dataset.done = String(Boolean(step.done));
+    li.dataset.offplan = String(Boolean(step.off_plan));
+    li.dataset.current = String(!step.off_plan && plan.next_step === step.step);
+    const dot = document.createElement("span");
+    dot.className = "dot";
+    dot.textContent = step.off_plan ? "•" : (step.done ? "✓" : (plan.next_step === step.step ? "▶" : "○"));
+    const label = document.createElement("span");
+    // A planned step's reason is the catalog's own sentence and is shown as written. An off-plan
+    // one has no reason -- the engine instead explains its recording policy, which belongs in the
+    // tooltip rather than taking three lines of the card.
+    label.textContent = step.off_plan
+      ? step.op + " — " + t("计划外步骤")
+      : step.op + (step.reason ? " — " + step.reason : "");
+    label.title = step.off_plan ? (step.note || "") : (step.reason || "");
+    li.appendChild(dot);
+    li.appendChild(label);
+    if (typeof step.seconds === "number") {
+      const sec = document.createElement("span");
+      sec.className = "sec";
+      sec.textContent = step.seconds.toFixed(2) + "s";
+      li.appendChild(sec);
+    }
+    list.appendChild(li);
+  });
+  if (!planSteps.length) {
+    const li = document.createElement("li");
+    li.dataset.done = "none";
+    li.textContent = t("未设定分析目标，因此没有计划");
+    list.appendChild(li);
+  }
+}
 
 function renderToolResult(payload) {
   const result = payload.result || {};
@@ -152,13 +413,10 @@ function renderToolResult(payload) {
   line(els.log, "ok", `   OK engine=${engine} rows=${result.rows_scanned ?? "?"} ` +
        `${result.seconds ?? payload.seconds ?? "?"}s`);
   if (chip && chip.note) line(els.log, "reason", `   ${chip.label}: ${chip.note}`);
+  renderKpis(result);
   if (result.plan) renderPlan(result.plan);
   renderArtifacts(result);
   renderTables(result);
-}
-
-function renderPlan(plan) {
-  line(els.log, "dim", `   plan ${plan.kind} step ${plan.next_step}/${plan.total_steps}`);
 }
 
 function renderArtifacts(result) {
@@ -256,6 +514,9 @@ function buildArgs() {
     } else if (operation === "open") {
       args.force_cpu = els.forceCpu.checked;
       args.force_gpu = els.forceGpu.checked;
+      // The plan is generated from the goal at open time. Without a goal there is no plan, so
+      // the card stays empty rather than inventing steps to look impressive.
+      if (els.goal.value.trim()) args.goal = els.goal.value.trim();
     }
   }
   return args;
@@ -263,10 +524,16 @@ function buildArgs() {
 
 function trackSession(payload) {
   const result = payload.result || {};
-  if (result.session_id) session = result.session_id;
+  if (result.session_id) {
+    session = result.session_id;
+    // A fresh session with no goal has no plan. Leaving the previous one on screen would show
+    // steps this session never had.
+    if (!result.plan) clearPlanCard();
+  }
   if ((els.tool.value === "dataset_session" && els.sessionOp.value === "close")
       || result.closed !== undefined) {
     session = null;
+    clearPlanCard();
   }
 }
 
@@ -298,10 +565,7 @@ function attach(jobId) {
   stream.addEventListener("answer", (e) => {
     const body = JSON.parse(e.data);
     els.answer.hidden = false;
-    // Plain text, deliberately. The report generator has an escape-first Markdown renderer and
-    // the browser copy will mirror it; until then a model answer is shown exactly as authored
-    // rather than half-parsed.
-    els.answer.textContent = body.text;
+    renderMarkdown(els.answer, body.text);
   });
   stream.addEventListener("session", (e) => renderSession(JSON.parse(e.data)));
   stream.addEventListener("error", (e) => {
@@ -400,6 +664,34 @@ els.tool.addEventListener("change", () => {
 });
 $("runner").addEventListener("submit", (event) => { event.preventDefault(); run(); });
 $("asker").addEventListener("submit", (event) => { event.preventDefault(); ask(); });
+
+$("drawer-toggle").addEventListener("click", () => {
+  logVisible = !logVisible;
+  $("log").hidden = !logVisible;
+  $("drawer-toggle").setAttribute("aria-expanded", String(logVisible));
+  applyChrome();
+});
+
+/* Language flips the chrome only and re-renders the panels from the same payloads. Model prose is
+   never re-translated: it stays exactly as the model wrote it, in whatever language that was. */
+$("lang").addEventListener("click", async () => {
+  const next = LANG === "zh" ? "en" : "zh";
+  const { data } = await post("/api/settings", { language: next }, "PATCH");
+  if (data && data.ok === false) {
+    line(els.log, "bad", `!! ${data.error}`);
+    return;
+  }
+  await refreshState();
+  // No re-render needed: every chrome label carries its untranslated key, so applyChrome()
+  // inside refreshState() relabels tiles that were rendered before the flip as well.
+});
+
+addEventListener("keydown", (event) => {
+  if (event.ctrlKey && event.key.toLowerCase() === "l") {
+    event.preventDefault();
+    $("drawer-toggle").click();
+  }
+});
 
 /* Settings. The key field starts empty and stays empty after saving: the server never returns
    a credential, so there is nothing to prefill, and an input that cannot show what is stored is
