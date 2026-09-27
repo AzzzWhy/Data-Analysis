@@ -13,7 +13,11 @@ import pandas as pd
 import gpu_analytics as ga
 import gpu_session as gs
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "agent"))
+agent_dirs = [parent / "agent" for parent in Path(__file__).resolve().parents]
+agent_dir = next((path for path in agent_dirs if (path / "skills.py").is_file()), None)
+if agent_dir is None:
+    raise RuntimeError("agent/skills.py not found above the test script")
+sys.path.insert(0, str(agent_dir))
 import skills as agent_skills  # noqa: E402
 
 
