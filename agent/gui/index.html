@@ -16,6 +16,7 @@
   </div>
   <div class="context">
     <span id="ctx-model">—</span> · <span id="ctx-host">—</span> · <span id="ctx-file">未选择文件</span>
+    <button id="open-settings" class="ghost inline">设置</button>
   </div>
 </header>
 
@@ -108,6 +109,23 @@
   <span id="chip" class="chip muted">no result yet</span>
   <span id="elapsed">—</span>
 </footer>
+
+<div id="veil" class="veil">
+  <form id="settings" class="modal">
+    <h2>连接设置</h2>
+    <label>API 地址 <input id="set-url" type="text" placeholder="https://api.example.com/v1" autocomplete="off"></label>
+    <label>模型 <input id="set-model" type="text" placeholder="模型 ID" autocomplete="off"></label>
+    <label>API 密钥 <input id="set-key" type="password" autocomplete="new-password"
+                          placeholder="留空表示不修改"></label>
+    <label class="check"><input id="set-remember" type="checkbox"> 把密钥保存到本机明文文件</label>
+    <p class="hint">保存的密钥不会回显到浏览器。换 API 地址会清掉上一个服务商的密钥与模型。</p>
+    <p class="hint" id="set-msg"></p>
+    <div class="modal-actions">
+      <button type="button" id="cancel" class="ghost">取消</button>
+      <button type="submit">保存</button>
+    </div>
+  </form>
+</div>
 
 <script src="/app.js"></script>
 </body>

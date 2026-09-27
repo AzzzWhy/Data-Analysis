@@ -513,9 +513,15 @@ Ports panel, which is the shorter path when you are already editing on the node.
 There is no address to visit without one of those two. `8765` is not among the gateway's public
 mappings, and adding it would expose an unauthenticated file reader to the internet.
 
-`agent/agent_main.py --gui` is not wired up yet: reaching `main()` there already requires the
-model SDK, so that entry point belongs to the round that installs it. `agent/gui.py` runs the
-same server on its own today.
+`python agent/agent_main.py --gui` starts the same server from the agent's own entry point. It is
+chosen before the "configure me first" check, so the workbench comes up with no key and says which
+half is unavailable; it refuses to combine with `--ask` or piped input, because those are scripted
+runs and a server nobody asked to stop is a hung process.
+
+The header **设置** button edits the API address, model and key through the same `api_config`
+loader the terminal uses. The key is accepted once and never returned: the response reports
+whether one is stored, changing the endpoint drops the previous provider's credential, and a key
+sent in a query string is refused outright.
 
 It binds `127.0.0.1` and refuses any other interface without `GPU_GUI_ALLOW_REMOTE=1`, because it
 has no authentication and the Spark node's 8888/9000 are public ports. Tunnel instead.

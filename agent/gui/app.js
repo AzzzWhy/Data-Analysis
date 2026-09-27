@@ -131,7 +131,12 @@ function renderToolResult(payload) {
   const result = payload.result || {};
   const chip = payload.chip;
   els.elapsed.textContent = (payload.seconds !== undefined ? payload.seconds.toFixed(2) : "?") + "s";
-  line(els.log, "tool", `-> ${payload.name}(${JSON.stringify(payload.args || {})})`);
+  // Direct runs carry their own args here; model-driven runs already printed the call in the
+  // trace line, so re-printing it with an empty argument object would be a duplicate that
+  // looks like the model called the tool with nothing.
+  if (payload.args && Object.keys(payload.args).length) {
+    line(els.log, "tool", `-> ${payload.name}(${JSON.stringify(payload.args)})`);
+  }
   if (result.success === false) {
     // "no result yet" would claim the run is still pending when it actually failed. The engine
     // made no statement about hardware here, so the chip says the one true thing instead.
@@ -313,9 +318,9 @@ function attach(jobId) {
   });
 }
 
-async function post(path, body) {
+async function post(path, body, method) {
   const response = await fetch(path, {
-    method: "POST",
+    method: method || "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body || {}),
   });
@@ -395,6 +400,49 @@ els.tool.addEventListener("change", () => {
 });
 $("runner").addEventListener("submit", (event) => { event.preventDefault(); run(); });
 $("asker").addEventListener("submit", (event) => { event.preventDefault(); ask(); });
+
+/* Settings. The key field starts empty and stays empty after saving: the server never returns
+   a credential, so there is nothing to prefill, and an input that cannot show what is stored is
+   better than one that pretends to. */
+const veil = $("veil");
+$("open-settings").addEventListener("click", () => {
+  $("set-msg").textContent = "";
+  $("set-key").value = "";
+  veil.classList.add("open");
+});
+$("cancel").addEventListener("click", () => veil.classList.remove("open"));
+addEventListener("keydown", (event) => { if (event.key === "Escape") veil.classList.remove("open"); });
+
+$("settings").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const patch = {
+    base_url: $("set-url").value.trim(),
+    model: $("set-model").value.trim(),
+    remember_key: $("set-remember").checked,
+  };
+  const key = $("set-key").value.trim();
+  if (key) patch.api_key = key;
+  const { status, data } = await post("/api/settings", patch, "PATCH");
+  if (status >= 400 || data.ok === false) {
+    $("set-msg").textContent = "未保存：" + (data.error || data.message || status);
+    return;
+  }
+  $("set-msg").textContent = data.warning
+    ? "已保存。" + data.warning
+    : (data.config_ready ? "已保存，提问框已可用。" : "已保存，但还不足以启用提问框。");
+  $("set-key").value = "";
+  await refreshState();
+});
+
+async function refreshState() {
+  const state = await fetch("/api/state").then((r) => r.json()).catch(() => null);
+  if (state) {
+    renderState(state);
+    $("set-url").value = state.base_url || "";
+    $("set-model").value = state.model || "";
+  }
+  return state;
+}
 els.release.addEventListener("click", async () => {
   const { data } = await post("/api/session/release");
   session = null;

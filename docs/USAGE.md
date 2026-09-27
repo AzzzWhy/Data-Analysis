@@ -31,7 +31,9 @@ python agent/gui.py --port 8765
 ssh -p <节点SSH端口> -L 8765:127.0.0.1:8765 Developer@<跳板机地址>
 ```
 
-`agent/agent_main.py --gui` 尚未接入：走到那里的 `main()` 本身就需要模型 SDK，因此该入口与接入它的那一轮一起做。目前 `agent/gui.py` 独立提供同一个服务。
+`python agent/agent_main.py --gui` 启动同一个服务，走 Agent 自己的入口。它在"请先配置"那道检查之前就被选中，所以没有密钥时界面照样起来，并明确告出哪一半不可用；`--gui` 拒绝与 `--ask` 或管道输入同时使用，因为那是脚本化运行，一个没人要求停的服务器只会变成挂住的进程。
+
+顶部的 **设置** 按钮通过终端同一个 `api_config` 加载器修改 API 地址、模型与密钥。密钥只接受一次、永不回显：响应只告诉你有没有存过；换地址会清掉上一个服务商的密钥与模型；密钥出现在查询串里会被直接拒绝。
 
 服务只绑 `127.0.0.1`。不设 `GPU_GUI_ALLOW_REMOTE=1` 时它拒绝绑定其他网卡，因为这个界面没有鉴权，而节点上 8888/9000 是公网可达端口——请用上面的隧道方式。
 
@@ -138,7 +140,9 @@ python agent/gui.py --port 8765
 ssh -p <node-ssh-port> -L 8765:127.0.0.1:8765 Developer@<jump-host>
 ```
 
-`agent/agent_main.py --gui` is not wired up yet: reaching `main()` there already requires the model SDK, so that entry point lands with the round that installs it. `agent/gui.py` serves the same thing on its own today.
+`python agent/agent_main.py --gui` starts the same server from the agent's own entry point. It is chosen before the "configure me first" check, so the workbench comes up with no key and states which half is unavailable; it refuses to combine with `--ask` or piped input, because those are scripted runs and a server nobody asked to stop is a hung process.
+
+The **设置 / Settings** button edits the API address, model and key through the same `api_config` loader the terminal uses. A key is accepted once and never returned: the response reports only whether one is stored, changing the endpoint drops the previous provider's credential, and a key in the query string is refused outright.
 
 The server binds `127.0.0.1` and refuses any other interface unless `GPU_GUI_ALLOW_REMOTE=1` is set, because it has no authentication and the node's 8888/9000 ports are reachable from the public internet. Use the tunnel above.
 
