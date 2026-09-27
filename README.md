@@ -493,6 +493,26 @@ python agent/gui.py --port 8765
 ssh -p <node-port> -L 8765:127.0.0.1:8765 Developer@<jump-host>
 ```
 
+Instead of retyping the `-L` flag, put the tunnel in `~/.ssh/config` so an ordinary login opens
+it for as long as that session lasts:
+
+```
+Host <node>
+    HostName <jump-host>
+    Port <node-port>
+    User Developer
+    ServerAliveInterval 30
+    LocalForward 8765 127.0.0.1:8765
+```
+
+`ServerAliveInterval` belongs in the same block: the tunnel rides on the SSH connection, and an
+idle connection through the gateway is the normal way a workbench tab stops loading mid-demo.
+Qoder / VS Code Remote-SSH forwards detected ports on its own — the listening port appears in its
+Ports panel, which is the shorter path when you are already editing on the node.
+
+There is no address to visit without one of those two. `8765` is not among the gateway's public
+mappings, and adding it would expose an unauthenticated file reader to the internet.
+
 `agent/agent_main.py --gui` is not wired up yet: reaching `main()` there already requires the
 model SDK, so that entry point belongs to the round that installs it. `agent/gui.py` runs the
 same server on its own today.
