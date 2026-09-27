@@ -241,12 +241,21 @@ def _reason_clause(text: str) -> str:
     return flat if len(flat) <= 60 else flat[:59].rstrip() + "…"
 
 
-def summarize_tool_result(result_json: str) -> str:
-    """Short human-readable line for the console, so a demo shows what actually ran."""
-    try:
-        payload = json.loads(result_json)
-    except json.JSONDecodeError:
-        return "unparseable result"
+def summarize_tool_result(result_json: str, payload: dict | None = None) -> str:
+    """Short human-readable line for the console, so a demo shows what actually ran.
+
+    `payload` lets a caller that already parsed the result hand the dict over instead of
+    parsing it a second time. Anything that is not a dict falls back to the unparseable line,
+    so a JSON scalar is not treated as a result shape.
+    """
+    if not isinstance(payload, dict):
+        try:
+            parsed = json.loads(result_json)
+        except json.JSONDecodeError:
+            return "unparseable result"
+        if not isinstance(parsed, dict):
+            return "unparseable result"
+        payload = parsed
     if not payload.get("success"):
         return f"FAILED: {payload.get('error')}"
     rows = payload.get("rows_scanned")
@@ -437,11 +446,18 @@ class Tui:
 
 
 class Agent:
-    def __init__(self, client: OpenAI, verbose: bool = True, event_sink=None, model: str | None = None):
+    def __init__(self, client: OpenAI, verbose: bool = True, event_sink=None,
+                 model: str | None = None, result_sink=None):
         self.client = client
         self.model = model if model is not None else MODEL_NAME
         self.verbose = verbose
         self.event_sink = event_sink
+        # A second, structured observer. event_sink carries the same text the terminal prints,
+        # which is fine for a human and wrong for a frontend: deriving engine state from trace
+        # prose means a reworded log line silently changes what a UI reports about the GPU.
+        # result_sink gets (name, parsed payload, seconds) so consumers read the decision
+        # record as data. It is never allowed to break an analysis -- see the guard in _run_inner.
+        self.result_sink = result_sink
         self.messages: list[dict] = [{"role": "system", "content": _system_prompt()}]
         # Control condition for the comparison experiment: the same model, same prompt, no skills.
         # Nothing else changes, so any difference in the answer is attributable to the tools rather
@@ -459,7 +475,13 @@ class Agent:
 
     def log(self, msg: str) -> None:
         if self.event_sink is not None:
-            self.event_sink(msg)
+            # An observer must never break the run it is observing. Before the GUI there was no
+            # sink that could fail on its own -- Textual's post_message is thread-safe by design --
+            # so this guard did not exist. A frontend that renders every tool result does.
+            try:
+                self.event_sink(msg)
+            except Exception:
+                pass
             return
         if not self.verbose:
             return
@@ -552,7 +574,20 @@ class Agent:
                 args, _ = parse_arguments(raw)
                 self.log(f"  [round {round_index}] -> {name}({json.dumps(args, ensure_ascii=False)[:160]})")
                 result, seconds = execute_tool(name, raw)
-                self.log(f"      {summarize_tool_result(result)}   ({seconds:.2f}s wall)")
+                # Parse once here and give the parsed dict to both consumers. summarize_tool_result
+                # used to parse it internally and throw the result away, so a structured sink would
+                # otherwise have parsed the same payload a second time.
+                try:
+                    parsed = json.loads(result)
+                except json.JSONDecodeError:
+                    parsed = None
+                if self.result_sink is not None and isinstance(parsed, dict):
+                    try:
+                        self.result_sink(name, parsed, seconds)
+                    except Exception:
+                        pass
+                self.log(f"      {summarize_tool_result(result, payload=parsed)}   "
+                         f"({seconds:.2f}s wall)")
                 self.messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
