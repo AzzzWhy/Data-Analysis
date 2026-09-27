@@ -29,6 +29,7 @@ Exit codes: 0 success, 2 usage error, 3 unexpected failure.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import os
@@ -75,6 +76,7 @@ class Engine:
     version: str = "unknown"
     gpu_name: Optional[str] = None
     reason: Optional[str] = None  # why we are not on the GPU
+    last_read: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def is_gpu(self) -> bool:
@@ -82,6 +84,12 @@ class Engine:
 
     def read(self, path: str, usecols: Optional[Sequence[str]] = None,
              nrows: Optional[int] = None) -> Any:
+        self.last_read = {}
+        ext = os.path.splitext(path)[1].lower()
+        if self.is_gpu and ext in (".xlsx", ".xls"):
+            return hybrid_execution.read_gpu(self, path, usecols, self.last_read, nrows=nrows)
+        if self.is_gpu and ext in (".json", ".jsonl", ".ndjson"):
+            raise OpNotSupported("JSON reader is CPU-only; select pandas before loading")
         return _read_table(self.mod, path, usecols=usecols, nrows=nrows)
 
 
@@ -112,6 +120,16 @@ NARROW_BYTES_PER_ROW = 80.0          # below this, take the conservative thresho
 SMALL_ROWS = 6_500_000
 
 
+def csv_separator(path: str) -> str:
+    """Bounded, quote-aware sniff; never scan a large CSV to choose its parser."""
+    with open(path, "r", encoding="utf-8-sig", errors="replace", newline="") as source:
+        sample = source.read(65536)
+    try:
+        return csv.Sniffer().sniff(sample, delimiters=",;\t|").delimiter
+    except csv.Error:
+        return "\t" if os.path.splitext(path)[1].lower() in (".tsv", ".txt") else ","
+
+
 def _read_table(mod: Any, path: str, usecols: Optional[Sequence[str]] = None,
                 nrows: Optional[int] = None) -> Any:
     ext = os.path.splitext(path)[1].lower()
@@ -137,8 +155,7 @@ def _read_table(mod: Any, path: str, usecols: Optional[Sequence[str]] = None,
     if ext in (".xlsx", ".xls"):
         import pandas as _pd
         return _pd.read_excel(path, **kwargs)
-    if ext in (".tsv", ".txt"):
-        kwargs["sep"] = "\t"
+    kwargs["sep"] = csv_separator(path)
 
     try:
         return mod.read_csv(path, **kwargs)
@@ -784,6 +801,41 @@ def _parse_agg(agg: Optional[str], numeric: Sequence[str]) -> Dict[str, List[str
     return spec
 
 
+def pairwise_pearson(sub: Any, xp: Any) -> Any:
+    """Exact pairwise-complete, finite Pearson; only p-by-p results leave GPU.
+
+    Two-pass centering per pair avoids cancellation in raw moment formulas.
+    Never drop a row globally or fill a missing observation with zero.
+    xp is CuPy in production, NumPy in independent CPU contract tests.
+    """
+    arrays = []
+    for c in sub.columns:
+        series = sub[c].astype("float64")
+        arrays.append(series.to_cupy(na_value=float("nan")) if hasattr(series, "to_cupy")
+                      else xp.asarray(series.fillna(float("nan"))))
+    if len(sub) >= 2 and all(bool(xp.all(xp.isfinite(a))) for a in arrays):
+        centered = xp.stack([a - a[0] for a in arrays])
+        return xp.corrcoef(centered)
+    result = xp.full((len(arrays), len(arrays)), xp.nan, dtype=xp.float64)
+    for i, left in enumerate(arrays):
+        for j in range(i, len(arrays)):
+            right = arrays[j]
+            valid = xp.isfinite(left) & xp.isfinite(right)
+            x, y = left[valid], right[valid]
+            if x.size < 2:
+                continue
+            # Subtract an anchor before averaging for large-offset narrow data.
+            x = x - x[0]
+            y = y - y[0]
+            x = x - x.mean()
+            y = y - y.mean()
+            xx, yy = xp.sum(x * x), xp.sum(y * y)
+            denominator = xp.sqrt(xx) * xp.sqrt(yy)
+            value = xp.sum(x * y) / xp.where(denominator > 0, denominator, xp.nan)
+            result[i, j] = result[j, i] = xp.clip(value, -1.0, 1.0)
+    return result
+
+
 def op_corr(df: Any, eng: Engine, args: argparse.Namespace) -> Dict[str, Any]:
     import pandas as pd
 
@@ -808,7 +860,15 @@ def op_corr(df: Any, eng: Engine, args: argparse.Namespace) -> Dict[str, Any]:
         if method != "pearson":
             raise OpNotSupported(f"cuDF only computes pearson correlation, not {method}")
         try:
-            cm = sub.corr()
+            import cupy as cp
+            free, available = hybrid_execution.memory_available()
+            required = len(sub) * (len(wanted) * 24 + 96) + 4 * 1024**3
+            if min(free, available) < required:
+                raise ValueError("Pearson GPU temporary memory budget refused")
+            # cuDF corr refuses nulls. Use the same finite pairwise semantics for
+            # complete data too, including constants, NaNs and infinities.
+            values = pairwise_pearson(sub, cp)
+            cm = pd.DataFrame(cp.asnumpy(values), index=wanted, columns=wanted)
         except Exception as exc:
             raise OpNotSupported(f"cuDF DataFrame.corr failed: {exc}") from exc
     else:
@@ -1125,6 +1185,8 @@ def main(argv: Optional[Sequence[str]] = None, *, execution_context: str = "cold
         else:
             df, cache_trace = parquet_cache.read(
                 engine, path, args.parquet_cache_dir, usecols=usecols, nrows=nrows)
+            if getattr(engine, "last_read", None):
+                trace.update(engine.last_read)
         if not hasattr(df, "columns") or len(df.columns) == 0:
             raise ValueError(f"no columns could be read from {path}")
         return df
@@ -1134,8 +1196,10 @@ def main(argv: Optional[Sequence[str]] = None, *, execution_context: str = "cold
         force_gpu = bool(args.force_gpu) or (args.engine == "gpu")
         if force_cpu and (force_gpu or load_backend == "cpu_gpu"):
             raise ValueError("force_cpu conflicts with GPU/hybrid request")
+        eligibility = hybrid_execution.preflight(
+            path, usecols, hybrid_execution.single_workflow(args), load_backend)
         matched = None
-        if load_backend == "auto" and not force_cpu and not nrows and not args.parquet_cache_dir:
+        if load_backend == "auto" and not eligibility and not force_cpu and not nrows and not args.parquet_cache_dir:
             matched, hybrid_route = hybrid_execution.choose(
                 args.hybrid_profile, path, usecols, hybrid_execution.single_workflow(args),
                 "oneshot_" + execution_context)
@@ -1146,7 +1210,12 @@ def main(argv: Optional[Sequence[str]] = None, *, execution_context: str = "cold
         route_reason: Optional[str] = None
         route_details: Dict[str, Any] = {}
         mode = "force_cpu" if force_cpu else "force_gpu" if force_gpu else "auto"
-        if load_backend == "cpu_gpu":
+        if eligibility and not force_cpu:
+            force_cpu = True
+            route_reason = "preflight selected CPU: " + eligibility
+            route_details["eligibility"] = eligibility
+            route_details["policy"] = "capability_preflight"
+        elif load_backend == "cpu_gpu":
             force_gpu = True
             route_reason = None
             route_details["hybrid_calibration"] = hybrid_route
@@ -1260,7 +1329,8 @@ def main(argv: Optional[Sequence[str]] = None, *, execution_context: str = "cold
                               "engine_init_seconds": round(init_seconds, 6),
                               "request_seconds": total_seconds}
     result["loading"] = {"requested": args.load_backend,
-        "actual": "cpu_gpu" if used.is_gpu and load_backend == "cpu_gpu" else
+        "actual": "cpu_gpu" if used.is_gpu and (load_backend == "cpu_gpu" or
+                  any(a.get("conversion_count") for a in load_attempts)) else
                   "native_gpu" if used.is_gpu else "cpu",
         "execution_context": execution_context, "decision": hybrid_route,
         "attempts": load_attempts}

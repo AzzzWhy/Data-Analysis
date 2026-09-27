@@ -53,7 +53,7 @@ def fingerprint():
     except OSError:
         pass
     affinity = sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count()
-    return {"host": platform.node(), "arch": platform.machine(), "devices": sorted(devices),
+    return {"implementation": "hybrid-nullable-pearson-v2", "host": platform.node(), "arch": platform.machine(), "devices": sorted(devices),
             "python": platform.python_version(), "packages": packages,
             "cpu_affinity": affinity, "omp_threads": os.environ.get("OMP_NUM_THREADS"),
             "arrow_threads_env": os.environ.get("ARROW_NUM_THREADS"),
@@ -177,7 +177,29 @@ def memory_available():
     return int(cupy.cuda.runtime.memGetInfo()[0]), available
 
 
-def read_gpu(engine, path, columns, trace):
+def preflight(path, columns, workflow, backend):
+    """Cheap eligibility, before CUDA init/read. None means eligible, not faster."""
+    ext = os.path.splitext(path)[1].lower()
+    if any(q.get("op") == "corr" and q.get("method", "pearson") not in (None, "pearson")
+           for q in workflow):
+        return "rank correlation is CPU-only"
+    if ext in (".json", ".jsonl", ".ndjson"):
+        return "JSON reader is CPU-only"
+    if ext == ".xls":
+        return "legacy XLS bridge is CPU-only; convert to XLSX for GPU compute"
+    if backend == "cpu_gpu":
+        if ext in (".xlsx", ".xls"):
+            return None
+        if ext not in (".parquet", ".pq"):
+            return "mixed loader supports numeric Parquet and Excel only"
+        try:
+            inspect_parquet(path, columns)
+        except HybridRefused as exc:
+            return str(exc)
+    return None
+
+
+def read_gpu(engine, path, columns, trace, nrows=None):
     """A single full CPU read, a single conversion, then release Arrow immediately."""
     trace.update({"requested": "cpu_gpu", "load_engine": "pyarrow_cpu",
                   "compute_engine": engine.name, "read_count": 0, "conversion_count": 0})
@@ -185,21 +207,47 @@ def read_gpu(engine, path, columns, trace):
     try:
         import pyarrow as pa
         import pyarrow.parquet as pq
-        if not engine.is_gpu or os.path.splitext(path)[1].lower() not in (".parquet", ".pq"):
-            raise HybridRefused("CPU-to-GPU loading requires cuDF and a Parquet file")
+        ext = os.path.splitext(path)[1].lower()
+        if not engine.is_gpu or ext not in (".parquet", ".pq", ".xlsx", ".xls"):
+            raise HybridRefused("CPU-to-GPU loading requires cuDF and Parquet/Excel")
         before = identity(path)
-        rows, required = inspect_parquet(path, columns)
+        excel = ext in (".xlsx", ".xls")
+        if excel:
+            if ext == ".xlsx":
+                import zipfile
+                with zipfile.ZipFile(path) as archive:
+                    expanded = sum(entry.file_size for entry in archive.infolist())
+                required = max(expanded * 6, os.path.getsize(path) * 6) + 4 * 1024**3
+            else:
+                # Binary XLS has no reliable cheap decoded-size bound.
+                raise HybridRefused("legacy XLS GPU bridge unavailable; use CPU or XLSX")
+            rows = None
+            trace["load_engine"] = "pandas_excel_cpu"
+        else:
+            rows, required = inspect_parquet(path, columns)
         device_free, host_available = memory_available()
         trace["admission"] = {"required_bytes": required, "device_free_bytes": device_free,
                               "host_available_bytes": host_available}
         if min(device_free, host_available) < required:
             raise HybridMemoryRefused("hybrid memory budget refused before CPU read")
         start = time.perf_counter()
-        table = pq.read_table(path, columns=list(columns) if columns else None, use_threads=True)
+        if excel:
+            import pandas as pd
+            cpu = pd.read_excel(path, usecols=list(columns) if columns else None,
+                               **({"nrows": nrows} if nrows else {}))
+            rows = len(cpu)
+            actual_required = int(cpu.memory_usage(index=True, deep=True).sum()) * 6 + 4 * 1024**3
+            free, available = memory_available()
+            if min(free, available) < actual_required:
+                raise HybridMemoryRefused("Excel decoded memory budget refused before conversion")
+            table = pa.Table.from_pandas(cpu, preserve_index=False)
+            cpu = None
+        else:
+            table = pq.read_table(path, columns=list(columns) if columns else None, use_threads=True)
         trace.update(cpu_read_seconds=time.perf_counter() - start, read_count=1,
                      arrow_bytes=table.nbytes, cpu_threads=pa.cpu_count())
         if table.num_rows != rows or identity(path) != before:
-            raise HybridInputChanged("Parquet changed during CPU read")
+            raise HybridInputChanged("input changed during CPU read")
         start = time.perf_counter()
         frame = engine.mod.DataFrame.from_arrow(table)
         # Synchronize conversion itself; do not hide it in later compute timing.
