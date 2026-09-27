@@ -2,7 +2,7 @@
 
 - 分支：`codex/hybrid-warm-worker`。
 - 起点：GitHub `main` 的 `59b5229ba9d6a5fbe4eefeabaf2de05cc627a3be`，与另外两个分支相同。
-- 状态：**开发方案，未实现混合加载后端，未测得混合执行加速倍率**。main 已有常驻工作进程和 oneshot 接口，本分支是在这个基础上规划 CPU 加载路径，不是声称现有 worker 已混合执行。
+- 状态：**已实现第一版，尚未推送或替换正式部署**。在主干 oneshot 工作进程上增加 CPU/PyArrow 加载、Arrow→cuDF 转换及匹配实测校准选择；每请求释放数据帧，不新增结果或帧缓存。
 
 ## 目标与边界
 
@@ -34,3 +34,25 @@ CPU 读取所需列 → 转换为 GPU 数据帧 → GPU 精确计算，在跨请
 批量加载一次、跨请求帧缓存、共享统计、异步双缓冲和多 worker 并发。独立单次方向在 `codex/hybrid-single-process`；批量方向在 `codex/hybrid-batch`。
 
 共同规则与源数据限制见 [三分支总览](HYBRID_BRANCHES.md)，已有实验见 [基线报告](POST_CACHE_AND_PUBLIC_DATA_RESULTS.md)。完成实现与验证前不合入 main，也不替换 GB10 正式部署。
+
+## 第一版已实现与使用
+
+混合路径复用解释器与 CUDA 上下文，而非复用数据。每请求 CPU/PyArrow 投影读取一次、Arrow→cuDF 转换一次，返回加载/计算引擎、CPU 读取、转换及初始化耗时。`execution_context` 在已有 GPU 上下文时为 warm，否则为 cold；解释器已启动不等于 CUDA 已热。第一请求或故障重启不能套用热态校准。
+
+工具 `analyze_dataset(..., load_backend="auto")`：`cpu_gpu` 显式测试混合，`native` 保留原读取器，`auto` 在已验证校准匹配时选择。配置混合校准或显式请求混合时，交互快捷路径不借用已有 resident frame，保持热工作进程方向的数据生命周期。模型侧支持此参数，结果必须按实际引擎解释，不虚构倍率。
+
+仅在明确评测时建立校准，在仓库根目录使用含 cuDF/PyArrow 的 Python：
+
+```sh
+python benchmark/hybrid_calibrate.py --input /absolute/data.parquet \
+  --profile hybrid-profiles/warm.json --context both --repeats 5
+export GPU_ANALYSIS_HYBRID_PROFILE="$PWD/hybrid-profiles/warm.json"
+```
+
+默认三个单次查询为 revenue 摘要、异常前三例、region/revenue 求和前三组；实际字段与选项不同使用 `--steps-json` 重测。cold 每查询启动新的 CLI，warm 复用预热 worker，每步仍重新读数。首启单列，不自动清文件缓存。三路径全量结果一致才保存校准，并再次调用 `auto` 核验真实选择。
+
+校准有效期 24 小时，绑定源文件身份、投影列、操作全部选项、冷热状态、设备、库版本及 CPU 设置。混合必须同时满足 CPU 读取快至少 5%、GPU 计算快至少 10%、包含转换的总耗时比全 CPU 和原生 GPU 都快至少 10%；否则选择更合算的 CPU/原生 GPU。无匹配校准沿用原路由，不自动跑完整对照来回答普通问题。
+
+初版只支持平坦数值/布尔 Parquet，CPU Arrow 缓冲在转换后释放；预算同时覆盖 CPU/GPU 帧、转换中间态和计算工作区。不支持类型或转换失败明确降级；内存/输入变化拒绝不会绕过保护。CSV、零拷贝、实际峰值内存采样和自动背景校准仍未实现。
+
+公共混合测试十六项、本机原有执行十三项、交互五项、优化九项、统计十二项及工具契约再次通过。GB10 真实 113,500,327 行三次交错原型测试全量输出一致；三个查询各自的混合路径均慢于原生 GPU，校准选择原生 GPU，不能宣称已有新的性能提升。分项和后续五次验证见 [本分支实验记录](HYBRID_RESULTS.md)。

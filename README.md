@@ -14,7 +14,7 @@
 
 [CPU 加载＋GPU 计算：三个独立开发分支](docs/HYBRID_BRANCHES.md)
 
-> 当前分支：`codex/hybrid-warm-worker`。研究热工作进程中的 CPU 加载＋GPU 计算；混合后端尚未实现，详见 [本分支开发与验收方案](docs/HYBRID_EXECUTION_PLAN.md)。
+> 当前分支：`codex/hybrid-warm-worker`。已实现数值 Parquet 的 CPU 加载＋GPU 热工作进程计算与实测校准路由；每请求重新读数，不新增数据缓存，详见 [本分支说明与用法](docs/HYBRID_EXECUTION_PLAN.md)。
 
 A tool-calling agent that runs exact statistical analysis over large local datasets. On a
 configured NVIDIA GPU it can use RAPIDS cuDF; otherwise it reports the actual pandas/CPU path.

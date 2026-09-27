@@ -111,6 +111,25 @@ def main():
             emit({"stage": "calibrated", "step": step, "context": context, "selected": selected,
                   "median_seconds": {key: statistics.median(run["seconds"] for run in runs)
                                      for key, runs in measurements.items()}, "decision": decision})
+            auto_argv = argv_for(args.input, step, "native")
+            auto_argv.remove("--force-gpu")
+            auto_argv[auto_argv.index("--load-backend")+1] = "auto"
+            auto_argv.extend(["--hybrid-profile", args.profile])
+            if context == "cold":
+                proc = subprocess.run([sys.executable, str(ROOT / "skills/cudf-analytics/scripts/gpu_analytics.py"),
+                                       *auto_argv], capture_output=True, text=True, timeout=1800)
+                assert proc.returncode == 0, proc.stdout
+                automatic = json.loads(proc.stdout)
+            else:
+                reply = skills._worker_call({"cmd": "oneshot", "argv": auto_argv})
+                assert reply["ok"] and reply["exit_code"] == 0, reply
+                automatic = reply["payload"]
+            assert automatic["loading"]["decision"]["selected"] == selected, automatic
+            assert automatic["loading"]["actual"] == {
+                "cpu": "cpu", "native": "native_gpu", "cpu_gpu": "cpu_gpu"}[selected], automatic
+            assert equal(values(automatic), expected) and skills._rows_of(automatic) == expected_rows, automatic
+            emit({"stage": "auto_verified", "context": context, "selected": selected,
+                  "actual": automatic["loading"]["actual"], "results_agree": True})
     state = skills._worker_call({"cmd": "list"}) if skills._worker is not None else {"count": 0, "warm_cache_count": 0}
     assert state["count"] == 0 and state["warm_cache_count"] == 0, state
     emit({"stage": "complete", "sources_unchanged": True, "active_sessions": 0,
