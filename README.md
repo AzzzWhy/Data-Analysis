@@ -6,6 +6,8 @@
 
 [Local optimization implementation and validation](docs/OPTIMIZATION.md)
 
+[外部 Skill / MCP 自动发现与调用（配置、权限与测试）](docs/EXTERNAL_TOOLS.md)
+
 A tool-calling agent that runs exact statistical analysis over large local datasets. On a
 configured NVIDIA GPU it can use RAPIDS cuDF; otherwise it reports the actual pandas/CPU path.
 The model decides what to compute and writes the answer from local tool results; raw dataset

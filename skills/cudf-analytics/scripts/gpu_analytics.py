@@ -859,6 +859,7 @@ def op_outliers(df: Any, eng: Engine, args: argparse.Namespace,
         return {"columns": [], "results": {}, "note": "no numeric columns to scan"}
 
     results: Dict[str, Any] = {}
+    count_reused = []
     for name in wanted:
         s = df[name]
         prior = (summary_stats or {}).get(name)
@@ -903,13 +904,20 @@ def op_outliers(df: Any, eng: Engine, args: argparse.Namespace,
             if eng.is_gpu:
                 raise OpNotSupported(f"cuDF outlier filtering failed: {exc}") from exc
             raise
-        try:
-            n_valid = int(val.notnull().sum())
-        except Exception:
-            n_valid = int(len(s)) - count
+        prior_count = (prior or {}).get("valid_count", (prior or {}).get("count"))
+        if isinstance(prior_count, int) and not isinstance(prior_count, bool) and 0 <= prior_count <= len(s):
+            n_valid = prior_count
+            count_reused.append(name)
+        else:
+            try:
+                n_valid = int(val.notnull().sum())
+            except Exception:
+                n_valid = int(len(s)) - count
         # Report how many values landed on a fence, so a boundary-heavy column is visible.
         try:
-            n_ties = int((val.sub(low).abs().le(tol) | val.sub(high).abs().le(tol)).sum())
+            # Distances were already computed for the anomaly mask above. Reuse
+            # them instead of allocating two more full-column differences.
+            n_ties = int((delta_low.abs().le(tol) | delta_high.abs().le(tol)).sum())
         except Exception:
             n_ties = 0
         results[name] = {
@@ -920,6 +928,7 @@ def op_outliers(df: Any, eng: Engine, args: argparse.Namespace,
             "lower_bound": low,
             "upper_bound": high,
             "count": count,
+            "valid_count": n_valid,
             "pct": round(100.0 * count / max(n_valid, 1), 4),
             "examples": records,
         }
@@ -931,7 +940,8 @@ def op_outliers(df: Any, eng: Engine, args: argparse.Namespace,
                 f"{tol:.3g} and are not counted as outliers, so the count does not depend "
                 f"on engine rounding."
             )
-    return {"columns": wanted, "results": results}
+    return {"columns": wanted, "results": results,
+            "valid_count_reused_columns": count_reused}
 
 
 def _resolve_columns(args: argparse.Namespace, numeric: Sequence[str],

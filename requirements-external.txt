@@ -1,0 +1,4 @@
+# Optional external-tool bridge, isolated from the core analytics dependencies.
+# MCP v1 API is deliberately pinned; v2 uses a different client interface.
+mcp>=1.28,<2
+jsonschema>=4.23,<5
