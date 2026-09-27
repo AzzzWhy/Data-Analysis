@@ -773,11 +773,11 @@ def _run_analysis(cmd):
     return proc
 
 
-def analyze_batch(file_path: str, steps: list, force_cpu: bool = False) -> str:
+def analyze_batch(file_path: str, steps: list, force_cpu: bool = False, load_backend: str = "auto") -> str:
     """Independent known analyses in one tool turn, with deterministic cleanup."""
     try:
         reply = _worker_call({"cmd": "batch", "path": _resolve_data_path(file_path),
-                              "steps": steps, "force_cpu": force_cpu})
+                              "steps": steps, "force_cpu": force_cpu, "load_backend": load_backend})
         reply["success"] = bool(reply.pop("ok", False))
         reply["comparison_measured"] = False
         reply["performance_note"] = (
@@ -1475,6 +1475,10 @@ skill_definitions.append({"type": "function", "function": {
     "parameters": {"type": "object", "properties": {
         "file_path": {"type": "string"},
         "force_cpu": {"type": "boolean"},
+        "load_backend": {"type": "string", "enum": ["auto", "native", "cpu_gpu"],
+                         "description": "auto selects a verified exact-batch calibration if available; "
+                         "cpu_gpu reads numeric Parquet once on CPU and converts once to GPU; "
+                         "native keeps original readers. Check actual per-step engines."},
         "steps": {"type": "array", "minItems": 1, "maxItems": 8, "items": {
             "type": "object", "additionalProperties": False,
             "properties": {"op": {"type": "string", "enum":

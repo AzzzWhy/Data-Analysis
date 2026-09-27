@@ -2,7 +2,7 @@
 
 - 分支：`codex/hybrid-batch`。
 - 起点：GitHub `main` 的 `59b5229ba9d6a5fbe4eefeabaf2de05cc627a3be`，与另外两个分支相同。
-- 状态：**开发方案，未实现混合加载后端，未测得混合执行加速倍率**。main 已有 `analyze_batch` 的 GPU 原生读取与全 CPU 批量执行，本分支规划为它增加第三条混合路径。
+- 状态：**已实现第一版，尚未推送或替换正式部署**。在主干批量功能上增加 CPU/PyArrow 读取和 Arrow→cuDF 转换，以及同文件/列/步骤/冷热状态的三路径校准选择；不能声称混合必然更快。
 
 ## 目标与边界
 
@@ -36,3 +36,23 @@
 跨文件批处理、跨请求数据缓存、在线流式分位数、近似算法、多 GPU、异步双缓冲或让 CPU/GPU 同时重复整批计算。另两个方向分别位于 `codex/hybrid-single-process`、`codex/hybrid-warm-worker`。
 
 共同规则与源数据限制见 [三分支总览](HYBRID_BRANCHES.md)，已有实验见 [基线报告](POST_CACHE_AND_PUBLIC_DATA_RESULTS.md)。完成实现与验证前不合入 main，也不替换 GB10 正式部署。
+
+## 第一版已实现与使用
+
+已实现上述任务 1–8 的核心功能：列并集、一次 CPU 读取与转换、批内帧/统计共享、独占会话清理、按完整批次校准路由及分项记录。跨请求不新增帧缓存，批次不会命中已有 warm frame。初期仅接受平坦数值/布尔 Parquet 列；字符串、嵌套等类型保守降级并记录实际 CPU 引擎。内存或文件变更拒绝不会绕过保护去重读 CPU。
+
+工具 `analyze_batch(file_path, steps, load_backend="auto")`：`native` 使用原读取器；`cpu_gpu` 显式测试混合路径；`auto` 在已验证校准匹配时选择，否则沿用原有路由。批内每步的真实引擎仍需检查；转换失败降级到 CPU 不算 GPU 成绩。
+
+仅在明确评测时建立校准，以下在仓库根目录执行，用包含 cuDF/PyArrow 的 Python：
+
+```sh
+python benchmark/hybrid_calibrate.py --mode batch --input /absolute/data.parquet \
+  --profile hybrid-profiles/batch.json --context both --repeats 5
+export GPU_ANALYSIS_HYBRID_PROFILE="$PWD/hybrid-profiles/batch.json"
+```
+
+默认步骤为 revenue 摘要、revenue 异常前三例、region/revenue 求和前三组；其他字段/步骤使用 `--steps-json`，必须与实际需求一致。`cold` 包含每次 worker 首启，`warm` 在显式 GPU 预热后测量，启动单列；不自动清文件缓存。校准只有三条路径全量结果一致才保存，并自动验证随后 `auto` 的实际选择。有效期 24 小时，绑定文件身份、列、全部步骤选项、冷热状态、设备、软件和 CPU 设置，不可跨机器使用。
+
+混合需同时满足：CPU 读取至少比 GPU 原生加载快 5%，GPU 计算比 CPU 快 10%，含转换的总耗时比 CPU 与 GPU 原生两者都快 10%。不满足时选更合算的 CPU 或原生 GPU，而不是强制混合；没有校准不猜测。
+
+新增 `hybrid_batch_test.py` 八项和公共 `hybrid_execution_test.py` 十六项测试已在本机通过；单元测试模拟设备，不替代真实 GPU 验证。GB10 113,500,327 行、三次交错初测：CPU 批量 4.001 秒、GPU 原生 1.546 秒、混合 1.848 秒，结果一致，`auto` 选择并实际执行原生 GPU。本数据上混合反而慢约 20%，因此不能宣称新加速收益。首启另计 0.635 秒，读取器第一次延迟初始化仍在第一测量中；后续五次复测见本分支实验记录。

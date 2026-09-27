@@ -143,6 +143,7 @@ class Session:
     # Only scalar quartiles, bounded per session; never retain masks or result frames.
     # Engine is part of the key so a pandas fallback cannot inherit cuDF quartiles.
     statistics: ExactStatisticsCache = field(default_factory=ExactStatisticsCache)
+    loading: dict = field(default_factory=dict)
 
 
 SESSIONS: Dict[str, Session] = {}
@@ -318,7 +319,7 @@ def do_open(req: dict) -> dict:
     if invalidated:
         _release_unused_gpu_blocks()
 
-    cached = WARM_CACHE.pop(_cache_key(path, cols), None)
+    cached = None if req.get("_fresh_batch") else WARM_CACHE.pop(_cache_key(path, cols), None)
     if cached is not None and not req.get("force_cpu"):
         _COUNTER["n"] += 1
         cached.sid = f"s{_COUNTER['n']}"
@@ -398,24 +399,36 @@ def do_open(req: dict) -> dict:
                 session_worth_it_if="several analyses over the same file, not one",
             )
     selected_backend = "pandas" if force_cpu else "cudf"
+    init_started = time.perf_counter()
     try:
         eng = GA.detect_engine(force_cpu=force_cpu)
     except Exception as exc:
         return _err(f"engine init failed: {type(exc).__name__}: {exc}")
+    init_seconds = time.perf_counter() - init_started
 
     started = time.perf_counter()
     read_fallback = None
     cache_trace = {"status": "disabled"}
+    load_backend = req.get("_batch_load_backend", "native")
+    load_attempts = []
 
     def read_frame(engine):
         nonlocal cache_trace
+        trace = {"load_engine": engine.name, "compute_engine": engine.name,
+                 "read_count": 1, "conversion_count": 0}
+        load_attempts.append(trace)
+        if load_backend == "cpu_gpu" and engine.is_gpu:
+            return GA.hybrid_execution.read_gpu(engine, path, cols, trace)
         frame, cache_trace = GA.parquet_cache.read(
-            engine, path, os.environ.get("GPU_ANALYSIS_PARQUET_CACHE_DIR"), usecols=cols)
+            engine, path, None if req.get("_fresh_batch") else
+            os.environ.get("GPU_ANALYSIS_PARQUET_CACHE_DIR"), usecols=cols)
         return frame
 
     try:
         frame = read_frame(eng)
     except Exception as exc:
+        if isinstance(exc, (GA.hybrid_execution.HybridMemoryRefused, GA.hybrid_execution.HybridInputChanged)):
+            return _err(str(exc), load_refused=True, loading_attempts=load_attempts)
         read_fallback = ("read failed: " + str(exc)) if eng.is_gpu else None
         if eng.is_gpu:
             # Same fallback rule as the stateless path: if cuDF cannot read it, retry pandas.
@@ -437,6 +450,9 @@ def do_open(req: dict) -> dict:
         sid=sid, path=path, engine=eng, frame=frame, rows=int(len(frame)),
         identity=_file_identity(path), load_seconds=load_seconds,
         reason=route_reason if selected_backend == "pandas" else None, usecols=cols,
+        loading={"actual": "cpu_gpu" if eng.is_gpu and load_backend == "cpu_gpu" else
+                 "native_gpu" if eng.is_gpu else "cpu", "attempts": load_attempts,
+                 "engine_init_seconds": init_seconds},
     )
     # Explicit multi-step demonstrations still measure the CPU read baseline.
     # Interactive one-shot reuse does not: an unseen extra full CPU pass would
@@ -471,6 +487,7 @@ def do_open(req: dict) -> dict:
         "gpu": eng.gpu_name,
         "accelerated": eng.is_gpu,
         "load_seconds": round(load_seconds, 3),
+        "loading": sess.loading,
         "cpu_load_seconds": round(sess.cpu_load_seconds, 3) if sess.cpu_load_seconds else None,
         "resident_mb": resident_mb,
         "execution_decision": GA.execution_decision_record(
@@ -828,8 +845,14 @@ def do_oneshot(req: dict) -> dict:
         _release_unused_gpu_blocks()
 
 
+def batch_workflow(steps):
+    return [GA.hybrid_execution.single_workflow(_build_args({
+        **({"top_k": 30} if step["op"] == "groupby" else {}), **step}))[0] for step in steps]
+
+
 def do_batch(req: dict) -> dict:
     """Execute an independent bounded plan on one projected resident frame."""
+    request_started = time.perf_counter()
     steps = req.get("steps")
     allowed = {"op", "by", "agg", "columns", "top_k"}
     if not isinstance(steps, list) or not 1 <= len(steps) <= 8:
@@ -862,15 +885,37 @@ def do_batch(req: dict) -> dict:
         columns.update(required)
     force_cpu = bool(req.get("force_cpu"))
     force_gpu = bool(req.get("force_gpu"))
+    backend = req.get("load_backend", os.environ.get("GPU_ANALYSIS_LOAD_BACKEND", "auto"))
+    if backend not in {"auto", "native", "cpu_gpu"}:
+        return _err("load_backend must be auto, native or cpu_gpu")
+    if force_cpu and backend == "cpu_gpu":
+        return _err("force_cpu conflicts with hybrid request")
     if force_cpu and force_gpu:
         return _err("force_cpu and force_gpu are mutually exclusive")
-    if not force_cpu and not force_gpu:
+    context = "warm" if GA._ENGINE is not None and GA._ENGINE.is_gpu else "cold"
+    decision = {"selected": None, "reason": "explicit/native request"}
+    selected = None
+    if backend == "auto" and not force_cpu:
+        selected, decision = GA.hybrid_execution.choose(
+            req.get("hybrid_profile", os.environ.get("GPU_ANALYSIS_HYBRID_PROFILE")), path,
+            columns, batch_workflow(steps), "batch_" + context)
+        if selected == "cpu_gpu":
+            backend = "cpu_gpu"
+        elif selected:
+            backend = "native"
+    if backend == "cpu_gpu":
+        force_gpu = True
+    elif not force_cpu and not force_gpu and selected:
+        force_cpu = selected == "cpu"
+        force_gpu = not force_cpu
+    elif not force_cpu and not force_gpu:
         use_gpu, _reason = GA.pick_engine_for(path, "session")
         force_cpu = not use_gpu
     started = time.perf_counter()
     opened = do_open({"path": path, "usecols": ",".join(sorted(columns)) if columns else None,
                       "force_cpu": force_cpu, "force_gpu": force_gpu,
-                      "measure_cpu": False})
+                      "measure_cpu": False, "_fresh_batch": True,
+                      "_batch_load_backend": backend})
     if not opened.get("ok"):
         return opened
     sid = opened["session_id"]
@@ -889,8 +934,11 @@ def do_batch(req: dict) -> dict:
                             results=results, completed_steps=index)
         return {"ok": True, "results": results, "rows": opened["rows"],
                 "engine": opened["engine"], "load_seconds": opened["load_seconds"],
-                "total_seconds": round(time.perf_counter() - started, 6),
+                "total_seconds": round(time.perf_counter() - request_started, 6),
                 "projected_columns": sorted(columns) if columns else None,
+                "loading": {**opened.get("loading", {}), "requested": req.get("load_backend", "auto"),
+                            "decision": decision, "execution_context": context,
+                            "scope": "one fresh load/conversion per batch; no cross-batch data cache"},
                 "note": "One load, exact full-data operations; no CPU baseline or sampling. "
                         "Any per-step fallback is reported in that step."}
     finally:

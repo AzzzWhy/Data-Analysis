@@ -14,7 +14,7 @@
 
 [CPU 加载＋GPU 计算：三个独立开发分支](docs/HYBRID_BRANCHES.md)
 
-> 当前分支：`codex/hybrid-batch`。研究批量执行中的 CPU 加载＋GPU 计算；混合后端尚未实现，详见 [本分支开发与验收方案](docs/HYBRID_EXECUTION_PLAN.md)。
+> 当前分支：`codex/hybrid-batch`。已实现数值 Parquet 的 CPU 加载＋GPU 批量计算与实测校准路由；不是默认强制混合，详见 [本分支说明与用法](docs/HYBRID_EXECUTION_PLAN.md)。
 
 A tool-calling agent that runs exact statistical analysis over large local datasets. On a
 configured NVIDIA GPU it can use RAPIDS cuDF; otherwise it reports the actual pandas/CPU path.
