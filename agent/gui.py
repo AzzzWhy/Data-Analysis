@@ -629,6 +629,21 @@ def _shutdown(wb: Workbench) -> None:
         pass
 
 
+def make_server(port: int = DEFAULT_PORT, host: str = "127.0.0.1",
+                model: str | None = None):
+    """Build the server and its workbench without entering the loop.
+
+    Split out so the headless tests can bind port 0, drive real HTTP against a real Workbench
+    and real skills, and shut it down -- rather than testing a mock of the thing under test.
+    """
+    workbench = Workbench(model_override=model)
+    Handler.workbench = workbench
+    httpd = ThreadingHTTPServer((host, port), Handler)
+    httpd.daemon_threads = True
+    workbench.httpd = httpd
+    return httpd, workbench
+
+
 def serve(port: int = DEFAULT_PORT, host: str = "127.0.0.1",
           model: str | None = None) -> int:
     if host != "127.0.0.1" and os.environ.get("GPU_GUI_ALLOW_REMOTE") != "1":
@@ -638,17 +653,13 @@ def serve(port: int = DEFAULT_PORT, host: str = "127.0.0.1",
               f"ssh -p <port> -L {port}:127.0.0.1:{port} Developer@<jump-host>\n"
               f"If you genuinely want an open interface, set GPU_GUI_ALLOW_REMOTE=1.")
         return 2
-    state = Workbench(model_override=model)
-    Handler.workbench = state
     try:
-        httpd = ThreadingHTTPServer((host, port), Handler)
+        httpd, state = make_server(port, host, model)
     except OSError as exc:
         print(f"cannot bind {host}:{port}: {exc}\n"
               f"The workbench is optional; nothing else was affected. "
               f"Try --port with a free port.")
         return 2
-    httpd.daemon_threads = True
-    state.httpd = httpd
     status = state.engine_state()
     if Agent is None:
         model_state = f"unavailable -- {AGENT_IMPORT_ERROR}"
