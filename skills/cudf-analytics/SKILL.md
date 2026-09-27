@@ -138,6 +138,16 @@ they matter", "which group drives them".
 
 `gpu_session.py` is a long-lived worker that loads the file **once** into device memory and
 then answers many `analyze` requests against that resident copy.
+Closed GPU sessions can leave a validated warm frame for subsequent questions in the same
+agent process (default 4 GB, 15 minutes; configurable through `SESSION_WARM_CACHE_MB` and
+`SESSION_WARM_TTL_SECONDS`). Active handles still close after each agent answer. A changed
+source file invalidates the warm frame. Set either budget or TTL to `0` to disable reuse.
+
+Optional one-off enhancements: `--parquet-cache-dir DIR` stores a conversion of full CSV
+inputs for later full reads (never modifies the source), and `--calibration-file FILE` records
+uncached CPU/GPU timings for guarded per-operation routing. Both also accept the equivalent
+`GPU_ANALYSIS_PARQUET_CACHE_DIR` and `GPU_ANALYSIS_CALIBRATION_FILE` environment variables.
+The first conversion is included in that run's reported time; it is not a free speedup.
 
 The fair five-repeat 20M-row comparison (profile, summary, groupby, corr, outliers) loads once
 on both engines: GPU workflow is 2.92x faster including one load, or 2.46x including startup.

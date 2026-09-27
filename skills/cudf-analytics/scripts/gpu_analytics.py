@@ -35,6 +35,8 @@ import os
 import sys
 import time
 import traceback
+import cost_model
+import parquet_cache
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -222,7 +224,8 @@ def _fmt_size(nbytes: float) -> str:
 
 def pick_engine_for(path: str, op: str, force_cpu: bool = False,
                     force_gpu: bool = False, verbose: bool = False,
-                    details: Optional[Dict[str, Any]] = None) -> Tuple[bool, Optional[str]]:
+                    details: Optional[Dict[str, Any]] = None,
+                    calibration_file: Optional[str] = None) -> Tuple[bool, Optional[str]]:
     """Decide whether the GPU is worth using for this file, from measured numbers.
 
     Returns (use_gpu, reason). reason is set when the CPU was chosen deliberately, so the
@@ -272,6 +275,24 @@ def pick_engine_for(path: str, op: str, force_cpu: bool = False,
     if size is None:
         return True, None
 
+    calibrated = cost_model.predict(
+        (os.environ.get("GPU_ANALYSIS_CALIBRATION_FILE") if calibration_file is None
+         else calibration_file),
+        op=op, source=path, size=size,
+    )
+    if calibrated:
+        cpu_s = calibrated["pandas"]["seconds"]
+        gpu_s = calibrated["cudf"]["seconds"]
+        # A 10% guard avoids paying GPU startup on a statistical tie.
+        use_gpu = gpu_s < 0.90 * cpu_s
+        if details is not None:
+            details.update({"policy": "calibrated_cost_model", "file_size_bytes": size,
+                            "estimated_seconds": {"pandas": cpu_s, "cudf": gpu_s},
+                            "calibration_samples": {k: v["samples"] for k, v in calibrated.items()}})
+        return use_gpu, (None if use_gpu else
+                         f"calibrated {op} estimate: CPU {cpu_s:.2f}s, GPU {gpu_s:.2f}s; "
+                         "GPU must beat CPU by at least 10% to offset model uncertainty")
+
     rows = _estimate_rows(path)
     per_row = (size / rows) if (rows and rows > 0) else None
     narrow = per_row is not None and per_row < NARROW_BYTES_PER_ROW
@@ -301,11 +322,12 @@ def pick_engine_for(path: str, op: str, force_cpu: bool = False,
 
 def execution_decision_record(*, mode: str, policy: str, selected_backend: str,
                               actual_backend: str, reason: str, signals: Dict[str, Any],
-                              observed: Dict[str, Any], fallback_reason: Optional[str] = None
+                              observed: Dict[str, Any], fallback_reason: Optional[str] = None,
+                              estimated_seconds: Optional[float] = None
                               ) -> Dict[str, Any]:
     """A stable, factual decision trace shared by one-off and resident execution.
 
-    Cost predictions stay null until a calibrated per-operation model exists. An admission
+    Elapsed predictions appear only with a validated local per-operation fit. An admission
     headroom check is a safety threshold, not an estimate of peak memory usage.
     """
     return {
@@ -317,9 +339,9 @@ def execution_decision_record(*, mode: str, policy: str, selected_backend: str,
         "reason": reason,
         "signals": signals,
         "estimate": {
-            "elapsed_seconds": None,
+            "elapsed_seconds": estimated_seconds,
             "peak_memory_mb": None,
-            "status": "not_calibrated",
+            "status": "calibrated" if estimated_seconds is not None else "not_calibrated",
         },
         "observed": observed,
         "fallback_reason": fallback_reason,
@@ -470,22 +492,18 @@ def _col_list(series: Any, limit: Optional[int] = None) -> List[Any]:
     return [_native_scalar(x) for x in out]
 
 
-def _quantile(s: Any, q: float, is_gpu: bool) -> Optional[float]:
-    if is_gpu:
-        try:
-            s2 = s.dropna()
-            if len(s2) == 0:
-                return None
-            method = s2.quantile([q])
-            val = method.iloc[0] if hasattr(method, "iloc") else method[0]
-            return _native_scalar(val)
-        except Exception as exc:
-            _log(f"cuDF quantile failed for q={q} ({type(exc).__name__}), using pandas")
-    s2 = s.dropna()
-    if len(s2) == 0:
-        return None
-    method = s2.quantile(q)
-    return _native_scalar(method)
+def _quartiles(s: Any, is_gpu: bool) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    """Compute all three quartiles in one reduction instead of three full scans."""
+    clean = s.dropna()
+    if len(clean) == 0:
+        return None, None, None
+    try:
+        values = clean.quantile([0.25, 0.50, 0.75])
+        return tuple(_nan_to_none(_native_scalar(values.iloc[i])) for i in range(3))
+    except Exception as exc:
+        if is_gpu:
+            raise OpNotSupported(f"cuDF quartiles failed: {exc}") from exc
+        raise
 
 
 def _to_dict(rec: Any) -> Dict[str, Any]:
@@ -577,9 +595,7 @@ def _describe_stats(s: Any, is_gpu: bool) -> Dict[str, Any]:
             if is_gpu:
                 raise OpNotSupported(f"cuDF cannot compute {label}: {exc}") from exc
             _log(f"{label} failed: {exc}")
-    stats["q1"] = _quantile(clean, 0.25, is_gpu)
-    stats["median"] = _quantile(clean, 0.50, is_gpu)
-    stats["q3"] = _quantile(clean, 0.75, is_gpu)
+    stats["q1"], stats["median"], stats["q3"] = _quartiles(clean, is_gpu)
     return stats
 
 
@@ -802,7 +818,8 @@ def _pandas_uses_numeric_only() -> bool:
 
 
 def op_outliers(df: Any, eng: Engine, args: argparse.Namespace,
-                max_columns: Optional[int] = None) -> Dict[str, Any]:
+                max_columns: Optional[int] = None,
+                summary_stats: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     import pandas as pd
 
     k = float(args.iqr_k)
@@ -814,8 +831,11 @@ def op_outliers(df: Any, eng: Engine, args: argparse.Namespace,
     results: Dict[str, Any] = {}
     for name in wanted:
         s = df[name]
-        q1 = _quantile(s, 0.25, eng.is_gpu)
-        q3 = _quantile(s, 0.75, eng.is_gpu)
+        prior = (summary_stats or {}).get(name)
+        if prior is not None:
+            q1, q3 = prior["q1"], prior["q3"]
+        else:
+            q1, _median, q3 = _quartiles(s, eng.is_gpu)
         if q1 is None or q3 is None:
             results[name] = {"note": "column is entirely null", "count": 0}
             continue
@@ -925,10 +945,12 @@ def execute(eng: Engine, load: Callable[[Engine], Any], op: str,
         df = load(engine)
         t_elapsed = _make_timer(engine)
         if op == "auto":
+            summary = op_summary(df, engine, args)
             payload = {
                 "profile": op_profile(df, engine, args),
-                "summary": op_summary(df, engine, args),
-                "outliers": op_outliers(df, engine, args, max_columns=args.auto_columns),
+                "summary": summary,
+                "outliers": op_outliers(df, engine, args, max_columns=args.auto_columns,
+                                         summary_stats=summary["stats"]),
             }
         else:
             payload = OPS[op](df, engine, args)
@@ -987,6 +1009,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--engine", default="auto", choices=["auto", "cpu", "gpu"],
                    help="auto (default) routes small files to the CPU, where the GPU's fixed "
                         "startup cost makes it slower; cpu/gpu force one path")
+    p.add_argument("--parquet-cache-dir", default=os.environ.get("GPU_ANALYSIS_PARQUET_CACHE_DIR"),
+                   help="optional directory for reusable full-file CSV to Parquet conversions")
+    p.add_argument("--calibration-file", default=os.environ.get("GPU_ANALYSIS_CALIBRATION_FILE"),
+                   help="optional JSONL measurements used for per-operation CPU/GPU routing")
     p.add_argument("--pretty", action="store_true", help="pretty-print the JSON output")
     p.add_argument("--verbose", action="store_true", help="log engine/fallback decisions to stderr")
     return p
@@ -1008,8 +1034,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     usecols = [c.strip() for c in args.usecols.split(",") if c.strip()] if args.usecols else None
     nrows = int(args.limit) if args.limit else None
 
+    cache_trace: Dict[str, Any] = {"status": "disabled"}
+
     def load(engine: Engine) -> Any:
-        df = engine.read(path, usecols=usecols, nrows=nrows)
+        nonlocal cache_trace
+        df, cache_trace = parquet_cache.read(
+            engine, path, args.parquet_cache_dir, usecols=usecols, nrows=nrows)
         if not hasattr(df, "columns") or len(df.columns) == 0:
             raise ValueError(f"no columns could be read from {path}")
         return df
@@ -1022,7 +1052,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         mode = "force_cpu" if force_cpu else "force_gpu" if force_gpu else "auto"
         if not force_cpu and not force_gpu:
             use_gpu, route_reason = pick_engine_for(
-                path, args.op, verbose=args.verbose, details=route_details
+                path, args.op, verbose=args.verbose, details=route_details,
+                calibration_file="" if args.parquet_cache_dir else args.calibration_file,
             )
             force_cpu = not use_gpu
             if args.verbose and route_reason:
@@ -1058,22 +1089,34 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         fallback_reason = used.reason
 
     total_seconds = round(time.perf_counter() - t_start, 6)
+    if not fallback_reason and cache_trace["status"] == "disabled" and not nrows and not usecols:
+        try:
+            cost_model.record(args.calibration_file, op=args.op, source=path,
+                              backend=used.name, size=os.path.getsize(path),
+                              seconds=total_seconds)
+        except OSError as exc:
+            _log(f"calibration measurement not saved: {exc}")
     decision_reason = route_reason or (
         "GPU forced by the caller" if mode == "force_gpu" else
+        "the calibrated operation model selected GPU" if
+        route_details.get("policy") == "calibrated_cost_model" else
         "the measured file-size crossover policy selected GPU; this is not an "
         "operation-specific cost prediction"
     )
     decision = execution_decision_record(
         mode=mode,
-        policy="caller_override" if mode != "auto" else "measured_file_size_crossover",
+        policy="caller_override" if mode != "auto" else
+               route_details.get("policy", "measured_file_size_crossover"),
         selected_backend=selected_backend,
         actual_backend=used.name,
         reason=decision_reason,
         signals={"operation": args.op, "file_size_bytes": os.path.getsize(path),
                  **route_details},
         observed={"phase": "request_total", "elapsed_seconds": total_seconds,
-                  "compute_seconds": payload.get("compute_seconds"), "rows_scanned": rows},
+                  "compute_seconds": payload.get("compute_seconds"), "rows_scanned": rows,
+                  "parquet_cache": cache_trace},
         fallback_reason=fallback_reason,
+        estimated_seconds=(route_details.get("estimated_seconds") or {}).get(selected_backend),
     )
 
     result: Dict[str, Any] = {

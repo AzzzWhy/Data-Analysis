@@ -483,19 +483,18 @@ class Agent:
                 print(line, flush=True)
 
     def run(self, user_query: str) -> str:
-        """Answer one question. Any session left open is released on the way out."""
+        """Answer one question. Active sessions close; bounded frames may stay warm."""
         if self.client is None or not self.model:
             return '[model call failed] 尚未配置 API 地址、密钥与模型。请输入 /settings 打开连接设置。'
         try:
             return self._run_inner(user_query)
         finally:
             # Structural guarantee rather than a prompt request. The model is asked to call
-            # close, and usually does, but a leaked resident frame costs gigabytes and would
-            # silently degrade every later question. Observed once in practice, so this is
-            # enforced in code.
+            # close, and usually does, but a leaked active session is unsafe. The worker can
+            # retain a bounded, expiring GPU frame for the next question.
             released = skills.close_all_sessions()
             if released.get("closed"):
-                self.log(f"  [session] auto-released {released['closed']} session(s) left open"
+                self.log(f"  [session] auto-closed {released['closed']} session(s) left open"
                          f" (the model did not call close)")
 
     def _run_inner(self, user_query: str) -> str:

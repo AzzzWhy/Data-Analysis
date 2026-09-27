@@ -536,11 +536,36 @@ agent can tell whether the GPU path was actually taken:
 
 `execution_decision` is also returned for resident session open, reuse and analysis steps.
 Its `selected_backend` and `actual_backend` differ when a GPU attempt falls back to pandas.
-Until a per-operation cost model has been calibrated, elapsed-time and peak-memory estimates
-are explicitly null; the session admission threshold (`admission_required_free_gb`) is a safety
-headroom requirement, not a prediction of peak memory. Existing result fields remain available.
+Without a local calibration file, elapsed-time and peak-memory estimates are explicitly null.
+With at least three clean CPU and GPU measurements for the same operation and file format at
+two sizes, a checked linear model can set `estimate.elapsed_seconds` and route with a 10% GPU
+margin. Peak-memory prediction remains null; the session admission threshold
+(`admission_required_free_gb`) is a safety headroom requirement, not a prediction. Existing
+result fields remain available.
 Run `python skills/cudf-analytics/scripts/execution_decision_test.py` for the CPU-only contract
 checks, including forced GPU requests on machines without cuDF.
+
+The following optimizations are available in the analytics engine:
+
+- `auto` computes each numeric column's quartiles once and reuses Q1/Q3 in outlier detection.
+- A closed GPU session can leave a validated warm frame for the next question in the same
+  agent process. The default budget is 4096 MB and the idle lifetime is 900 seconds; change
+  `SESSION_WARM_CACHE_MB` / `SESSION_WARM_TTL_SECONDS`, or set either to `0` to disable it.
+  Active session handles still close after every answer. Worker exit or `close all` without
+  `retain` releases the cache. `list` reports its count and memory use.
+- To opt in to disk conversion, pass `--parquet-cache-dir <directory>` (or set
+  `GPU_ANALYSIS_PARQUET_CACHE_DIR`). A full CSV read builds a Parquet copy; later full reads
+  can use it. The source's path, byte size and nanosecond modification time are in the cache
+  key, and a change during conversion aborts the request. `execution_decision.observed.parquet_cache`
+  reports `built`, `hit`, `disabled` or `unavailable` and conversion time. Partial reads do not
+  use this cache. The original CSV is never modified. Provision and clean the directory as
+  needed; the engine does not silently write beside the dataset.
+- To opt in to learned routing, pass `--calibration-file <measurements.jsonl>` (or set
+  `GPU_ANALYSIS_CALIBRATION_FILE`). Successful full, uncached one-off runs append only
+  operation, format, backend, byte size and measured seconds (no dataset path or rows).
+  Collect CPU and GPU A/B runs with `--force-cpu` and `--force-gpu` at multiple sizes.
+  If the fit lacks coverage or is noisy, the existing measured size threshold remains in use.
+  Parquet-cache runs are not mixed into CSV cold-run calibration.
 
 Exit codes, observed rather than assumed:
 

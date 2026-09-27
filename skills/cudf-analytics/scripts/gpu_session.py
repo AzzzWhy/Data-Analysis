@@ -82,6 +82,8 @@ PLANS_MODULE = _import_plans()
 # 20M-row file costs roughly 1-2 GB of device memory; refusing the 5th is better than
 # letting an agent work the box into an OOM it cannot diagnose.
 MAX_SESSIONS = int(os.environ.get("SESSION_MAX", "4"))
+WARM_CACHE_MB = max(0, int(os.environ.get("SESSION_WARM_CACHE_MB", "4096")))
+WARM_TTL_SECONDS = max(0, int(os.environ.get("SESSION_WARM_TTL_SECONDS", "900")))
 
 # Refuse an open when the device would be left too tight to finish the work.
 # The multiplier covers the parsed frame plus transient intermediates and result copies.
@@ -130,13 +132,69 @@ class Session:
     analysis_seconds: float = 0.0
     cpu_load_seconds: Optional[float] = None
     reason: Optional[str] = None
+    usecols: Optional[tuple] = None
     # The strategy this session is following, if a goal was supplied at open time. Held on
     # the session so progress survives across analyze calls without the model tracking it.
     plan: Any = None
 
 
 SESSIONS: Dict[str, Session] = {}
+WARM_CACHE: Dict[tuple, Session] = {}
 _COUNTER = {"n": 0}
+
+
+def _cache_key(path: str, usecols: Optional[tuple]) -> tuple:
+    return path, usecols
+
+
+def _frame_bytes(sess: Session) -> int:
+    try:
+        return int(sess.frame.memory_usage(deep=True).sum())
+    except Exception:
+        return 0
+
+
+def _release_unused_gpu_blocks() -> None:
+    try:
+        import cupy  # type: ignore
+        cupy.get_default_memory_pool().free_all_blocks()
+    except Exception:
+        pass
+
+
+def _prune_cache() -> None:
+    now = time.monotonic()
+    evicted = False
+    for key, sess in list(WARM_CACHE.items()):
+        try:
+            valid = _file_identity(sess.path) == sess.identity
+        except OSError:
+            valid = False
+        if not valid or now - sess.opened_at > WARM_TTL_SECONDS:
+            WARM_CACHE.pop(key, None)
+            evicted = True
+    budget = WARM_CACHE_MB * 1024 * 1024
+    while WARM_CACHE and sum(_frame_bytes(s) for s in WARM_CACHE.values()) > budget:
+        oldest = min(WARM_CACHE, key=lambda k: WARM_CACHE[k].opened_at)
+        WARM_CACHE.pop(oldest, None)
+        evicted = True
+    if evicted:
+        sess = None
+        _release_unused_gpu_blocks()
+
+
+def _retain(sess: Session) -> bool:
+    """Retain only bounded GPU frames; never retain a plan or an active session handle."""
+    if not sess.engine.is_gpu or not WARM_CACHE_MB or not WARM_TTL_SECONDS:
+        return False
+    size = _frame_bytes(sess)
+    if not size or size > WARM_CACHE_MB * 1024 * 1024:
+        return False
+    sess.plan = None
+    sess.opened_at = time.monotonic()
+    WARM_CACHE[_cache_key(sess.path, sess.usecols)] = sess
+    _prune_cache()
+    return _cache_key(sess.path, sess.usecols) in WARM_CACHE
 
 
 def _default_args() -> argparse.Namespace:
@@ -199,6 +257,10 @@ def do_open(req: dict) -> dict:
             open_sessions=sorted(SESSIONS),
         )
 
+    usecols = req.get("usecols")
+    cols = tuple(c.strip() for c in str(usecols).split(",") if c.strip()) if usecols else None
+    _prune_cache()
+
     # Reuse an existing session for the same file instead of loading the dataset again.
     #
     # Why: a caller that loses track of the session id it was handed opens a second session
@@ -206,8 +268,15 @@ def do_open(req: dict) -> dict:
     # and left the first session stranded until a cleanup backstop ran -- real device memory
     # held for no benefit. Returning the existing handle costs nothing and cannot be worse
     # than a second full load, so it is the right default rather than an optimisation.
-    for existing in SESSIONS.values():
-        if existing.path == path:
+    invalidated = False
+    for existing in list(SESSIONS.values()):
+        if existing.path != path:
+            continue
+        if _file_identity(path) != existing.identity:
+            SESSIONS.pop(existing.sid, None)
+            invalidated = True
+            continue
+        if existing.usecols == cols:
             return {
                 "ok": True,
                 "session_id": existing.sid,
@@ -236,12 +305,55 @@ def do_open(req: dict) -> dict:
                     f"{existing.sid}** for every later call, and release it with close."
                 ),
             }
+    existing = None
+    if invalidated:
+        _release_unused_gpu_blocks()
+
+    cached = WARM_CACHE.pop(_cache_key(path, cols), None)
+    if cached is not None and not req.get("force_cpu"):
+        _COUNTER["n"] += 1
+        cached.sid = f"s{_COUNTER['n']}"
+        cached.opened_at = time.perf_counter()
+        cached.steps = 0
+        cached.analysis_seconds = 0.0
+        SESSIONS[cached.sid] = cached
+        out = {
+            "ok": True, "session_id": cached.sid, "file": os.path.basename(path),
+            "rows": cached.rows, "columns": [str(c) for c in cached.frame.columns],
+            "engine": cached.engine.name, "gpu": cached.engine.gpu_name,
+            "accelerated": cached.engine.is_gpu, "load_seconds": 0.0,
+            "cache_hit": True, "reused_existing_session": False,
+            "already_loaded": True, "resident_mb": round(_frame_bytes(cached) / 1024**2, 1),
+            "execution_decision": GA.execution_decision_record(
+                mode="reuse", policy="warm_cache", selected_backend=cached.engine.name,
+                actual_backend=cached.engine.name,
+                reason="reused a bounded, file-validated GPU frame from a previous question",
+                signals={"operation": "open", "file_size_bytes": cached.identity[1],
+                         "session_id": cached.sid},
+                observed={"phase": "warm_cache_hit", "elapsed_seconds": round(
+                    time.perf_counter() - request_started, 6), "rows_scanned": 0},
+            ),
+        }
+        if req.get("goal") or req.get("plan"):
+            cached.plan = PLANS_MODULE.build_plan(
+                plan_id=f"p{cached.sid}", goal=str(req.get("goal") or ""),
+                kind=req.get("plan_kind"), group_cols=_pick_group_columns(cached.frame),
+            )
+            out["plan"] = cached.plan.as_dict()
+        return out
+    if cached is not None:
+        WARM_CACHE[_cache_key(path, cols)] = cached
 
     # Refuse before loading rather than after: once the parse starts, a failure surfaces as
     # an opaque OOM in the middle of the read.
     size_gb = os.path.getsize(path) / (1024 ** 3)
     free_gb = _free_gpu_gb()
     need_gb = size_gb * MEM_HEADROOM + MEM_FLOOR_GB
+    while free_gb is not None and free_gb < need_gb and WARM_CACHE:
+        oldest = min(WARM_CACHE, key=lambda k: WARM_CACHE[k].opened_at)
+        WARM_CACHE.pop(oldest, None)
+        _release_unused_gpu_blocks()
+        free_gb = _free_gpu_gb()
     if free_gb is not None and free_gb < need_gb:
         return _err(
             f"Not enough free device memory, load refused: the file is about {size_gb:.2f}GB, "
@@ -282,11 +394,6 @@ def do_open(req: dict) -> dict:
     except Exception as exc:
         return _err(f"engine init failed: {type(exc).__name__}: {exc}")
 
-    usecols = req.get("usecols")
-    cols = None
-    if usecols:
-        cols = [c.strip() for c in str(usecols).split(",") if c.strip()]
-
     started = time.perf_counter()
     read_fallback = None
     try:
@@ -312,7 +419,7 @@ def do_open(req: dict) -> dict:
     sess = Session(
         sid=sid, path=path, engine=eng, frame=frame, rows=int(len(frame)),
         identity=_file_identity(path), load_seconds=load_seconds,
-        reason=route_reason if selected_backend == "pandas" else None,
+        reason=route_reason if selected_backend == "pandas" else None, usecols=cols,
     )
     # A CPU-resident frame is the honest baseline for this same file, and it is measured
     # without touching the GPU. Failures here must not fail the open.
@@ -443,12 +550,18 @@ def do_analyze(req: dict) -> dict:
     # silent wrong answer, which is worse than an error.
     try:
         if _file_identity(sess.path) != sess.identity:
+            SESSIONS.pop(sid, None)
+            sess = None
+            _release_unused_gpu_blocks()
             return _err(
                 "The file changed while this session was open (size or modification time). "
                 "Rather than answer from the old snapshot, the session is invalidated: open "
                 "the file again."
             )
     except OSError as exc:
+        SESSIONS.pop(sid, None)
+        sess = None
+        _release_unused_gpu_blocks()
         return _err(f"could not verify the file state, session invalidated: {exc}")
 
     op = str(req.get("op") or "auto")
@@ -589,10 +702,13 @@ def _step_summary(op: str, payload: Any) -> Optional[str]:
 
 
 def do_list(_req: dict) -> dict:
+    _prune_cache()
     return {
         "ok": True,
         "count": len(SESSIONS),
         "max_sessions": MAX_SESSIONS,
+        "warm_cache_count": len(WARM_CACHE),
+        "warm_cache_mb": round(sum(_frame_bytes(s) for s in WARM_CACHE.values()) / 1024**2, 1),
         "sessions": [
             {
                 "session_id": s.sid,
@@ -612,17 +728,26 @@ def do_close(req: dict) -> dict:
     sid = _sid_from(req)
     if sid in (None, "", "all"):
         n = len(SESSIONS)
+        retained = sum(_retain(sess) for sess in list(SESSIONS.values())) if req.get("retain") else 0
         SESSIONS.clear()
-        return {"ok": True, "closed": n, "note": "released the memory held by all sessions."}
+        if not req.get("retain"):
+            WARM_CACHE.clear()
+            _release_unused_gpu_blocks()
+        return {"ok": True, "closed": n, "cached": retained,
+                "note": ("retained bounded GPU frames for later questions" if retained else
+                         "released the memory held by all sessions")}
     sess = SESSIONS.pop(sid, None)
     if sess is None:
         return _err(f"no such session: {sid}")
+
+    retained = _retain(sess) if req.get("retain") else False
 
     total = sess.load_seconds + sess.analysis_seconds
     out = {
         "ok": True,
         "session_id": sid,
         "closed": 1,
+        "cached": bool(retained),
         "steps": sess.steps,
         "load_seconds": round(sess.load_seconds, 3),
         "analysis_seconds": round(sess.analysis_seconds, 3),
@@ -646,8 +771,9 @@ def do_close(req: dict) -> dict:
         }
     # Free device memory deterministically rather than waiting for the next collection.
     try:
-        del sess.frame
-        if sess.engine.is_gpu:
+        if not retained:
+            del sess.frame
+        if sess.engine.is_gpu and not retained:
             import cupy  # type: ignore
 
             cupy.get_default_memory_pool().free_all_blocks()

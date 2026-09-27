@@ -760,18 +760,19 @@ def _resolve_data_path(file_path: str) -> str:
 
 def close_all_sessions() -> dict:
     """
-    Release every open session. Called at the end of an agent run.
+    Close every active handle at the end of an agent run. A bounded, short-lived GPU
+    frame cache may keep its data for the next question; process exit frees it all.
 
     Structural backstop, not a substitute for the model calling close: prompt instructions
     to clean up are unreliable (observed: a real run left a 1.7 GB session open), and a
-    leaked resident frame degrades every later task on the box. Returns what it released.
+    leaked active session degrades later tasks on the box. Returns what it closed.
     """
     try:
         resp = _worker_call({"cmd": "list"})
         opened = resp.get("count") or 0
         if not opened:
             return {"closed": 0}
-        out = _worker_call({"cmd": "close", "sid": "all"})
+        out = _worker_call({"cmd": "close", "sid": "all", "retain": True})
         return {"closed": opened, "detail": out}
     except Exception as exc:
         return {"closed": 0, "error": f"{type(exc).__name__}: {exc}"}
@@ -806,7 +807,7 @@ def dataset_session(operation: str, file_path: str = None, session_id: str = Non
             req = {"cmd": "analyze", "sid": session_id, "op": op or "auto", "by": by,
                    "agg": agg, "columns": columns, "top_k": top_k}
         elif operation == "close":
-            req = {"cmd": "close", "sid": session_id or "all"}
+            req = {"cmd": "close", "sid": session_id or "all", "retain": True}
         else:
             req = {"cmd": "list"}
 
