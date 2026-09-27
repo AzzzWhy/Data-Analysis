@@ -43,3 +43,18 @@ connection.json
 # Private project summaries: risk assessment and self-critique aimed at the author only.
 # Kept on the PC outside the repository, never published.
 PROJECT_SUMMARY_*.md
+
+# Agent working notes, not project deliverables.
+#
+# docs/superpowers/plans/ holds implementation plans written by agent sessions. They quote the
+# real jump-host address, the node name and its SSH port in working scp/ssh examples, and the
+# organiser's rules say account, password and port information must not appear in a code
+# repository. docs/superpowers/specs/ stays tracked on purpose: that is the reviewed design
+# document, and it uses <jump-host> / <node-ssh-port> placeholders throughout.
+docs/superpowers/plans/
+
+# Same reasoning: a scratch ledger for subagent-driven development, not part of the submission.
+.superpowers/
+
+# Local demo data generated while testing the workbench.
+_gui_demo/
