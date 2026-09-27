@@ -1,42 +1,89 @@
 #!/usr/bin/env python3
 """Exercise the session worker standalone: open, multi-step analyze, close.
 
-Run on GB10 from the skill's scripts directory:
-    python session_worker_test.py /path/to/data.csv
+    python session_worker_test.py                      # generate a small fixture locally
+    python session_worker_test.py /path/to/data.csv    # against an existing dataset
+    DEMO_DATA=/path/to/data.csv python session_worker_test.py
+    python session_worker_test.py --require-gpu        # fail unless the cuDF path really ran
+
+The lifecycle is the same whether the frame is held on the GPU or in CPU memory, so a machine
+without cuDF still verifies open/analyze/close, the no-re-read accounting, the staleness guard and
+the error paths. Only the engine identity needs a device, and that is reported as SKIP rather than
+silently dropped. On GB10, point this at the demo dataset to get the GPU numbers.
 """
+import argparse
+import atexit
 import json
 import os
 import subprocess
 import sys
 import time
 
-DATA = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("DEMO_DATA", "sales_demo.csv")
 HERE = os.path.dirname(os.path.abspath(__file__))
 FAILS = []
 
-# Fail before starting the worker when the dataset is not where the test expects it.
-#
-# Without this the missing file surfaced as `open succeeded` failing and then 19 cascading failures
-# ("no such session: None" for every operation), with the actual cause buried in one detail line.
-# A 20-line failure list reads like the code is broken when the real problem is that this test was
-# invoked without its dataset. It also needs a large file on purpose: the session path is only
-# routed to the GPU above the measured crossover, so a small fixture would be refused by design and
-# this test could not exercise what it exists to exercise.
-if not os.path.isfile(DATA):
-    print(f"no dataset at {os.path.abspath(DATA)}")
-    print()
-    print("This test needs a large file (tens of millions of rows): the session path is routed to")
-    print("the GPU only above the measured crossover, so a small fixture is refused by design.")
-    print()
-    print("  python session_worker_test.py /path/to/large.csv")
-    print("  DEMO_DATA=/path/to/large.csv python session_worker_test.py")
-    sys.exit(2)
+_ap = argparse.ArgumentParser(description="session worker standalone checks")
+_ap.add_argument("data", nargs="?", default=None,
+                 help="dataset to open; a small fixture is generated when omitted")
+_ap.add_argument("--fixture-rows", type=int, default=200_000,
+                 help="rows in the locally generated fixture")
+_ap.add_argument("--require-gpu", action="store_true",
+                 help="fail instead of SKIP when the worker could not run on cuDF")
+args = _ap.parse_args()
 
 
 def check(label, ok, detail=""):
     print(f"  [{'PASS' if ok else 'FAIL'}] {label}{'  ' + detail if detail else ''}")
     if not ok:
         FAILS.append(label)
+
+
+def skip(label, why):
+    """A device-only assertion that could not run. Recorded, never reported as PASS."""
+    print(f"  [SKIP] {label}  {why}")
+
+
+def count_data_rows(path):
+    n = 0
+    with open(path, "rb") as fh:
+        for _ in fh:
+            n += 1
+    return max(n - 1, 0)
+
+
+def scanned(r):
+    value = r.get("rows_scanned")
+    if value is not None:
+        return value
+    for key in ("auto", "groupby", "corr", "outliers", "profile", "summary"):
+        block = r.get(key)
+        if isinstance(block, dict) and block.get("rows_scanned") is not None:
+            return block["rows_scanned"]
+    return None
+
+
+DATA = args.data or os.environ.get("DEMO_DATA")
+if DATA:
+    # Fail before starting the worker when the dataset is not where the test expects it. Without
+    # this a missing file surfaced as `open succeeded` failing and then 19 cascading failures
+    # ("no such session: None" for every operation), with the real cause buried in one detail line.
+    if not os.path.isfile(DATA):
+        print(f"no dataset at {os.path.abspath(DATA)}")
+        sys.exit(2)
+    EXPECTED_ROWS = count_data_rows(DATA)
+else:
+    if HERE not in sys.path:
+        sys.path.insert(0, HERE)
+    from smoke_test import make_fixture
+    DATA = os.path.join(HERE, f"session_fixture_{os.getpid()}.csv")
+    EXPECTED_ROWS = make_fixture(DATA, args.fixture_rows)["rows"]
+    atexit.register(lambda: os.path.exists(DATA) and os.remove(DATA))
+    print(f"generated fixture: {DATA} ({EXPECTED_ROWS:,} rows, "
+          f"{os.path.getsize(DATA) / 1e6:.2f} MB)  (removed on exit)")
+
+if EXPECTED_ROWS < 1:
+    print("fixture has no data rows")
+    sys.exit(2)
 
 
 p = subprocess.Popen([sys.executable, os.path.join(HERE, "gpu_session.py")],
@@ -58,10 +105,16 @@ r = call({"cmd": "ping"})
 print(f"  engine={r.get('engine')} gpu={r.get('gpu')} free={r.get('free_gpu_gb')}GB "
       f"max_sessions={r.get('max_sessions')}")
 check("ping responds", r.get("ok") is True)
+_worker_gpu = r.get("engine") == "cudf"
 
 print("=== open ===")
+# The worker refuses a plain open below the measured crossover and tells the caller to pick an
+# engine deliberately, because a GPU session for a small file wastes device memory. Ask for the
+# engine this machine can actually hold resident, which is what the tool instructs the model to do.
 t0 = time.perf_counter()
-r = call({"cmd": "open", "path": DATA})
+req_open = {"cmd": "open", "path": DATA}
+req_open["force_gpu" if _worker_gpu else "force_cpu"] = True
+r = call(req_open)
 wall = time.perf_counter() - t0
 print(f"  ok={r.get('ok')} rows={r.get('rows')} engine={r.get('engine')} "
       f"load={r.get('load_seconds')}s cpu_load={r.get('cpu_load_seconds')}s "
@@ -69,9 +122,25 @@ print(f"  ok={r.get('ok')} rows={r.get('rows')} engine={r.get('engine')} "
 check("open succeeded", r.get("ok") is True, r.get("error", ""))
 sid = r.get("session_id")
 load_seconds = r.get("load_seconds") or 0.0
-check("rows match the file", r.get("rows") == 20_000_000, f"rows={r.get('rows')}")
-check("engine is cudf", r.get("engine") == "cudf")
-check("resident frame measured", isinstance(r.get("resident_mb"), (int, float)))
+check("rows match the file", r.get("rows") == EXPECTED_ROWS,
+      f"rows={r.get('rows')} file has {EXPECTED_ROWS:,}")
+if _worker_gpu:
+    check("engine is cudf", r.get("engine") == "cudf", f"got {r.get('engine')!r}")
+elif args.require_gpu:
+    check("engine is cudf (--require-gpu)", False, f"worker reported {r.get('engine')!r}")
+else:
+    skip("engine is cudf", f"worker resolved engine={r.get('engine')!r} on this machine; "
+                          f"--require-gpu turns this into a failure")
+if _worker_gpu:
+    check("resident frame measured", isinstance(r.get("resident_mb"), (int, float)),
+          f"resident_mb={r.get('resident_mb')}")
+else:
+    skip("resident frame measured",
+         "the worker reports resident_mb only for GPU frames (gpu_session.py:437-443), so a "
+         "resident pandas frame's memory cost is not reported at all -- asserting None would "
+         "just enshrine the gap. Flagged upstream; --require-gpu runs the real assertion")
+    if args.require_gpu:
+        check("resident frame measured (--require-gpu)", False, "no GPU session to measure")
 
 print("=== multi-step analyze on the resident frame ===")
 steps = [
@@ -87,12 +156,13 @@ for op, kw in steps:
     r = call({"cmd": "analyze", "sid": sid, "op": op, **kw})
     ok = r.get("ok") is True
     step_times.append(r.get("step_seconds", 0))
-    print(f"  {op:<9} ok={ok} rows_scanned={r.get('rows_scanned')} "
+    print(f"  {op:<9} ok={ok} rows_scanned={scanned(r)} "
           f"step={r.get('step_seconds')}s cumulative={r.get('cumulative_seconds')}s")
     if not ok:
         print(f"      error: {r.get('error')}")
     check(f"{op} on resident frame", ok)
-    check(f"{op} scanned full data", r.get("rows_scanned") == 20_000_000)
+    check(f"{op} scanned full data", scanned(r) == EXPECTED_ROWS,
+          f"got {scanned(r)} expected {EXPECTED_ROWS:,}")
 
 print("=== proof that no step re-reads the file ===")
 # A wall-clock threshold would be the wrong test: `summary` legitimately costs seconds because
@@ -109,8 +179,14 @@ r = call({"cmd": "analyze", "sid": sid, "op": "groupby", "by": "region",
 t_b = r.get("step_seconds", 0)
 print(f"  identical groupby twice: {t_a:.3f}s then {t_b:.3f}s "
       f"(a re-read would add ~{load_seconds:.2f}s to the second)")
-check("repeating an op stays cheap (no re-read)", t_b < load_seconds / 2,
-      f"{t_b:.3f}s vs load {load_seconds:.2f}s")
+if load_seconds >= 0.05:
+    check("repeating an op stays cheap (no re-read)", t_b < load_seconds / 2,
+          f"{t_b:.3f}s vs load {load_seconds:.2f}s")
+else:
+    skip("repeating an op stays cheap",
+         f"load is only {load_seconds:.3f}s at this size, so a re-read is not separable from "
+         f"computation by timing -- the stability delta and the cumulative accounting below "
+         f"still prove no hidden read")
 check("repeat cost is stable", abs(t_b - t_a) < 0.5, f"delta={abs(t_b - t_a):.3f}s")
 
 # The accounting must close: cumulative == load + everything else accounted for.
@@ -137,7 +213,8 @@ try:
     # seconds and a touch in the same second as the load compared equal -- the guard failed
     # open on exactly the case it exists for. It now uses nanosecond mtime, and this test
     # changes the size too, so it holds even on a coarse-timestamp filesystem.
-    r_open = call({"cmd": "open", "path": copy_path})
+    r_open = call(dict({"cmd": "open", "path": copy_path},
+                       **({"force_gpu": True} if _worker_gpu else {"force_cpu": True})))
     copy_sid = r_open.get("session_id")
     check("copy opened for the staleness check", r_open.get("ok") is True, str(r_open)[:120])
 
