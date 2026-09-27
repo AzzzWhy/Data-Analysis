@@ -46,6 +46,14 @@ FAILED_CASES=""
 ONLY=""
 [ "$1" = "--only" ] && ONLY="$2"
 
+# One pattern, used for both the display and the forbid checks, so the two cannot drift apart.
+# It is deliberately not anchored to the start of the line: Tui.trace() strips the leading
+# indent from every line containing "->" (agent_main.py), so "^  \[round" matches nothing in
+# the rendered log -- and a forbid check run against an empty selection passes no matter what
+# the agent did. TRACE_TOTAL below is what notices if that ever happens again.
+TRACE_RE='\[round [0-9]+\] ->'
+TRACE_TOTAL=0
+
 # The header promises the interpreter can be chosen, so honour it: `python` on PATH is whatever
 # the machine happens to have, and on a box with several Pythons that is often one without
 # pandas or openai -- which fails every case for a reason that has nothing to do with the agent.
@@ -63,8 +71,16 @@ run_case() {
   local code=$?
 
   echo "ASK : $question"
-  echo "--- tool trace ---"
-  grep -E "^  \[round|^      OK|^      FAILED|\[api error\]|\[warn\]" "$out" | head -8
+  # Extracted once and reused below: what the reader sees in the log and what the forbid check
+  # matches must be the same lines, or a green assertion and the trace a human trusts can be
+  # different things.
+  local trace_only trace_n
+  trace_only=$(grep -E "$TRACE_RE" "$out")
+  trace_n=$([ -n "$trace_only" ] && printf '%s\n' "$trace_only" | grep -c . || echo 0)
+  TRACE_TOTAL=$((TRACE_TOTAL + trace_n))
+
+  echo "--- tool trace (${trace_n} call(s)) ---"
+  grep -E "$TRACE_RE|^      OK|^      FAILED|\[api error\]|\[warn\]" "$out" | head -8
   [ -s "$out" ] || echo "(no output captured)"
 
   local ok=1
@@ -86,13 +102,16 @@ run_case() {
     # Checking the whole transcript produces false failures: a good answer to a conceptual
     # question legitimately ends with "if you give me a data file I can call a tool for
     # that", which names the tool without any tool having been invoked.
-    local trace_only
-    trace_only=$(grep -E "^  \[round" "$out")
-    if echo "$trace_only" | grep -qE "$forbid"; then
+    if [ "$trace_n" -eq 0 ]; then
+      # A tool-free answer does satisfy a forbid, and for the one conceptual case that is the
+      # entire point of the case. It is counted suite-wide at the bottom, so a matcher that has
+      # quietly stopped matching cannot keep this branch company for every case at once.
+      echo "  no tool invoked, nothing for the forbid to match"
+    elif echo "$trace_only" | grep -qE "$forbid"; then
       echo "  !! forbidden tool was invoked: $forbid"
       ok=0
     else
-      echo "  no tool invoked (as expected)"
+      echo "  ${trace_n} call(s), none forbidden"
     fi
   fi
 
@@ -176,7 +195,21 @@ run_case "plan-attached" \
   "load refused|device memory|out of memory|insufficient memory"
 
 echo "==============================================================="
-echo "PASS=$PASS  FAIL=$FAIL"
+echo "PASS=$PASS  FAIL=$FAIL  tool calls matched across the suite=$TRACE_TOTAL"
+
+# The guard that was missing. Most of these cases load a real file and must produce tool calls,
+# so a whole suite with not one matched trace line is not an agent that never reaches for a
+# tool -- it is the matcher failing to see them, which turns every forbid assertion above into
+# a tautology. That is exactly how five of these cases passed for as long as they have.
+# Skipped under --only, where one conceptual case legitimately reports zero calls.
+if [ -z "$ONLY" ] && [ "$TRACE_TOTAL" -eq 0 ]; then
+  echo "SUITE BROKEN: /$TRACE_RE/ matched nothing in any case."
+  echo "Real runs call tools, so this means the rendered trace format changed and every forbid"
+  echo "check reported above was vacuously satisfied. Fix the matcher before trusting any"
+  echo "green in this output."
+  exit 1
+fi
+
 if [ -n "$FAILED_CASES" ]; then
   echo "failed:$FAILED_CASES"
   exit 1
