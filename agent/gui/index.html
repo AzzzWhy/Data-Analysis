@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GPU加速与数据分析 · 工作台</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <span class="mark">//✦</span>
+    <span class="eyebrow">GPU × DATA</span>
+    <h1>GPU加速与数据分析 · 工作台</h1>
+  </div>
+  <div class="context">
+    <span id="ctx-model">—</span> · <span id="ctx-host">—</span> · <span id="ctx-file">未选择文件</span>
+  </div>
+</header>
+
+<div id="banner" class="banner" hidden></div>
+
+<main>
+  <aside>
+    <section class="sect">
+      <h2>数据文件</h2>
+      <div id="files" class="files"></div>
+      <p class="hint">列表来自 <code>list_datasets</code> 的有界搜索根，不含主目录子层。</p>
+    </section>
+
+    <section class="sect">
+      <h2>会话</h2>
+      <div id="sess-card" class="card">
+        <div class="row"><span class="k">状态</span><span class="v" id="sess-state">—</span></div>
+        <div class="row"><span class="k">会话数</span><span class="v" id="sess-count">—</span></div>
+        <div class="row"><span class="k">步数</span><span class="v" id="sess-steps">—</span></div>
+        <div class="row"><span class="k">占用</span><span class="v" id="sess-mb">—</span></div>
+        <div class="row"><span class="k">保留帧</span><span class="v" id="sess-frames">—</span></div>
+      </div>
+      <p class="hint" id="sess-hint"></p>
+      <button id="release" class="ghost">释放会话</button>
+    </section>
+  </aside>
+
+  <section class="pane">
+    <h2>执行</h2>
+    <form id="runner" class="runner">
+      <label>工具
+        <select id="tool">
+          <option value="analyze_dataset">analyze_dataset（单次，无驻留）</option>
+          <option value="dataset_session">dataset_session（驻留会话）</option>
+          <option value="export_deliverables">export_deliverables（出报告与图表）</option>
+          <option value="list_datasets">list_datasets（发现数据）</option>
+        </select>
+      </label>
+      <label>会话操作
+        <select id="session-op" disabled>
+          <option value="open">open</option>
+          <option value="analyze">analyze</option>
+          <option value="close">close</option>
+          <option value="list">list</option>
+        </select>
+      </label>
+      <label>分析操作
+        <select id="op">
+          <option value="auto">auto</option>
+          <option value="profile">profile</option>
+          <option value="summary">summary</option>
+          <option value="groupby">groupby</option>
+          <option value="corr">corr</option>
+          <option value="outliers">outliers</option>
+        </select>
+      </label>
+      <label>分组列 <input id="by" placeholder="region" autocomplete="off"></label>
+      <label>聚合 <input id="agg" placeholder="revenue:sum,mean" autocomplete="off"></label>
+      <label class="check"><input id="force-cpu" type="checkbox"> force_cpu</label>
+      <label class="check"><input id="force-gpu" type="checkbox"> force_gpu</label>
+      <button type="submit" id="run">直接工具调用</button>
+    </form>
+    <p class="hint">这一栏不经过模型：按下去就是真的一次 <code>skills</code> 调用，
+      返回的是引擎自己的 <code>execution_decision</code>。提问区要等模型客户端可用。</p>
+
+    <h2>输出</h2>
+    <div id="log" class="log" aria-live="polite"></div>
+  </section>
+
+  <section class="pane right">
+    <h2>结果</h2>
+    <div id="answer" class="answer" hidden></div>
+    <div id="charts" class="charts"></div>
+    <div id="tables" class="tables"></div>
+  </section>
+</main>
+
+<footer>
+  <span id="phase">待命</span>
+  <span class="spacer"></span>
+  <span id="chip" class="chip muted">no result yet</span>
+  <span id="elapsed">—</span>
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>

@@ -403,7 +403,8 @@ class Workbench:
                 parsed = json.loads(raw)
             except (TypeError, json.JSONDecodeError):
                 parsed = {"success": False, "error": "tool returned a non-JSON payload"}
-            job.emit("tool_result", {"round": job.rounds, "name": tool, "result": parsed,
+            job.emit("tool_result", {"round": job.rounds, "name": tool, "args": clean,
+                                     "result": parsed, "chip": chip_state(parsed),
                                      "seconds": round(seconds, 3)})
             self._absorb_result(parsed)
             job.emit("session", self.session_event())
@@ -455,8 +456,12 @@ class Workbench:
     def _make_result_sink(self, job: Job):
         def sink(name: str, payload: dict, seconds: float) -> None:
             job.rounds += 1
+            # The chip is computed here, once, from the real decision record. The browser renders
+            # what it is handed and never re-derives an engine label -- two implementations of
+            # "was this the GPU, and was that on purpose" is how the two views drift apart.
             job.emit("tool_result", {"round": job.rounds, "name": name,
-                                     "result": payload, "seconds": round(seconds, 3)})
+                                     "result": payload, "chip": chip_state(payload),
+                                     "seconds": round(seconds, 3)})
             self._absorb_result(payload)
             job.emit("session", self.session_event())
         return sink
