@@ -654,6 +654,12 @@ def _worker_start():
         [_python_bin(), script],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, bufsize=1,
+        # Both ends pinned to UTF-8. The worker answers with `ensure_ascii=False`, so a Chinese
+        # analysis goal comes back as raw multi-byte text; on a Chinese Windows host the default
+        # pipe encoding is gbk and readline() raised UnicodeDecodeError, which killed every
+        # goal-bearing session. `errors="replace"` degrades one character instead of the call.
+        encoding="utf-8", errors="replace",
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
     )
     # Kill the worker when this process exits, so a crashed agent does not leave a process
     # holding gigabytes of device memory.

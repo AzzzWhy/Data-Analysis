@@ -277,7 +277,7 @@ def do_open(req: dict) -> dict:
             invalidated = True
             continue
         if existing.usecols == cols:
-            return {
+            reply = {
                 "ok": True,
                 "session_id": existing.sid,
                 "file": os.path.basename(path),
@@ -305,6 +305,18 @@ def do_open(req: dict) -> dict:
                     f"{existing.sid}** for every later call, and release it with close."
                 ),
             }
+            # The plan is session state, so a reuse reply has to carry it: the workbench card and
+            # the model both read progress out of this reply, and without it a session that has
+            # run four steps answers as if it had no plan at all. Mirrors the warm-cache branch
+            # below, which builds one when a goal arrives for a session that never had it.
+            if (req.get("goal") or req.get("plan")) and existing.plan is None:
+                existing.plan = PLANS_MODULE.build_plan(
+                    plan_id=f"p{existing.sid}", goal=str(req.get("goal") or ""),
+                    kind=req.get("plan_kind"), group_cols=_pick_group_columns(existing.frame),
+                )
+            if existing.plan is not None:
+                reply["plan"] = existing.plan.as_dict()
+            return reply
     existing = None
     if invalidated:
         _release_unused_gpu_blocks()
