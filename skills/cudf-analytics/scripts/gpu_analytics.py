@@ -125,10 +125,14 @@ def _read_table(mod: Any, path: str, usecols: Optional[Sequence[str]] = None,
     if ext in (".jsonl", ".ndjson"):
         # cuDF has no read_json; JSONL/JSON loading always goes through pandas.
         import pandas as _pd
-        return _pd.read_json(path, lines=True, **kwargs)
+        frame = _pd.read_json(path, lines=True, **({"nrows": nrows} if nrows else {}))
+        return frame[list(usecols)] if usecols else frame
     if ext == ".json":
         import pandas as _pd
-        return _pd.read_json(path, **kwargs)
+        frame = _pd.read_json(path)
+        if nrows:
+            frame = frame.head(nrows)
+        return frame[list(usecols)] if usecols else frame
     if ext in (".xlsx", ".xls"):
         import pandas as _pd
         return _pd.read_excel(path, **kwargs)
@@ -139,6 +143,30 @@ def _read_table(mod: Any, path: str, usecols: Optional[Sequence[str]] = None,
         return mod.read_csv(path, **kwargs)
     except UnicodeDecodeError:
         return mod.read_csv(path, encoding="latin-1", **kwargs)
+
+
+def required_read_columns(op: str, args: argparse.Namespace) -> Optional[List[str]]:
+    """Project only columns that can be proven sufficient for this operation.
+
+    A profile or an unspecified numeric-column request needs the full schema.  In
+    particular, ``--columns`` selects numeric *analysis* columns, whereas a
+    groupby also needs its key.  Keep the caller's explicit --usecols authoritative.
+    """
+    if getattr(args, "usecols", None):
+        names = str(args.usecols).split(",")
+    elif getattr(args, "no_auto_usecols", False):
+        return None
+    elif op == "groupby" and args.by and args.agg and "," not in str(args.by):
+        names = [args.by]
+        names.extend(chunk.partition(":")[0] for chunk in str(args.agg).split("|")
+                     if ":" in chunk)
+        if len(names) == 1:
+            return None
+    elif op in ("summary", "corr", "outliers") and args.select:
+        names = str(args.select).split(",")
+    else:
+        return None
+    return list(dict.fromkeys(name.strip() for name in names if name.strip())) or None
 
 
 def _probe_gpu_name() -> Optional[str]:
@@ -607,7 +635,9 @@ def op_summary(df: Any, eng: Engine, args: argparse.Namespace) -> Dict[str, Any]
     out: Dict[str, Any] = {}
     for name in wanted:
         out[name] = _describe_stats(_col(df, name), eng.is_gpu)
-        out[name]["nulls"] = int(df[name].isnull().sum())
+        # _describe_stats already counted non-null values; avoid another full
+        # column scan just to derive the complement.
+        out[name]["nulls"] = int(len(df) - out[name]["count"])
     return {"columns": wanted, "stats": out}
 
 
@@ -862,10 +892,12 @@ def op_outliers(df: Any, eng: Engine, args: argparse.Namespace,
             below = (val < low) & (delta_low > tol)
             above = (val > high) & (delta_high > tol)
             mask = below | above
-            sub = df[mask]
-            count = int(len(sub))
-            top = sub[list(wanted)].head(int(args.top_k)) if len(wanted) > 1 \
-                else sub[[name]].head(int(args.top_k))
+            count = int(mask.sum())
+            # Filtering the full (potentially very wide) frame would materialize
+            # columns that are discarded immediately. Filter only the columns
+            # returned as examples; the mask still scans every source row.
+            example_cols = list(wanted) if len(wanted) > 1 else [name]
+            top = df[example_cols][mask].head(int(args.top_k))
             records = _frame_records(top, int(args.top_k))
         except Exception as exc:
             if eng.is_gpu:
@@ -1003,6 +1035,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=None,
                    help="read at most N rows (use only when the user asked for a sample)")
     p.add_argument("--usecols", default=None, help="comma-separated columns to read from the file")
+    p.add_argument("--no-auto-usecols", action="store_true",
+                   help="read the full schema even when this operation names all required columns")
     p.add_argument("--force-cpu", action="store_true", help="ignore the GPU (for A/B comparison)")
     p.add_argument("--force-gpu", action="store_true",
                    help="use the GPU even below the measured crossover (for A/B comparison)")
@@ -1031,7 +1065,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if ext and ext not in SUPPORTED_EXTS:
         _log(f"unrecognized extension {ext!r}; attempting to read as CSV")
 
-    usecols = [c.strip() for c in args.usecols.split(",") if c.strip()] if args.usecols else None
+    usecols = required_read_columns(args.op, args)
     nrows = int(args.limit) if args.limit else None
 
     cache_trace: Dict[str, Any] = {"status": "disabled"}
@@ -1053,7 +1087,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if not force_cpu and not force_gpu:
             use_gpu, route_reason = pick_engine_for(
                 path, args.op, verbose=args.verbose, details=route_details,
-                calibration_file="" if args.parquet_cache_dir else args.calibration_file,
+                calibration_file="" if args.parquet_cache_dir or usecols else args.calibration_file,
             )
             force_cpu = not use_gpu
             if args.verbose and route_reason:
@@ -1111,6 +1145,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         actual_backend=used.name,
         reason=decision_reason,
         signals={"operation": args.op, "file_size_bytes": os.path.getsize(path),
+                 "read_columns": usecols,
                  **route_details},
         observed={"phase": "request_total", "elapsed_seconds": total_seconds,
                   "compute_seconds": payload.get("compute_seconds"), "rows_scanned": rows,

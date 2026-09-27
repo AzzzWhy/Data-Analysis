@@ -4,6 +4,8 @@
 
 [使用说明（中文 / English）](docs/USAGE.md) · [User guide](docs/USAGE.md#english)
 
+[Local optimization implementation and validation](docs/OPTIMIZATION.md)
+
 A tool-calling agent that runs exact statistical analysis over large local datasets. On a
 configured NVIDIA GPU it can use RAPIDS cuDF; otherwise it reports the actual pandas/CPU path.
 The model decides what to compute and writes the answer from local tool results; raw dataset
@@ -547,6 +549,14 @@ checks, including forced GPU requests on machines without cuDF.
 
 The following optimizations are available in the analytics engine:
 
+- Named groupby metrics and explicit summary/correlation/outlier columns automatically
+  project the required input columns. Profile/auto and unspecified metric requests preserve
+  the full schema. `--no-auto-usecols` is the full-read reference for a fair A/B test.
+- Interactive CLI/TUI one-step requests can use the bounded GPU frame cache automatically.
+  Single-run `--ask` remains stateless. Resident refusal falls back to the stateless path;
+  set `GPU_ANALYSIS_RESIDENT_INTERACTIVE=0` to disable interactive reuse. These requests
+  do not run an extra CPU baseline or claim a pure GPU speedup.
+
 - `auto` computes each numeric column's quartiles once and reuses Q1/Q3 in outlier detection.
 - A closed GPU session can leave a validated warm frame for the next question in the same
   agent process. The default budget is 4096 MB and the idle lifetime is 900 seconds; change
@@ -557,8 +567,10 @@ The following optimizations are available in the analytics engine:
   `GPU_ANALYSIS_PARQUET_CACHE_DIR`). A full CSV read builds a Parquet copy; later full reads
   can use it. The source's path, byte size and nanosecond modification time are in the cache
   key, and a change during conversion aborts the request. `execution_decision.observed.parquet_cache`
-  reports `built`, `hit`, `disabled` or `unavailable` and conversion time. Partial reads do not
-  use this cache. The original CSV is never modified. Provision and clean the directory as
+  reports `built`, `hit`, `disabled` or `unavailable` and conversion time. Column projections
+  can use a complete converted cache, including from session open; row-limited reads do not.
+  The first conversion reads the full source and charges conversion time to that request.
+  The original CSV is never modified. Provision and clean the directory as
   needed; the engine does not silently write beside the dataset.
 - To opt in to learned routing, pass `--calibration-file <measurements.jsonl>` (or set
   `GPU_ANALYSIS_CALIBRATION_FILE`). Successful full, uncached one-off runs append only
@@ -566,6 +578,10 @@ The following optimizations are available in the analytics engine:
   Collect CPU and GPU A/B runs with `--force-cpu` and `--force-gpu` at multiple sizes.
   If the fit lacks coverage or is noisy, the existing measured size threshold remains in use.
   Parquet-cache runs are not mixed into CSV cold-run calibration.
+
+Projected reads do not reuse whole-file calibrated cost fits either. Stored CPU comparison
+timings use a new versioned format, so pre-projection measurements are discarded. Only exact
+query signatures are compared; Parquet cache builds/hits omit unmatched cold-CPU ratios.
 
 Exit codes, observed rather than assumed:
 

@@ -396,15 +396,23 @@ def do_open(req: dict) -> dict:
 
     started = time.perf_counter()
     read_fallback = None
+    cache_trace = {"status": "disabled"}
+
+    def read_frame(engine):
+        nonlocal cache_trace
+        frame, cache_trace = GA.parquet_cache.read(
+            engine, path, os.environ.get("GPU_ANALYSIS_PARQUET_CACHE_DIR"), usecols=cols)
+        return frame
+
     try:
-        frame = eng.read(path, usecols=cols)
+        frame = read_frame(eng)
     except Exception as exc:
         read_fallback = ("read failed: " + str(exc)) if eng.is_gpu else None
         if eng.is_gpu:
             # Same fallback rule as the stateless path: if cuDF cannot read it, retry pandas.
             try:
                 eng = GA.detect_engine(force_cpu=True)
-                frame = eng.read(path, usecols=cols)
+                frame = read_frame(eng)
             except Exception as exc2:
                 return _err(f"read failed: {type(exc2).__name__}: {exc2}")
         else:
@@ -421,15 +429,17 @@ def do_open(req: dict) -> dict:
         identity=_file_identity(path), load_seconds=load_seconds,
         reason=route_reason if selected_backend == "pandas" else None, usecols=cols,
     )
-    # A CPU-resident frame is the honest baseline for this same file, and it is measured
-    # without touching the GPU. Failures here must not fail the open.
-    try:
-        cpu_eng = GA.detect_engine(force_cpu=True)
-        t0 = time.perf_counter()
-        cpu_eng.read(path, usecols=cols)
-        sess.cpu_load_seconds = time.perf_counter() - t0
-    except Exception:
-        sess.cpu_load_seconds = None
+    # Explicit multi-step demonstrations still measure the CPU read baseline.
+    # Interactive one-shot reuse does not: an unseen extra full CPU pass would
+    # dominate the first answer while contributing nothing to its result.
+    if req.get("measure_cpu", True):
+        try:
+            cpu_eng = GA.detect_engine(force_cpu=True)
+            t0 = time.perf_counter()
+            cpu_eng.read(path, usecols=cols)
+            sess.cpu_load_seconds = time.perf_counter() - t0
+        except Exception:
+            sess.cpu_load_seconds = None
 
     SESSIONS[sid] = sess
 
@@ -472,6 +482,7 @@ def do_open(req: dict) -> dict:
             observed={"phase": "session_open", "elapsed_seconds": round(
                 time.perf_counter() - request_started, 6),
                 "load_seconds": round(load_seconds, 6), "resident_mb": resident_mb,
+                "parquet_cache": cache_trace,
                 "rows_scanned": sess.rows},
             fallback_reason=read_fallback or (
                 eng.reason if selected_backend == "cudf" and not eng.is_gpu else None

@@ -26,6 +26,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 
 import pandas as pd
 
@@ -399,6 +400,11 @@ def _cache_load() -> dict:
     try:
         with open(_COMPARISON_CACHE_PATH, "r", encoding="utf-8") as fh:
             raw = json.load(fh)
+        # Version 2 includes automatic column projection. Old whole-table CPU
+        # timings must not be paired with a new projected GPU query.
+        if raw.get("schema_version") != 2:
+            return {}
+        raw = raw.get("measurements", {})
         restored = {}
         for key_str, value in raw.items():
             parts = json.loads(key_str)
@@ -416,7 +422,9 @@ def _cache_load() -> dict:
 def _cache_save(cache: dict) -> None:
     try:
         with open(_COMPARISON_CACHE_PATH, "w", encoding="utf-8") as fh:
-            json.dump({json.dumps(list(k)): v for k, v in cache.items()}, fh, indent=1)
+            json.dump({"schema_version": 2,
+                       "measurements": {json.dumps(list(k)): v for k, v in cache.items()}},
+                      fh, indent=1)
     except Exception:
         # A cache write failure must never break the analysis.
         pass
@@ -429,7 +437,7 @@ _COMPARISON_CACHE: dict[tuple, dict] = _cache_load()
 def _file_identity(path: str) -> tuple:
     try:
         st = os.stat(path)
-        return (os.path.abspath(path), st.st_size, int(st.st_mtime))
+        return (os.path.abspath(path), st.st_size, st.st_mtime_ns)
     except OSError:
         return (os.path.abspath(path), None, None)
 
@@ -504,8 +512,7 @@ def _cpu_twin(path: str, operation: str, by, agg, columns, top_k) -> dict | None
 def warm_comparison(path: str, operation: str, by=None, agg=None, columns=None,
                     top_k=None) -> dict | None:
     """
-    Measure the CPU baseline for one query and cache it, including a per-operation default
-    entry so a later run with slightly different optional arguments still resolves.
+    Measure and cache the CPU baseline for an exact query signature.
 
     Returns the cached comparison, or None if it could not be measured.
     """
@@ -516,7 +523,6 @@ def warm_comparison(path: str, operation: str, by=None, agg=None, columns=None,
             return None
         _COMPARISON_CACHE[(identity, str(operation), str(by), str(agg), str(columns),
                            str(top_k))] = exact
-        _COMPARISON_CACHE[(identity, str(operation), "default", "", "", "")] = exact
         _cache_save(_COMPARISON_CACHE)
         return exact
     except Exception:
@@ -532,21 +538,21 @@ def _attach_speedup(out: dict, path: str, operation: str, by, agg, columns, top_
     """
     if not _speedup_enabled() or gpu_payload.get("engine") != "cudf":
         return
+    trace = (gpu_payload.get("execution_decision") or {}).get("observed") or {}
+    if (trace.get("parquet_cache") or {}).get("status") in {"built", "hit"}:
+        out["gpu_vs_cpu_warning"] = (
+            "No speedup quoted: this request built or used a Parquet cache, and the "
+            "uncached CPU baseline would not be a like-for-like comparison.")
+        return
     gpu_secs = gpu_payload.get("total_seconds")
     if not isinstance(gpu_secs, (int, float)) or gpu_secs <= 0:
         return
 
     key = (_file_identity(path), str(operation), str(by), str(agg), str(columns),
            str(top_k))
-    # Fallback key: the same operation with default arguments.
-    #
-    # The comparison cost is driven mostly by the operation and the file, while optional
-    # arguments (top_k, a column filter) barely change it. The model does not produce byte
-    # identical arguments every run, so an exact-match-only cache missed often and the demo
-    # paused for a fresh CPU run. A warmed per-operation entry covers those variations; the
-    # precise ratio is still stored on a genuine miss.
-    fallback_key = (_file_identity(path), str(operation), "default", "", "", "")
-    cached = _COMPARISON_CACHE.get(key) or _COMPARISON_CACHE.get(fallback_key)
+    # Different requested columns can materially change parsing cost. Never
+    # borrow a different query's baseline simply to avoid a cache miss.
+    cached = _COMPARISON_CACHE.get(key)
     if cached is None:
         cached = _cpu_twin(path, str(operation), by, agg, columns, top_k)
         if cached is None:
@@ -778,6 +784,84 @@ def close_all_sessions() -> dict:
         return {"closed": 0, "error": f"{type(exc).__name__}: {exc}"}
 
 
+def _resident_single_analysis(path: str, operation: str, by: str | None,
+                              agg: str | None, columns: str | None,
+                              top_k: int | None) -> str | None:
+    """Reuse a bounded full frame for interactive one-step questions.
+
+    Return None only when the worker cannot open a suitable GPU frame, so the
+    established stateless path remains the safety fallback.  A failed analysis
+    returns its real error rather than silently computing the request twice.
+    """
+    state = _worker_call({"cmd": "list"})
+    if not state.get("ok") or state.get("count"):
+        return None  # never borrow or close a model-managed multi-step session
+    started = time.perf_counter()
+    opened = _worker_call({"cmd": "open", "path": path, "measure_cpu": False})
+    if not opened.get("ok") or opened.get("engine") != "cudf":
+        if opened.get("session_id"):
+            _worker_call({"cmd": "close", "sid": opened["session_id"]})
+        return None
+    sid = opened.get("session_id")
+    if not sid:
+        return None
+    try:
+        request = {"cmd": "analyze", "sid": sid, "op": operation,
+                   "by": by, "agg": agg, "columns": columns, "top_k": top_k}
+        step = _worker_call(request)
+        if not step.get("ok"):
+            return _err(step.get("error") or "resident analysis failed",
+                        hint="check the column names; use profile to inspect the file")
+        group = step.get("groupby") or {}
+        groups = group.get("groups", 0)
+        if operation == "groupby" and top_k is None and 0 < groups <= 30 \
+                and len(group.get("top_k", [])) < groups:
+            request["top_k"] = groups
+            complete = _worker_call(request)
+            if complete.get("ok"):
+                step = complete
+                group = step.get("groupby") or {}
+
+        payload = step.get(operation, {})
+        if operation == "corr" and isinstance(payload, dict) and "matrix" in payload:
+            payload = dict(payload)
+            payload["matrix"] = _trim_matrix(payload["matrix"])
+        rows = step.get("rows_scanned")
+        elapsed = round(time.perf_counter() - started, 6)
+        decision = dict(step.get("execution_decision") or {})
+        if not opened.get("cache_hit"):
+            decision["policy"] = "resident_load_and_compute"
+            decision["reason"] = "loaded a full frame for this request, then computed on it"
+        observed = dict(decision.get("observed") or {})
+        observed.update({"phase": "resident_request_total", "elapsed_seconds": elapsed,
+                         "load_seconds": opened.get("load_seconds"),
+                         "warm_cache_hit": bool(opened.get("cache_hit"))})
+        decision["observed"] = observed
+        result = {"op": operation, operation: _compact(payload),
+                  "rows_scanned": rows, "total_seconds": elapsed}
+        if group and len(group.get("top_k", [])) < group.get("groups", 0):
+            result["group_coverage_warning"] = (
+                "This is a truncated top-K result, not all groups. Do not infer a global "
+                "minimum or invent omitted rows.")
+        out = {"success": True, "file": os.path.basename(path),
+               "engine": step.get("engine"), "accelerated": step.get("accelerated"),
+               "rows_scanned": rows, "seconds": elapsed,
+               "execution_decision": decision, "result": result,
+               "resident_reuse": bool(opened.get("cache_hit")),
+               "performance_note": (
+                   "The full file was analyzed from a reusable resident frame. No same-query "
+                   "CPU baseline was run; do not quote a GPU-vs-CPU speedup for this answer.")}
+        if step.get("fallback_reason"):
+            out["fallback_reason"] = step["fallback_reason"]
+        if step.get("engine") != "cudf":
+            out["engine_note"] = (
+                f"the resident operation ran on {step.get('engine')}; do not claim GPU acceleration")
+        _remember_last_file(path)
+        return json.dumps(out, ensure_ascii=False, default=str)
+    finally:
+        _worker_call({"cmd": "close", "sid": sid, "retain": True})
+
+
 def dataset_session(operation: str, file_path: str = None, session_id: str = None,
                     op: str = None, by: str = None, agg: str = None,
                     columns: str = None, top_k: int = None,
@@ -865,7 +949,7 @@ def dataset_session(operation: str, file_path: str = None, session_id: str = Non
 
 def analyze_dataset(file_path: str, operation: str, by: str = None, agg: str = None,
                     columns: str = None, top_k: int = None,
-                    force_cpu: bool = False) -> str:
+                    force_cpu: bool = False, _prefer_resident: bool = False) -> str:
     """
     Run the GPU analytics engine and return a compact JSON result.
 
@@ -886,6 +970,14 @@ def analyze_dataset(file_path: str, operation: str, by: str = None, agg: str = N
             )
         if os.path.isdir(path):
             return _err(f"this is a directory, not a file: {path}")
+
+        if _prefer_resident and not force_cpu and os.environ.get(
+                "GPU_ANALYSIS_RESIDENT_INTERACTIVE", "1").strip().lower() not in {
+                    "0", "false", "no"}:
+            cached = _resident_single_analysis(path, str(operation or "auto"),
+                                               by, agg, columns, top_k)
+            if cached is not None:
+                return cached
 
         engine = _find_engine()
         cmd = [_python_bin(), engine, "--input", path, "--op", str(operation or "auto")]

@@ -177,7 +177,7 @@ def parse_arguments(raw: str) -> tuple[dict, str | None]:
     return loaded, None
 
 
-def execute_tool(name: str, raw_args: str) -> tuple[str, float]:
+def execute_tool(name: str, raw_args: str, *, prefer_resident: bool = False) -> tuple[str, float]:
     """Run one skill call. Returns (result_json, seconds). Never raises."""
     started = time.perf_counter()
     args, problem = parse_arguments(raw_args)
@@ -195,6 +195,8 @@ def execute_tool(name: str, raw_args: str) -> tuple[str, float]:
         }, ensure_ascii=False), 0.0
 
     try:
+        if name == "analyze_dataset" and prefer_resident:
+            args["_prefer_resident"] = True
         result = func(**args)
     except TypeError as exc:
         # Almost always a wrong/misspelled parameter name from the model.
@@ -437,11 +439,13 @@ class Tui:
 
 
 class Agent:
-    def __init__(self, client: OpenAI, verbose: bool = True, event_sink=None, model: str | None = None):
+    def __init__(self, client: OpenAI, verbose: bool = True, event_sink=None,
+                 model: str | None = None, reuse_one_shot: bool = False):
         self.client = client
         self.model = model if model is not None else MODEL_NAME
         self.verbose = verbose
         self.event_sink = event_sink
+        self.reuse_one_shot = reuse_one_shot
         self.messages: list[dict] = [{"role": "system", "content": _system_prompt()}]
         # Control condition for the comparison experiment: the same model, same prompt, no skills.
         # Nothing else changes, so any difference in the answer is attributable to the tools rather
@@ -551,7 +555,8 @@ class Agent:
                 raw = tc.function.arguments
                 args, _ = parse_arguments(raw)
                 self.log(f"  [round {round_index}] -> {name}({json.dumps(args, ensure_ascii=False)[:160]})")
-                result, seconds = execute_tool(name, raw)
+                result, seconds = execute_tool(name, raw,
+                                               prefer_resident=self.reuse_one_shot)
                 self.log(f"      {summarize_tool_result(result)}   ({seconds:.2f}s wall)")
                 self.messages.append({
                     "role": "tool",
@@ -618,8 +623,8 @@ def main() -> int:
         else:
             def factory(connection):
                 return Agent(build_client(connection) if connection.ready else None,
-                             verbose=False, model=connection.model)
-            SparkTUI(Agent(client, verbose=False, model=config.model), config.model,
+                             verbose=False, model=connection.model, reuse_one_shot=True)
+            SparkTUI(Agent(client, verbose=False, model=config.model, reuse_one_shot=True), config.model,
                      record_details=not args.quiet, connection=config,
                      agent_factory=factory, persist_config=save_config,
                      force_setup=args.configure).run()
@@ -637,7 +642,8 @@ def main() -> int:
         print('[error] Configure API address, key and model with --configure; '
               'or set GPU_API_BASE_URL, GPU_API_KEY and GPU_API_MODEL.', file=sys.stderr)
         return 2
-    agent = Agent(client, verbose=not args.quiet, model=config.model)
+    agent = Agent(client, verbose=not args.quiet, model=config.model,
+                  reuse_one_shot=not bool(args.ask))
 
     # Module-level so Agent.log can reach it without threading a reference through every call.
     global TUI
@@ -676,7 +682,8 @@ def main() -> int:
                 if client:
                     client.close()
                 config, client = updated, build_client(updated)
-                agent = Agent(client, verbose=not args.quiet, model=config.model)
+                agent = Agent(client, verbose=not args.quiet, model=config.model,
+                              reuse_one_shot=True)
             continue
         if not task.strip():
             continue
