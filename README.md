@@ -14,6 +14,8 @@
 
 [CPU 加载＋GPU 计算：三个独立开发分支](docs/HYBRID_BRANCHES.md)
 
+> 当前分支：`codex/hybrid-batch`。研究批量执行中的 CPU 加载＋GPU 计算；混合后端尚未实现，详见 [本分支开发与验收方案](docs/HYBRID_EXECUTION_PLAN.md)。
+
 A tool-calling agent that runs exact statistical analysis over large local datasets. On a
 configured NVIDIA GPU it can use RAPIDS cuDF; otherwise it reports the actual pandas/CPU path.
 The model decides what to compute and writes the answer from local tool results; raw dataset
