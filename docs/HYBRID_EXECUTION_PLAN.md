@@ -2,7 +2,7 @@
 
 - 分支：`codex/hybrid-warm-worker`。
 - 起点：GitHub `main` 的 `59b5229ba9d6a5fbe4eefeabaf2de05cc627a3be`，与另外两个分支相同。
-- 状态：**已实现第一版，尚未推送或替换正式部署**。在主干 oneshot 工作进程上增加 CPU/PyArrow 加载、Arrow→cuDF 转换及匹配实测校准选择；每请求释放数据帧，不新增结果或帧缓存。
+- 状态：**已实现第一版，发布至本实验分支，未合并 main 或替换正式部署**。在主干 oneshot 工作进程上增加 CPU/PyArrow 加载、Arrow→cuDF 转换及匹配实测校准选择；每请求释放数据帧，不新增结果或帧缓存。
 
 ## 目标与边界
 
@@ -10,7 +10,7 @@ CPU 读取所需列 → 转换为 GPU 数据帧 → GPU 精确计算，在跨请
 
 基础方案不缓存数据帧、统计或结果，也不把多个请求合成一次批量加载。这样可以把“热进程收益”与“批量/数据常驻收益”分开验证。以后若增加数据缓存，应另外标记并报告命中，不能偷偷并入热进程成绩。
 
-## 待实现任务
+## 开发任务与验收目标
 
 1. 在 `gpu_analytics.py` 增加 CPU/PyArrow Parquet 投影读取与 Arrow→cuDF 转换选项；在 `gpu_session.py` 的 oneshot 请求中明确传递读取/计算选择，保留主干正常 CPU/GPU 路径。
 2. 与 `agent/skills.py` 现有持久 worker 对接，完整记录请求墙钟时间；第一请求包括 worker 启动、导入及 CUDA 延迟初始化。后续请求分别计 CPU 读取、转换、GPU 计算和通信。
