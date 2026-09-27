@@ -44,7 +44,15 @@
   </aside>
 
   <section class="pane">
-    <h2>执行</h2>
+    <h2>提问</h2>
+    <form id="asker" class="asker">
+      <input id="prompt" type="text" autocomplete="off"
+             placeholder="例如：按 region 统计 revenue 的总和与均值，指出最高和最低的地区">
+      <button type="submit" id="ask">发送</button>
+    </form>
+    <p class="hint" id="ask-hint"></p>
+
+    <h2>直接工具调用</h2>
     <form id="runner" class="runner">
       <label>工具
         <select id="tool">
@@ -79,7 +87,8 @@
       <button type="submit" id="run">直接工具调用</button>
     </form>
     <p class="hint">这一栏不经过模型：按下去就是真的一次 <code>skills</code> 调用，
-      返回的是引擎自己的 <code>execution_decision</code>。提问区要等模型客户端可用。</p>
+      返回的是引擎自己的 <code>execution_decision</code>。它存在是为了在没有 API 密钥的机器上
+      也能验证引擎标记、会话卡与图表产物，不是提问框的替代品。</p>
 
     <h2>输出</h2>
     <div id="log" class="log" aria-live="polite"></div>

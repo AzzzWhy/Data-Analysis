@@ -240,7 +240,7 @@ default"); rev 2's tests #4 and #5 are unrelated checks that happen to reuse tho
 | `GET /api/events?job=ID` | — | `text/event-stream`, `Cache-Control: no-store` |
 | `GET /api/files?dir=` | — | parsed `skills.list_datasets(directory)` (`skills.py:1057`) |
 | `POST /api/session/release` | — | `release_all_sessions_and_cache()` (§5.2) — **not** `close_all_sessions()`, which retains |
-| `PATCH /api/settings` | `{base_url?, model?, api_key?, remember_key?, skip_setup?, language?}` | saved `APIConfig`, **key never echoed back** |
+| `PATCH /api/settings` | `{base_url?, model?, api_key?, remember_key?, skip_setup?, language?}` | saved `APIConfig`, **key never echoed back**. **Not built yet** — see §15. Until it exists, credentials on the node are configured through the terminal (`agent_main.py --configure`) or the `GPU_API_*` environment variables, and the workbench reports that honestly rather than pretending to have a settings screen |
 | `GET /artifact?path=` | allow-listed relative path | file bytes with inferred MIME |
 | `POST /api/shutdown` | — | `202`, then clean exit (used by tests) |
 
@@ -409,7 +409,9 @@ following `tui_test.py`'s `FakeAgent` pattern. `gui.py` is plain HTTP, so tests 
    `retained`/`active` from the payload rather than from GUI bookkeeping, and that the §6.3
    `policy`/`observed.phase` test drives the chip.
 6. **`result_sink` cannot break a run** — raise inside the sink, assert the answer still returns.
-7. **`/api/settings` does not echo the key** and persists `0o600`.
+7. **`/api/settings` does not echo the key** and persists `0600` — **not written yet**; it
+   lands with the endpoint (§15). `gui_test.py` says so in its docstring rather than leaving
+   the gap implicit.
 8. **Artifact MIME and CSP headers present**; no response carries `'unsafe-inline'`.
 9. **Chip mapping** — feed `actual_backend="cudf"`; `selected_backend="cudf"` with
    `actual_backend="pandas"`; and `actual_backend="pandas"` with no `fallback_reason`; assert all
@@ -485,7 +487,25 @@ renders, and the language round-trip leaves model prose untouched. No pixel test
 4. `gui.py` routing, job buffer, SSE — tests #1, #2, #8.
 5. `/artifact` allow-list + `/api/files` — test #3.
 6. `gui/index.html` + `style.css` + `app.js` from the approved mockup — DOM probes, tests #5, #9, #10.
-7. `/api/settings` via `api_config` — test #7.
-8. `--gui` / `--gui-port` in `main()`, `requirements-gui.txt`.
+7. *(deferred, §15)* `/api/settings` via `api_config` — test #7.
+8. *(partly deferred, §15)* `requirements-gui.txt` exists; `--gui` / `--gui-port` in `main()` waits for the model round.
 9. Docs: `README.md`, `docs/USAGE.md`, `skill.md`, `references/engine-contract.md`.
 10. Regression gate #11 on GB10 *and* on a no-GPU machine (the pandas path must report honestly).
+
+---
+
+## 15. Not built yet (as of the first implementation round)
+
+Recorded here so the document does not carry requirements that are neither implemented nor
+withdrawn. Everything below is a deliberate scope decision, not an oversight, and each line says
+what the workbench does instead.
+
+| Item | Why it is out | What happens today |
+| :--- | :--- | :--- |
+| `PATCH /api/settings` + test #7 | The first round was explicitly "no LLM wired up", so there was nothing for a settings screen to configure, and it could not be verified | Credentials come from `agent_main.py --configure` or `GPU_API_*`. The workbench reads whatever config exists and reports the state honestly |
+| `--gui` / `--gui-port` on `agent_main.py` | Reaching `main()` already requires the model SDK, so the flag could not be exercised on the verification machine | `python agent/gui.py` serves the same standalone |
+| Markdown rendering of the model answer | Deferred with the model round; a parser written without a real answer to test it against is a parser waiting to be wrong | The answer is shown as authored plain text, which is faithful if unstyled |
+| Full visual parity with the mockup (drawer, settings modal, i18n chrome keys) | Layout was approved; the vocabulary for plan steps, chip labels and session states does not exist in `ui_i18n.py` yet | The shipped page is plainer but every figure is real |
+| GB10-only acceptance: cuDF chip, `retained`, `warm_cache`, ~0.06 s/step | Needs the node | Rendered as explicitly unobservable rather than substituted |
+| `run_criteria_tests.sh` 11/11 | Spends API calls; no key on the verification machine | Not run. `tui_test.py` runs in every sweep (SKIP + exit 0 without Textual), which is not the same thing and is not claimed as such |
+

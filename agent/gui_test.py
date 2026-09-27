@@ -319,7 +319,7 @@ def main() -> int:
         completions=types.SimpleNamespace(create=lambda **kwargs: turns3b.pop(0))))
     wb.agent = agent_main.Agent(client3b, verbose=False, model="test")
     wb.config_ready = True
-    code, asked = request("/api/ask", {"text": "through the workbench"})
+    code, asked = request("/api/ask", {"text": "through the workbench", "file": data})
     check("ask accepted with the injected agent", code == 202, json.dumps(asked))
     frames = events(asked["job_id"])
     names = [n for n, _ in frames]
@@ -328,6 +328,13 @@ def main() -> int:
     check("the streamed tool_result carried a server-computed chip",
           isinstance(dict(frames).get("tool_result", {}).get("chip"), dict),
           str(dict(frames).get("tool_result", {}).keys()))
+    # The question box is the only way to reach acceptance criterion 2 ("five consecutive
+    # questions"), and an earlier revision of this frontend had no way to send one at all.
+    check("the selected file is stated to the model as its own line, not woven into the question",
+          dict(frames).get("prompt", {}).get("file") == data
+          and f"[workbench] the dataset selected in the interface is: {data}"
+          in dict(frames).get("prompt", {}).get("text", ""),
+          json.dumps(dict(frames).get("prompt", {}))[:160])
 
     print("=== the model layer is not reachable without configuration ===")
     wb.agent = None

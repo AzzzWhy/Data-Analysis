@@ -104,6 +104,16 @@ button:disabled { color: var(--muted); cursor: not-allowed; }
 button.ghost { width: 100%; margin-top: 8px; }
 #run { margin-top: 10px; border-color: var(--accent); }
 
+.asker { display: flex; gap: 8px; margin-bottom: 4px; }
+.asker input {
+  flex: 1; font: inherit; color: var(--ink); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 5px; padding: 7px 10px; min-width: 0;
+}
+.asker input:focus, .asker input:disabled { border-color: var(--line); }
+.asker input:not(:disabled):focus { border-color: var(--accent); outline: none; }
+.asker input:disabled { color: var(--muted); }
+#ask { border-color: var(--accent); flex: none; }
+
 .runner { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; align-items: end; }
 .runner label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--muted); }
 .runner label.check { flex-direction: row; align-items: center; gap: 6px; font-size: 12px; color: var(--ink); }

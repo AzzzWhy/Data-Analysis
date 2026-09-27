@@ -24,11 +24,13 @@ const els = {
   charts: $("charts"), tables: $("tables"), phase: $("phase"), chip: $("chip"),
   elapsed: $("elapsed"), tool: $("tool"), sessionOp: $("session-op"), op: $("op"),
   by: $("by"), agg: $("agg"), forceCpu: $("force-cpu"), forceGpu: $("force-gpu"),
+  prompt: $("prompt"), ask: $("ask"), askHint: $("ask-hint"),
 };
 
 let selected = null;      // absolute path of the chosen dataset
 let session = null;       // last session_id we opened, so "analyze" can reuse it
 let stream = null;        // active EventSource
+let canAsk = false;       // whether /api/state says a configured client exists
 
 /* ---------------------------------------------------------------- text helpers */
 
@@ -78,6 +80,18 @@ function renderState(state) {
   if (!state.engine_ready) {
     notes.unshift("分析引擎未响应：" + state.engine_error);
   }
+
+  // The question box is the model-driven path, so it opens exactly when a configured client
+  // exists and not one moment before. The reason is shown rather than left to be discovered.
+  const canAskNow = Boolean(state.agent_available && state.config_ready);
+  canAsk = canAskNow;
+  els.prompt.disabled = !canAskNow;
+  els.ask.disabled = !canAskNow;
+  els.askHint.textContent = canAsk
+    ? "提问会把选中的文件路径作为一行上下文附在问题后面，日志里会显示模型实际收到的原文。"
+    : (!state.agent_available
+      ? "提问需要模型客户端（pip install -r requirements.txt）。下面「直接工具调用」不需要它。"
+      : "已安装 openai，但还没有配置 API 地址 / 密钥 / 模型。");
 
   if (notes.length) {
     els.banner.hidden = false;
@@ -254,6 +268,12 @@ function trackSession(payload) {
 function attach(jobId) {
   if (stream) stream.close();
   stream = new EventSource("/api/events?job=" + encodeURIComponent(jobId));
+  stream.addEventListener("prompt", (e) => {
+    // Echo exactly what the model received, including the appended file line, so the context
+    // added on the operator's behalf is visible rather than implied.
+    const body = JSON.parse(e.data);
+    line(els.log, "dim", `   发给模型的原文：${body.text}`);
+  });
   stream.addEventListener("phase", (e) => { els.phase.textContent = JSON.parse(e.data).phase; });
   stream.addEventListener("trace", (e) => {
     const body = JSON.parse(e.data);
@@ -287,6 +307,7 @@ function attach(jobId) {
   stream.addEventListener("done", () => {
     els.phase.textContent = "完成";
     els.run.disabled = false;
+    els.ask.disabled = !canAsk;
     stream.close();
     stream = null;
   });
@@ -312,6 +333,26 @@ async function run() {
   if (status === 409) { els.run.disabled = false; return line(els.log, "bad", "!! 已有一次运行在进行中"); }
   if (status >= 400) { els.run.disabled = false; return line(els.log, "bad", `!! ${data.error || status}`); }
   line(els.log, "dim", `\n— ${data.note || "direct tool call"}: ${els.tool.value}`);
+  attach(data.job_id);
+}
+
+/* The model-driven path. Disabled until /api/state says a configured client exists, so it can
+   never look available while quietly doing nothing. */
+async function ask() {
+  const question = els.prompt.value.trim();
+  if (!question) return;
+  els.prompt.value = "";
+  els.ask.disabled = true;
+  els.phase.textContent = "提交中";
+  const body = { text: question };
+  if (selected) body.file = selected;
+  const { status, data } = await post("/api/ask", body);
+  if (status === 409) { els.ask.disabled = false; return line(els.log, "bad", "!! 已有一次运行在进行中"); }
+  if (status >= 400) {
+    els.ask.disabled = false;
+    return line(els.log, "bad", `!! ${data.error || status}`);
+  }
+  line(els.log, "dim", `\n— 提问：${question}`);
   attach(data.job_id);
 }
 
@@ -353,6 +394,7 @@ els.tool.addEventListener("change", () => {
   els.sessionOp.disabled = els.tool.value !== "dataset_session";
 });
 $("runner").addEventListener("submit", (event) => { event.preventDefault(); run(); });
+$("asker").addEventListener("submit", (event) => { event.preventDefault(); ask(); });
 els.release.addEventListener("click", async () => {
   const { data } = await post("/api/session/release");
   session = null;

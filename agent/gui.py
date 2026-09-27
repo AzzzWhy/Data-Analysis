@@ -416,7 +416,13 @@ class Workbench:
             job.finish()
             self.busy = False
 
-    def start_ask(self, text: str):
+    def start_ask(self, text: str, file: str | None = None):
+        """Begin a model-driven turn. `file`, when given, is stated to the model as context.
+
+        The path is appended as its own labelled line rather than being woven into the question,
+        so what the model actually received can be shown verbatim in the log and nothing is
+        silently rewritten.
+        """
         if Agent is None:
             return None, (f"model client is not available: {AGENT_IMPORT_ERROR}. "
                           f"Install it with: pip install -r requirements.txt")
@@ -424,10 +430,16 @@ class Workbench:
             return None, (self.last_error or "no API base URL, key and model are configured. "
                                              "Set them with agent_main.py --configure or the "
                                              "GPU_API_* environment variables.")
-        job = self._acquire("ask", text[:80])
+        prompt = text
+        if file:
+            resolved = file
+            prompt = (f"{text}\n\n"
+                      f"[workbench] the dataset selected in the interface is: {resolved}")
+        job = self._acquire("ask", prompt[:120])
         if job is None:
             return None, "busy"
-        thread = threading.Thread(target=self._run_ask, args=(job, text), daemon=True)
+        job.emit("prompt", {"text": prompt, "file": file or ""})
+        thread = threading.Thread(target=self._run_ask, args=(job, prompt), daemon=True)
         thread.start()
         return job, ""
 
@@ -562,10 +574,11 @@ class Handler(BaseHTTPRequestHandler):
             threading.Thread(target=self.workbench.shutdown, daemon=True).start()
             return
         if url.path == "/api/ask":
-            text = str(self._body().get("text") or "").strip()
+            body = self._body()
+            text = str(body.get("text") or "").strip()
             if not text:
                 return self._json(400, {"error": "text is required"})
-            job, problem = wb.start_ask(text)
+            job, problem = wb.start_ask(text, body.get("file"))
             if job is None:
                 code = 409 if problem == "busy" else 503
                 return self._json(code, {"error": problem})
