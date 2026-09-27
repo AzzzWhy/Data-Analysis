@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>renderer probe — gui/app.js</title>
+</head>
+<body>
+<!--
+  Executes the browser-side Markdown renderer for real. It is opened over file://, so it needs
+  no server, no route in gui.py and no new CSP allowance: `app.js` is a classic script, so its
+  top-level function declarations are installed even if its later startup code fails to find the
+  workbench DOM it expects.
+
+  Run it headless with:  python3 agent/renderer_probe.py
+-->
+<div id="results"></div>
+<div id="summary" data-result="NONE">no result</div>
+<script src="app.js"></script>
+<script src="renderer_probe.js"></script>
+</body>
+</html>

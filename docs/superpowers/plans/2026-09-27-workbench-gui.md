@@ -1497,20 +1497,19 @@ Expected: 四条都正常，`--help` 里出现 `--gui`。
 
 ```bash
 python agent/gui_test.py
+python agent/renderer_probe.py            # the browser-side Markdown probe
 python agent/tui_test.py
 python agent/api_config_test.py
 bash agent/run_criteria_tests.sh
-ls agent/execution_decision_test.py agent/optimization_test.py 2>/dev/null && \
-  python agent/execution_decision_test.py && python agent/optimization_test.py
+python skills/cudf-analytics/scripts/execution_decision_test.py
+python skills/cudf-analytics/scripts/optimization_test.py
 ```
 Expected: `run_criteria_tests.sh` 报 **11/11**；其余全 `ok` 或 `SKIP`。
 
-> 注意：spec §3.3 点名的 `execution_decision_test.py` 与 `optimization_test.py` 在我核实时的 `agent/` 目录清单里**没找到**（列出的有 `tool_contract_test.py`、`session_skill_test.py`、`group_coverage_test.py` 等）。先在仓库里定位它们：
-> ```bash
-> find . -name "execution_decision_test.py" -o -name "optimization_test.py" | grep -v .git
-> grep -rn "execution_decision" --include=*_test.py agent/ skills/ | head
-> ```
-> 找不到的话，说明 §3.3 的验收项名字过期了 —— 用实际存在的等价测试替代，并在提交信息里写明替换了哪两个，**不要**默默跳过。
+> 已核实（2026-09-28）：上面两个测试在 `skills/cudf-analytics/scripts/` 下，不在 `agent/` 下 ——
+> 之前那条"没找到"的提醒是**路径写错**造成的假警报，两个文件一直都在。
+> `renderer_probe.py` 用无头 Edge/Chrome 真跑 `gui/app.js` 的渲染器；找不到浏览器时它退出码 2
+> 并明说 SKIPPED，**不会伪装成通过**。`gui_test.py` 是 Python，测不到那段 JavaScript。
 
 - [ ] **Step 2: 文档四处，与实现同一提交**
 
@@ -1584,11 +1583,17 @@ ssh -N -L 8765:127.0.0.1:8765 Developer@<jump-host> -p <node-port>
 
 - [ ] **Step 7: 浏览器验收清单（逐条对着 spec §3）**
 
+> **显存怎么量：** GB10 是统一内存，`nvidia-smi` 的 `memory.used` / `memory.total` 返回 **N/A**，
+> `free -h` 又被大量 buff/cache 糊住 —— 所以任何"看显存回落"的判据都不能用 nvidia-smi 的数字。
+> 用 worker 自己的 `cupy.cuda.runtime.memGetInfo()`：`gpu_session.py` 的 `ping` 报
+> `free_gpu_gb`、`list` 报 `resident_mb` / `warm_cache_mb`，工作台卡片读的就是这两个字段。
+> `nvidia-smi -L` 仍然可用（它只列设备名，与内存字段无关），留作 GPU 身份证据。
+
 - [ ] `http://127.0.0.1:8765/` 打开，工作台渲染完整，无控制台报错
 - [ ] 选数据集 → 问一句 → 看到 `phase / tool_call / tool_result / answer / done` 依次出现
 - [ ] **验收 #2**：对同一数据集连问 5 轮，第 2 轮起 chip 显示 `GPU · cuDF (warm)`，单步耗时接近 `references/engine-contract.md` 的 ~0.06 s（这是"文件没被重读"的证据，spec §3.2 的原始意图 —— 记住判据是 `policy == "resident_reuse"`，不是 C1 里那个不存在的 `mode`）
-- [ ] **验收 #5**：按「释放会话」→ 卡片显示会话 0 **且保留帧 0**，显存确实下降（另开 tmux 窗口 `nvidia-smi` 对拍）
-- [ ] **验收 #6**：`Ctrl+C` 杀掉服务进程 → `nvidia-smi` 显示显存已释放（`skills.py:659` 的 atexit 生效）
+- [ ] **验收 #5**：按「释放会话」→ 卡片显示会话 0 **且保留帧 0**，显存确实下降（另开 tmux 窗口跑 `gpu_session.py` 的 `ping`，对拍 `free_gpu_gb` 前后差；`/api/session/release` 的响应里 `warm_frames_dropped` / `sessions_after` / `warm_frames_after` 是同一事实的服务端说法）
+- [ ] **验收 #6**：`Ctrl+C` 杀掉服务进程 → `ping` 的 `free_gpu_gb` 回到释放前水平（`skills.py:659` 的 atexit 生效）。不要用 `nvidia-smi` 的内存字段判断，GB10 上它是 N/A
 - [ ] `nvidia-smi -L` 输出在日志抽屉里可见（录视频要用的 GPU 证据）
 - [ ] 中英文切换：控件文案翻译、模型散文原样
 - [ ] 没有预测值时页面上**不出现**任何预测数字（测试 #10）
@@ -1600,7 +1605,7 @@ ssh -N -L 8765:127.0.0.1:8765 Developer@<jump-host> -p <node-port>
 2. 问一个明确的聚合问题，展示 `GPU · cuDF` chip 与 `rows_scanned`
 3. 立刻问第二个 —— 展示 `(warm)` 与单步 ~0.06 s，**这是全片最重要的一帧**（暖复用）
 4. 切一个 CPU 被**主动**选中的例子（小文件）—— 展示 chip 是 `by choice` 而不是"故障"。这是项目的核心诚实主张，spec §6.3 专门警告过不能渲染反
-5. 按「释放会话」，`nvidia-smi` 显存回落
+5. 按「释放会话」，卡片上 `占用` 与 `保留帧` 同时归零，`ping` 的 `free_gpu_gb` 回落
 6. 收尾提一句 `report.html` 才是交付物
 
 - [ ] **Step 9: 回填 Task 1 实测结果**
