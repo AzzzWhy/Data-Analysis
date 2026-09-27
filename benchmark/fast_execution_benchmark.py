@@ -21,6 +21,8 @@ def values(reply):
         return block["top_k"]
     if op == "summary":
         return block["stats"]
+    if op == "corr":
+        return {key: block[key] for key in ("columns", "matrix", "pairs")}
     return block["results"]
 
 
