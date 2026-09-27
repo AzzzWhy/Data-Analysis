@@ -467,6 +467,7 @@ python skills/cudf-analytics/scripts/smoke_test.py
 python skills/cudf-analytics/scripts/plan_test.py
 python skills/cudf-analytics/scripts/execution_decision_test.py
 python skills/cudf-analytics/scripts/optimization_test.py
+python agent/gui_test.py             # workbench server, SSE, artifact allow-list, engine chip
 
 # need something this laptop does not have
 python agent/tui_test.py            # optional layer: SKIPs and exits 0 without requirements-tui.txt
@@ -480,6 +481,49 @@ On GB10, add `--require-gpu` to `smoke_test.py`, `session_skill_test.py` and
 (engine identity, cuDF/pandas parity, `resident_mb`); with it those same assertions fail loudly,
 so a GPU run cannot quietly lose its coverage. Per-suite results and counts are in
 `benchmark/VERIFICATION.md`.
+
+## Browser workbench
+
+A third frontend, for the case the terminal handles badly: asking five questions about one large
+file and wanting the chart beside the question rather than under it.
+
+```bash
+python agent/gui.py --port 8765
+# on the node, from your own machine:
+ssh -p <node-port> -L 8765:127.0.0.1:8765 Developer@<jump-host>
+```
+
+`agent/agent_main.py --gui` is not wired up yet: reaching `main()` there already requires the
+model SDK, so that entry point belongs to the round that installs it. `agent/gui.py` runs the
+same server on its own today.
+
+It binds `127.0.0.1` and refuses any other interface without `GPU_GUI_ALLOW_REMOTE=1`, because it
+has no authentication and the Spark node's 8888/9000 are public ports. Tunnel instead.
+
+**What it will not do is show you a number it was not given.** The engine chip is computed once,
+server-side, from the run's `execution_decision`, and shipped with the result; the browser renders
+the label it receives. A deliberate CPU route reads `CPU · pandas (by choice)` with the engine's
+own crossover reason attached, and a real GPU failure reads `CPU · pandas (fallback)` in a warning
+colour — the two are never conflated, in either direction. Where the engine emitted no value, the
+row is empty: `estimate.peak_memory_mb` is `null` by design, so no bar is drawn, and an
+uncalibrated run says `estimate: not calibrated` rather than guessing. The session card repeats
+the worker's own `list` reply and is refreshed only after a run or an explicit release, because
+that `list` prunes the cache before answering and a polling timer would expire the frames it was
+there to display.
+
+Three states, all reported from facts:
+
+| Machine | What you see |
+| :--- | :--- |
+| analysis engine only (no `openai`) | boots and works; the question box is disabled and shows the real `ImportError` plus `pip install -r requirements.txt`; `/api/ask` answers 503 with the same text |
+| `openai` installed, no key | same, with "no base URL / key / model configured" |
+| configured | the question box runs a real model-driven turn |
+
+There is a **直接工具调用 / direct tool call** panel that invokes the real `skills` functions
+without a model. It is labelled as such in the log drawer, and it exists because the alternative
+was an untestable screen: the engine chip, the session card and the exported charts are all
+reachable through it, so the workbench can be verified on a laptop with no key and no GPU. It is
+not a chat substitute and it never renders a prewritten answer.
 
 ## The agent application
 

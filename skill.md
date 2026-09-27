@@ -22,6 +22,8 @@ python skills/cudf-analytics/scripts/benchmark_cpu_vs_gpu.py --rows 1m 5m 20m --
 | `skills/cudf-analytics/scripts/gpu_analytics.py` | Core engine: cuDF analysis, pandas fallback, JSON output |
 | `skills/cudf-analytics/scripts/benchmark_cpu_vs_gpu.py` | CPU vs GPU timing, produces the submission tables |
 | `skills/cudf-analytics/scripts/smoke_test.py` | Core engine self-checks against independently computed truth |
+| `agent/gui.py` + `agent/gui/` | Optional browser workbench: stdlib HTTP/SSE server over the same skills, no new dependency |
+| `agent/gui_test.py` | Headless workbench checks: SSE order, artifact allow-list, release, engine chip |
 | `benchmark/` | GB10 results: comparison table, JSON, raw logs |
 | `README.md` | Full guide: usage, output contract, verification, submission notes |
 

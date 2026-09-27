@@ -60,7 +60,8 @@ Explicitly out of scope, so nobody builds them by accident:
 | WebSockets | SSE is one-way, survives proxying, needs no reconnect protocol |
 | **GUI-side routing, cost prediction, or memory estimation** | `cost_model.py` and the measured-crossover policy own this. The GUI renders `execution_decision.policy` and `estimate.status` as reported and never computes its own. Predicted elapsed time exists only when the local fit validated; `peak_memory_mb` is `null` by design (`gpu_analytics.py:323-348`), and the README is explicit that `admission_required_free_gb` is a safety headroom requirement, not a prediction. A GUI that drew a guessed bar here would break the project's central honesty claim |
 | Enabling `--parquet-cache-dir` or `--calibration-file` implicitly | Both have disk side effects — one writes derived copies of the dataset, the other appends measurement rows. Opt-in through the settings screen only, never a default |
-| Changes to `gpu_analytics.py`, `gpu_session.py`, `cost_model.py`, `parquet_cache.py`, `make_deliverables.py`, `build_html_report.py` | The engine contract is already clean JSON; the GUI is one more consumer of it, not a new kind of consumer |
+| Changes to `gpu_analytics.py`, `cost_model.py`, `parquet_cache.py`, `make_deliverables.py`, `build_html_report.py` | The engine contract is already clean JSON; the GUI is one more consumer of it, not a new kind of consumer |
+| Changes to `gpu_session.py` | **One exception, taken during implementation:** `do_list` gained a `resident_mb` field per active session, because §7 requires the card to show held bytes and the worker reported none for an open session (only `warm_cache_mb`, which covers already-closed frames). The helper returns `None` when a frame cannot be measured, so unknown is never rendered as 0. Everything else in the worker is untouched |
 | Reworking `tui_app.py` | The TUI stays byte-for-byte compatible, even where it is more fragile — see the regex-on-trace-text note in §5.1 |
 | A build step, bundler, or JS framework | See §9 |
 
@@ -70,8 +71,8 @@ Explicitly out of scope, so nobody builds them by accident:
 
 1. `python agent/agent_main.py --gui` serves the workbench on `127.0.0.1:8765`, reachable from
    another machine through `ssh -L 8765:127.0.0.1:8765`.
-2. Five consecutive questions against one dataset report
-   `execution_decision.mode == "resident reuse"` from the second turn onward, with per-step
+2. Five consecutive questions against one dataset report a warm `execution_decision`
+    (`policy`/`observed.phase` per §6.3) from the second turn onward, with per-step
    timings near the ~0.06 s figure in `references/engine-contract.md` — i.e. the file is not
    re-read between turns, **and** this happens with `Agent.run()`'s backstop still executing
    every turn, unchanged.
@@ -175,8 +176,10 @@ def __init__(self, client, verbose=True, event_sink=None, model=None, result_sin
 fired after `execute_tool` when the payload parses as JSON. Requirements:
 
 - `event_sink` keeps its current text contract. **`tui_app.py` is not modified.**
-- Sink failures must never break a run: wrap the call in the same try/except that protects
-  `log()`, and swallow.
+- Sink failures must never break a run: wrap the call in a try/except and swallow. Note that the
+  guard this line originally pointed at did not exist — `log()` had no exception handling,
+  because nothing pluggable into it could fail on its own (Textual's `post_message` is
+  thread-safe by design). The guard was added to `log()` in the same change.
 - `parsed` passes through unchanged. No renaming, no normalization, no invention of fields the
   engine does not emit.
 
@@ -280,7 +283,7 @@ documented contract, so the chip derives from it:
 | Chip | Condition | Style | Note shown |
 | :--- | :--- | :--- | :--- |
 | `GPU · cuDF` | `actual_backend == "cudf"` and no `fallback_reason` | accent | `policy` (e.g. `measured_file_size_crossover`) |
-| `GPU · cuDF (warm)` | `mode == "resident reuse"` | accent | open cost avoided; the frame came from `WARM_CACHE` |
+| `GPU · cuDF (reuse)` | `policy in ("resident_reuse", "warm_cache")` or `observed.phase in ("session_reuse", "warm_cache_hit")` | accent | open cost avoided. **There is no `mode == "resident reuse"`** — that value does not exist in `execution_decision_record`; warmth is recorded in `policy` and `observed.phase`. `resident_reuse` is reachable on the pandas path, `warm_cache` is not (see §12.1) |
 | `CPU · pandas (fallback)` | `selected_backend == "cudf"` and `actual_backend == "pandas"` | **warn** | `fallback_reason` verbatim — a GPU was asked for and did not happen |
 | `CPU · pandas (by choice)` | `actual_backend == "pandas"` and no `fallback_reason` | neutral | `reason` verbatim — deliberate routing |
 | `estimate: not calibrated` | `estimate.elapsed_seconds == null` | muted, on the timing line | shown *only* as the absence of a prediction; never a substituted guess |
@@ -318,10 +321,20 @@ use — and its states name the two-level reality (`SESSIONS` vs `WARM_CACHE`) p
 | State | Meaning | Card |
 | :--- | :--- | :--- |
 | `cold` | no session, no warm frame; next open pays ~1.5 s | grey |
-| `active` | session handle open this turn | green: `steps`, `load_seconds`, `analysis_seconds` |
-| `retained` | handle closed at end of turn, frame kept for the next question | green outline + explicit "frame retained, not an open session" — the distinction the release button depends on |
-| `stale` | source path / size / mtime no longer matches the cache key (`_cache_key`, `gpu_session.py:146`) | amber + re-open action; never silent |
+| `active` | session handle open this turn | green: `steps`, `resident_mb` (added per §2), cumulative seconds |
+| `retained` | handle closed at end of turn, frame kept for the next question | green outline + explicit "frame retained, not an open session" — the distinction the release button depends on. **Aggregate only:** `list` reports `warm_cache_count` and `warm_cache_mb`, not which file each frame belongs to, so the card must not name one |
 | `released` | explicit release, TTL expiry, or budget eviction | grey + one-line statement of the next-turn cost |
+
+Two limits found by reading the worker rather than this table:
+
+- **`stale` is not a state the card can have.** The worker drops an out-of-date frame silently
+  (`_prune_cache`, `gpu_session.py:165-184`) and reports nothing, so there is no field to render.
+  Staleness is surfaced only where the worker does say so — when an `analyze` on an open session
+  returns "The file changed while this session was open" — and the card relays that verbatim.
+- **`list` is not a read-only peek.** `do_list` calls `_prune_cache()` first, so asking the
+  question changes the answer: it can expire frames by TTL and evict them by byte budget. The
+  card therefore refreshes only after a run or an explicit release. A polling timer would expire
+  the very frames it exists to display.
 
 The card also shows the live budget as configured — `SESSION_WARM_CACHE_MB` and
 `SESSION_WARM_TTL_SECONDS` — so the operator sees what the engine will actually do rather than
@@ -393,8 +406,8 @@ following `tui_test.py`'s `FakeAgent` pattern. `gui.py` is plain HTTP, so tests 
    sessions **and** zero warm frames. This is the test that catches a `close_all_sessions()`
    wiring mistake (§5.2), which a weaker check would pass.
 5. **Warm reuse is reported, not claimed** — with a stubbed worker, assert the card shows
-   `retained`/`active` from the payload rather than from GUI bookkeeping, and that
-   `mode == "resident reuse"` drives the chip.
+   `retained`/`active` from the payload rather than from GUI bookkeeping, and that the §6.3
+   `policy`/`observed.phase` test drives the chip.
 6. **`result_sink` cannot break a run** — raise inside the sink, assert the answer still returns.
 7. **`/api/settings` does not echo the key** and persists `0o600`.
 8. **Artifact MIME and CSP headers present**; no response carries `'unsafe-inline'`.
@@ -430,10 +443,15 @@ renders, and the language round-trip leaves model prose untouched. No pixel test
 ## 12. Assumptions (confirm or override during spec review)
 
 1. Reference hardware is the documented GB10 (aarch64, driver 580.126.09, 121 GB, cuDF 25.10.00);
-   port `8765` is free. **If the workbench will actually run on a no-GPU box, criterion §3.2
-   changes meaning** — "resident reuse" still occurs on pandas frames, but the cuDF chip path and
-   the ~4× claim do not apply, and the acceptance run becomes "reports `engine="pandas"` honestly
-   while still reusing the warm frame".
+   port `8765` is free. **On a no-GPU box, cross-turn warmth does not happen at all.** An earlier
+   revision of this document claimed "resident reuse still occurs on pandas frames"; that is not
+   what the code does. `_retain()` (`gpu_session.py:186-188`) returns `False` unless
+   `sess.engine.is_gpu`, and `WARM_CACHE` is only ever inserted there, so a pandas frame never
+   enters the cache. What *is* reachable on the pandas path is `policy == "resident_reuse"` —
+   reusing a session handle that is still open within a turn. So the acceptance run on a machine
+   without cuDF is: `engine="pandas"` reported honestly, `resident_reuse` observable across
+   steps of one session, and the `warm_cache` / `retained` states rendered as explicitly
+   unobservable rather than substituted. The ~4× claim does not apply there.
 2. Upstream's defaults (`SESSION_WARM_CACHE_MB=4096`, `SESSION_WARM_TTL_SECONDS=900`) are
    acceptable for the workbench; the GUI surfaces them rather than overriding them.
 3. One operator, one browser tab. A second tab shares the single `Agent` and can observe events —

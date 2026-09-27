@@ -21,6 +21,24 @@ python agent/agent_main.py
 
 首次进入交互式 TUI 会显示连接设置。如果未安装可选的 Textual，程序会退回基本终端界面。请使用交互式终端；`--ask` 和管道输入不会弹出设置窗口。
 
+#### 浏览器工作台
+
+如果要在同一个大文件上连续追问，可以用浏览器工作台代替终端：
+
+```bash
+python agent/gui.py --port 8765
+# 在自己的电脑上通过 SSH 隧道访问节点：
+ssh -p <节点SSH端口> -L 8765:127.0.0.1:8765 Developer@<跳板机地址>
+```
+
+`agent/agent_main.py --gui` 尚未接入：走到那里的 `main()` 本身就需要模型 SDK，因此该入口与接入它的那一轮一起做。目前 `agent/gui.py` 独立提供同一个服务。
+
+服务只绑 `127.0.0.1`。不设 `GPU_GUI_ALLOW_REMOTE=1` 时它拒绝绑定其他网卡，因为这个界面没有鉴权，而节点上 8888/9000 是公网可达端口——请用上面的隧道方式。
+
+界面右下角的引擎标记只报告事实：**有意选择 CPU** 显示为 `CPU · pandas (by choice)` 并附上引擎自己的交叉点判据；**GPU 尝试后失败** 才显示为橙色的 `(fallback)`。两者不会互相冒充。引擎没有给出的数值一律留白，不填估算值。
+
+页面里的「直接工具调用」不经过模型，按下去就是一次真实的 `skills` 调用。它存在的原因是：没有它，在没有 API 密钥的机器上就无法在浏览器里验证图表、会话卡和引擎标记；它不是提问框的替代品，也不会显示任何预置答案。没有安装 `openai` 或未配置密钥时，提问框会禁用并显示真实原因（原始 `ImportError` 或"未配置密钥"），其余面板照常可用。
+
 ### 2. 连接 API、选择模型与语言
 
 启动设置中依次填写：
@@ -109,6 +127,25 @@ python agent/agent_main.py
 If you work through SSH, run these commands **inside the SSH session**. The requirements include the CPU path. For GPU acceleration, install a RAPIDS cuDF environment compatible with that machine's CUDA, OS and Python. Without cuDF, the tool reports its actual pandas/CPU execution; it does not claim a GPU run.
 
 An interactive TUI opens connection setup at startup. Without the optional Textual dependency, a basic terminal interface is used. `--ask` and piped input do not open setup dialogs.
+
+#### Browser workbench
+
+If you intend to ask several questions about one large file, the workbench replaces the terminal for that job:
+
+```bash
+python agent/gui.py --port 8765
+# from your own machine, through an SSH tunnel to the node:
+ssh -p <node-ssh-port> -L 8765:127.0.0.1:8765 Developer@<jump-host>
+```
+
+`agent/agent_main.py --gui` is not wired up yet: reaching `main()` there already requires the model SDK, so that entry point lands with the round that installs it. `agent/gui.py` serves the same thing on its own today.
+
+The server binds `127.0.0.1` and refuses any other interface unless `GPU_GUI_ALLOW_REMOTE=1` is set, because it has no authentication and the node's 8888/9000 ports are reachable from the public internet. Use the tunnel above.
+
+The engine chip reports facts only. A deliberate CPU route reads `CPU · pandas (by choice)` and carries the engine's own crossover reason; a GPU that was asked for and failed reads `(fallback)` in a warning colour. The two never impersonate each other, and where the engine produced no value the row stays empty rather than showing an estimate.
+
+The **direct tool call** panel invokes the real `skills` functions without a model, and says so in the log drawer. It exists because without it the charts, the session card and the engine chip could not be checked in a browser on a machine that has no API key. It is not a substitute for asking a question, and it never renders a prewritten answer. With `openai` not installed, or no key configured, the question box is disabled and shows the real reason (the original `ImportError`, or "no key configured"); every other panel keeps working.
+
 
 ### 2. Connect an API, select a model and choose a language
 

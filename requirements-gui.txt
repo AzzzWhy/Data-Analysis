@@ -1,0 +1,12 @@
+# Optional browser workbench (agent/gui.py). The analytical backend is unchanged.
+#
+# Deliberately empty: the workbench is stdlib only (http.server, json, threading, queue,
+# pathlib, mimetypes, argparse), so installing nothing is the supported path and there is no
+# version of a dependency that can break it. A missing frontend file or an occupied port
+# affects the workbench alone -- agent_main.py, tui_app.py and the engine do not import it.
+#
+# The model layer behind the question box needs openai, which is already a runtime dependency
+# in requirements.txt. Without it the workbench still boots, lists data, runs tools directly
+# and reports honestly why the question box is disabled.
+#
+# no dependencies
