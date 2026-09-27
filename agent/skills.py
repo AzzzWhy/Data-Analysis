@@ -778,6 +778,32 @@ def close_all_sessions() -> dict:
         return {"closed": 0, "error": f"{type(exc).__name__}: {exc}"}
 
 
+def release_all_sessions_and_cache() -> dict:
+    """Close every session AND drop the warm frame cache, then report what is left.
+
+    close_all_sessions() passes retain=True, which is correct at the end of a turn -- the next
+    question should get that frame for free -- and wrong for an explicit release, where it would
+    report success while continuing to hold up to SESSION_WARM_CACHE_MB. It also returns early
+    when no session is active, so it would not touch frames left behind by a closed turn.
+
+    The after-counts come back with the result so a caller can confirm the memory actually went
+    away instead of trusting that it did.
+    """
+    try:
+        before = _worker_call({"cmd": "list"})
+        out = _worker_call({"cmd": "close", "sid": "all"})
+        after = _worker_call({"cmd": "list"})
+        return {
+            "closed": before.get("count") or 0,
+            "warm_frames_dropped": before.get("warm_cache_count") or 0,
+            "sessions_after": after.get("count") or 0,
+            "warm_frames_after": after.get("warm_cache_count") or 0,
+            "detail": out,
+        }
+    except Exception as exc:
+        return {"closed": 0, "error": f"{type(exc).__name__}: {exc}"}
+
+
 def dataset_session(operation: str, file_path: str = None, session_id: str = None,
                     op: str = None, by: str = None, agg: str = None,
                     columns: str = None, top_k: int = None,

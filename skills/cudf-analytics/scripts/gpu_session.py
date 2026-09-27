@@ -701,6 +701,19 @@ def _step_summary(op: str, payload: Any) -> Optional[str]:
     return None
 
 
+def _frame_mb(sess: Session) -> Optional[float]:
+    """Memory the resident frame actually holds, or None when it cannot be measured.
+
+    Zero bytes and unknown bytes are different claims, so this does not collapse them:
+    `_frame_bytes` returns 0 on failure, which would let a workbench card report "0 MB held"
+    for a frame it never measured.
+    """
+    try:
+        return round(float(sess.frame.memory_usage(deep=True).sum()) / 1024 ** 2, 1)
+    except Exception:
+        return None
+
+
 def do_list(_req: dict) -> dict:
     _prune_cache()
     return {
@@ -716,6 +729,7 @@ def do_list(_req: dict) -> dict:
                 "rows": s.rows,
                 "engine": s.engine.name,
                 "steps": s.steps,
+                "resident_mb": _frame_mb(s),
                 "idle_seconds": round(time.perf_counter() - s.opened_at, 1),
                 "cumulative_seconds": round(s.load_seconds + s.analysis_seconds, 3),
             }
