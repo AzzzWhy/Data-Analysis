@@ -376,8 +376,14 @@ def do_open(req: dict) -> dict:
     force_cpu = bool(req.get("force_cpu"))
     force_gpu = bool(req.get("force_gpu"))
     decision_mode = "force_cpu" if force_cpu else "force_gpu" if force_gpu else "auto"
-    route_reason = "CPU forced by the caller" if force_cpu else None
+    route_reason = req.get("_route_reason") or ("CPU forced by the caller" if force_cpu else None)
     route_details: Dict[str, Any] = {}
+    eligibility = GA.hybrid_execution.preflight(
+        str(path), cols, [], req.get("_batch_load_backend", "native"))
+    if eligibility and not force_cpu:
+        force_cpu, force_gpu = True, False
+        route_reason = "preflight selected CPU: " + eligibility
+        route_details["eligibility"] = eligibility
     # Preserve the single-query heuristic. Both engines can keep data resident:
     # resident GPU versus stateless CPU is not a fair acceleration comparison.
     if not force_cpu and not force_gpu:
@@ -422,6 +428,8 @@ def do_open(req: dict) -> dict:
         frame, cache_trace = GA.parquet_cache.read(
             engine, path, None if req.get("_fresh_batch") else
             os.environ.get("GPU_ANALYSIS_PARQUET_CACHE_DIR"), usecols=cols)
+        if getattr(engine, "last_read", None):
+            trace.update(engine.last_read)
         return frame
 
     try:
@@ -450,7 +458,8 @@ def do_open(req: dict) -> dict:
         sid=sid, path=path, engine=eng, frame=frame, rows=int(len(frame)),
         identity=_file_identity(path), load_seconds=load_seconds,
         reason=route_reason if selected_backend == "pandas" else None, usecols=cols,
-        loading={"actual": "cpu_gpu" if eng.is_gpu and load_backend == "cpu_gpu" else
+        loading={"actual": "cpu_gpu" if eng.is_gpu and (load_backend == "cpu_gpu" or
+                 any(a.get("conversion_count") for a in load_attempts)) else
                  "native_gpu" if eng.is_gpu else "cpu", "attempts": load_attempts,
                  "engine_init_seconds": init_seconds},
     )
@@ -895,7 +904,12 @@ def do_batch(req: dict) -> dict:
     context = "warm" if GA._ENGINE is not None and GA._ENGINE.is_gpu else "cold"
     decision = {"selected": None, "reason": "explicit/native request"}
     selected = None
-    if backend == "auto" and not force_cpu:
+    eligibility = GA.hybrid_execution.preflight(path, columns, batch_workflow(steps), backend)
+    if eligibility and not force_cpu:
+        force_cpu, force_gpu = True, False
+        decision = {"selected": "cpu", "policy": "capability_preflight",
+                    "reason": "preflight selected CPU: " + eligibility}
+    if backend == "auto" and not eligibility and not force_cpu:
         selected, decision = GA.hybrid_execution.choose(
             req.get("hybrid_profile", os.environ.get("GPU_ANALYSIS_HYBRID_PROFILE")), path,
             columns, batch_workflow(steps), "batch_" + context)
@@ -903,7 +917,9 @@ def do_batch(req: dict) -> dict:
             backend = "cpu_gpu"
         elif selected:
             backend = "native"
-    if backend == "cpu_gpu":
+    if eligibility:
+        pass  # CPU choice already made, before CUDA initialization or reading.
+    elif backend == "cpu_gpu":
         force_gpu = True
     elif not force_cpu and not force_gpu and selected:
         force_cpu = selected == "cpu"
@@ -915,6 +931,7 @@ def do_batch(req: dict) -> dict:
     opened = do_open({"path": path, "usecols": ",".join(sorted(columns)) if columns else None,
                       "force_cpu": force_cpu, "force_gpu": force_gpu,
                       "measure_cpu": False, "_fresh_batch": True,
+                      "_route_reason": decision.get("reason") if eligibility else None,
                       "_batch_load_backend": backend})
     if not opened.get("ok"):
         return opened
