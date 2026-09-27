@@ -984,9 +984,15 @@ def execute(eng: Engine, load: Callable[[Engine], Any], op: str,
     Returns (payload, engine_used, elapsed_s, fallback_reason, rows).
     """
     started = time.perf_counter()
+    attempts = []
 
     def attempt(engine: Engine) -> Dict[str, Any]:
+        load_started = time.perf_counter()
         df = load(engine)
+        sync_device(engine)
+        phases = {"engine": engine.name, "load_seconds": round(
+            time.perf_counter() - load_started, 6)}
+        attempts.append(phases)
         t_elapsed = _make_timer(engine)
         if op == "auto":
             summary = op_summary(df, engine, args)
@@ -1007,6 +1013,10 @@ def execute(eng: Engine, load: Callable[[Engine], Any], op: str,
         dt = t_elapsed()
         payload["rows_scanned"] = int(len(df))
         payload["compute_seconds"] = round(dt, 6)
+        phases["compute_seconds"] = round(dt, 6)
+        payload["phase_timings"] = {"attempts": attempts,
+            "load_seconds": round(sum(a["load_seconds"] for a in attempts), 6),
+            "compute_seconds": round(dt, 6)}
         return payload
 
     try:
@@ -1113,7 +1123,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         elif force_cpu:
             route_reason = "CPU forced by the caller"
         selected_backend = "pandas" if force_cpu else "cudf"
+        init_started = time.perf_counter()
         eng = detect_engine(force_cpu=force_cpu, verbose=args.verbose)
+        init_seconds = time.perf_counter() - init_started
         payload, used, elapsed, fallback, rows = execute(eng, load, args.op, args)
         # A deliberate CPU choice is not a fallback. Keeping them separate matters: a fallback
         # means the GPU failed, and reporting a routing decision as a failure would both
@@ -1187,6 +1199,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "rows_scanned": rows,
         "op_seconds": round(elapsed, 6),
         "total_seconds": total_seconds,
+        "phase_timings": {**payload.get("phase_timings", {}),
+                          "engine_init_seconds": round(init_seconds, 6),
+                          "request_seconds": total_seconds},
     }
     result.update(payload)
 
@@ -1194,6 +1209,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # read result[op] without caring which op ran ("auto" already nests that way).
     if args.op != "auto":
         result = {**{k: v for k, v in result.items() if k not in payload}, args.op: payload}
+    result["phase_timings"] = {**payload.get("phase_timings", {}),
+                              "engine_init_seconds": round(init_seconds, 6),
+                              "request_seconds": total_seconds}
 
     print(json.dumps(result, indent=2 if args.pretty else None, default=str, ensure_ascii=False), flush=True)
     return 0

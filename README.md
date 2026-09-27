@@ -8,6 +8,12 @@
 
 [外部 Skill / MCP 自动发现与调用（配置、权限与测试）](docs/EXTERNAL_TOOLS.md)
 
+[更快的执行：常驻工作进程、批量分析与耗时口径](docs/FAST_EXECUTION.md)
+
+[GB10 复测与真实 1.135 亿行实验](docs/POST_CACHE_AND_PUBLIC_DATA_RESULTS.md)
+
+[CPU 加载＋GPU 计算：三个独立开发分支](docs/HYBRID_BRANCHES.md)
+
 A tool-calling agent that runs exact statistical analysis over large local datasets. On a
 configured NVIDIA GPU it can use RAPIDS cuDF; otherwise it reports the actual pandas/CPU path.
 The model decides what to compute and writes the answer from local tool results; raw dataset
@@ -158,7 +164,7 @@ file, during the run.
 
 | Criterion | What is implemented | Where to check it |
 | :--- | :--- | :--- |
-| Skill invocation: choosing the right tool and arguments unprompted | The model selects from four tools. Given no path it calls `list_datasets` first. A conceptual question invokes nothing. After a bad column name it calls `profile` to get the real names and retries. A multi-step request switches to the session tool and passes its `goal` to claim a plan. | `agent/run_criteria_tests.sh`, 11 cases. The assertions run against the tool-call trace rather than the prose of the answer. |
+| Skill invocation: choosing the right tool and arguments unprompted | The model selects built-in analysis tools and authorized external gateways. Given no path it calls `list_datasets` first. A conceptual question invokes nothing. Adaptive work uses sessions; independent known-column work can use `analyze_batch`. | Original criteria: `agent/run_criteria_tests.sh`, 11 cases. New batch validation: `agent/fast_execution_live_test.py`. Assertions inspect tool-call traces, not prose alone. |
 | Task completion: natural language in, real results out | All six operations return real statistics. An answer carries conclusions, rankings, tables and key findings, and the run also writes report and chart files the user can keep. | `smoke_test.py` (use the current runner output). `verify_*.py` recomputes the numbers independently. |
 | Innovation | Resident sessions avoid repeated parsing; plans are system state; portable scripts produce full-data results and deliverables. | Historical 20.4x drill-down compares resident GPU with stateless CPU, not pure acceleration. The fair resident benchmark is 2.92x at 20M rows. |
 | Code usability: deployable, robust, survives bad input | The engine degrades to pandas on its own. No tool ever raises. A session is refused before loading when memory is short. A file that changed underneath a session is refused rather than answered from a stale snapshot. Two-column grouping fails with an explicit message. No GPU, a missing file and a bad column name are all handled gracefully. Memory is released in a `finally` block. | The no-GPU path runs on an ordinary machine. `tool_contract_test.py`, `plan_test.py` and the session tests cover the public contracts. |
@@ -714,7 +720,7 @@ bash run_stability_check.sh 3 "$DEMO_DATA"
 python ../skills/cudf-analytics/scripts/plan_test.py
 ```
 
-`--prewarm` matters. On the first run of any given question the agent also runs it on CPU to
+In benchmark mode (`SKILL_SHOW_SPEEDUP=1`), `--prewarm` matters. On the first run of any given question the agent also runs it on CPU to
 measure the speedup, which takes 15-25 seconds. Prewarming writes those baselines to
 `.gpu_vs_cpu_cache.json`, so every stage of the live demo can show its speedup immediately, and
 it warms the session workflow so stage nine is not left waiting on a comparison measurement.
@@ -773,8 +779,8 @@ in its own output.
 - The CSV path is well tested; Parquet and Excel go through a generic read path.
 - Deliverables are written to a local directory. There is no upload or sharing, and several
   datasets cannot be combined into one report.
-- The speedup comparison runs an extra CPU pass, adding 15-25 seconds to the first query of a
-  session. `--prewarm` avoids this during a demo.
+- Optional speedup comparisons (`SKILL_SHOW_SPEEDUP=1`) run extra CPU passes and can delay
+  the first answer. Normal mode defaults to off; `--prewarm` helps comparison demos.
 - Answers to conceptual questions are limited by the model, not by the skill.
 - Goal-to-plan classification matches English keywords. A goal phrased in another language falls
   back to the default plan shape.

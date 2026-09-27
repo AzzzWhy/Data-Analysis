@@ -21,9 +21,11 @@ The original `load_csv_dataset` is kept for compatibility with the earlier agent
 """
 
 import atexit
+from collections import deque
 import json
 import os
 import subprocess
+import queue
 import sys
 import threading
 import time
@@ -194,6 +196,8 @@ skill_definitions = [
         "function": {
             "name": "analyze_dataset",
             "description": (
+                "Single independent analysis. For two or more independent analyses with "
+                "known columns on the same file, use analyze_batch instead of repeated calls. "
                 "Run real GPU-accelerated statistics over a local tabular data file and return "
                 "exact results. Covers: a profile (rows, columns, types, missing values), summary "
                 "statistics (count/mean/std/min/Q1/median/Q3/max), grouped aggregation, a "
@@ -221,7 +225,7 @@ skill_definitions = [
                         "enum": ["auto", "profile", "summary", "groupby", "corr", "outliers"],
                         "description": (
                             "analysis to run. auto=profile, summary and outliers in one call "
-                            "(start with it); "
+                            "(when a general overview is requested); "
                             "profile=rows/columns/types/missing/preview; summary=per-column "
                             "statistics; "
                             "groupby=aggregate grouped by a column (needs by and agg); "
@@ -443,8 +447,8 @@ def _file_identity(path: str) -> tuple:
 
 
 def _speedup_enabled() -> bool:
-    """Enabled by default; set SKILL_SHOW_SPEEDUP=0 to turn the extra CPU run off."""
-    return os.environ.get("SKILL_SHOW_SPEEDUP", "1").strip().lower() not in {"0", "false", "no"}
+    """Benchmarking is opt-in: two extra CPU passes must not delay normal answers."""
+    return os.environ.get("SKILL_SHOW_SPEEDUP", "0").strip().lower() not in {"0", "false", "no"}
 
 
 def _rows_of(payload: dict) -> int | None:
@@ -658,8 +662,21 @@ def _worker_start():
     proc = subprocess.Popen(
         [_python_bin(), script],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True, bufsize=1,
+        text=True, encoding="utf-8", bufsize=1,
     )
+    proc.responses = queue.Queue()
+    proc.stderr_tail = deque(maxlen=20)
+    def read_responses():
+        try:
+            for line in proc.stdout:
+                proc.responses.put(line)
+        finally:
+            proc.responses.put(None)
+    def drain_errors():
+        for line in proc.stderr:
+            proc.stderr_tail.append(line[-500:])
+    threading.Thread(target=read_responses, daemon=True).start()
+    threading.Thread(target=drain_errors, daemon=True).start()
     # Kill the worker when this process exits, so a crashed agent does not leave a process
     # holding gigabytes of device memory.
     atexit.register(lambda: _worker_stop(proc))
@@ -675,6 +692,11 @@ def _worker_stop(proc) -> None:
             except Exception:
                 pass
             proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=3)
     except Exception:
         pass
 
@@ -702,15 +724,20 @@ def _worker_call(payload: dict, timeout: float = 1800.0):
         try:
             _worker.stdin.write(json.dumps(payload) + "\n")
             _worker.stdin.flush()
-            line = _worker.stdout.readline()
+            line = _worker.responses.get(timeout=timeout)
+        except queue.Empty:
+            _worker_stop(_worker)
+            _worker = None
+            return {"ok": False, "error": "analysis worker timed out; process stopped"}
         except (BrokenPipeError, OSError) as exc:
+            _worker_stop(_worker)
             _worker = None
             return {"ok": False, "error": f"session process communication failed: {exc}. "
                                            f"Use analyze_dataset instead."}
         if not line:
             err = ""
             try:
-                err = (_worker.stderr.read() or "")[-400:]
+                err = "".join(_worker.stderr_tail)[-400:]
             except Exception:
                 pass
             _worker = None
@@ -722,6 +749,47 @@ def _worker_call(payload: dict, timeout: float = 1800.0):
         except json.JSONDecodeError:
             return {"ok": False, "error": f"the session process returned unparseable output: "
                                           f"{line[:200]}"}
+
+
+def _run_analysis(cmd):
+    """Same CLI payload, warm interpreter; transport failures retain CLI fallback."""
+    started = time.perf_counter()
+    if not _speedup_enabled() and os.environ.get("GPU_ANALYSIS_PERSISTENT_WORKER", "1").lower() not in {"0", "false", "no"}:
+        reply = _worker_call({"cmd": "oneshot", "argv": cmd[2:]})
+        if reply.get("ok") and isinstance(reply.get("payload"), dict):
+            proc = subprocess.CompletedProcess(cmd, reply["exit_code"],
+                        json.dumps(reply["payload"], ensure_ascii=False), "")
+            proc.transport_timings = {"mode": "persistent_worker",
+                "wall_seconds": round(time.perf_counter() - started, 6),
+                "note": "Includes worker startup on first call; frame reloaded on each oneshot."}
+            return proc
+    proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=1800)
+    proc.transport_timings = {"mode": "subprocess",
+                             "wall_seconds": round(time.perf_counter() - started, 6)}
+    return proc
+
+
+def analyze_batch(file_path: str, steps: list, force_cpu: bool = False) -> str:
+    """Independent known analyses in one tool turn, with deterministic cleanup."""
+    try:
+        reply = _worker_call({"cmd": "batch", "path": _resolve_data_path(file_path),
+                              "steps": steps, "force_cpu": force_cpu})
+        reply["success"] = bool(reply.pop("ok", False))
+        reply["comparison_measured"] = False
+        reply["performance_note"] = (
+            "No CPU/GPU baseline was measured. Report actual engines and time only; "
+            "do not invent a baseline, speedup factor or GPU-faster claim.")
+        for result in reply.get("results", []):
+            for op in ("auto", "profile", "summary", "groupby", "corr", "outliers"):
+                if op in result:
+                    if op == "corr" and "matrix" in result[op]:
+                        result[op]["matrix"] = _trim_matrix(result[op]["matrix"])
+                    result[op] = _compact(result[op])
+        if reply["success"]:
+            _remember_last_file(_resolve_data_path(file_path))
+        return json.dumps(reply, ensure_ascii=False, default=str)
+    except Exception as exc:
+        return _err(f"batch failed: {type(exc).__name__}: {exc}")
 
 
 def _resolve_data_path(file_path: str) -> str:
@@ -773,6 +841,8 @@ def close_all_sessions() -> dict:
     to clean up are unreliable (observed: a real run left a 1.7 GB session open), and a
     leaked active session degrades later tasks on the box. Returns what it closed.
     """
+    if _worker is None or _worker.poll() is not None:
+        return {"closed": 0}
     try:
         resp = _worker_call({"cmd": "list"})
         opened = resp.get("count") or 0
@@ -884,7 +954,8 @@ def dataset_session(operation: str, file_path: str = None, session_id: str = Non
 
         if operation == "open":
             req = {"cmd": "open", "path": _resolve_data_path(file_path),
-                   "force_cpu": bool(force_cpu), "force_gpu": bool(force_gpu)}
+                   "force_cpu": bool(force_cpu), "force_gpu": bool(force_gpu),
+                   "measure_cpu": _speedup_enabled()}
             if goal and str(goal).strip():
                 req["goal"] = str(goal).strip()
         elif operation == "analyze":
@@ -992,7 +1063,7 @@ def analyze_dataset(file_path: str, operation: str, by: str = None, agg: str = N
         if force_cpu:
             cmd += ["--force-cpu"]
 
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        proc = _run_analysis(cmd)
 
         # Diagnostics go to stderr; the note about a CPU fallback is worth keeping.
         note = ""
@@ -1020,8 +1091,7 @@ def analyze_dataset(file_path: str, operation: str, by: str = None, agg: str = N
         group = payload.get("groupby", {})
         groups = group.get("groups", 0)
         if top_k is None and 0 < groups <= 30 and len(group.get("top_k", [])) < groups:
-            proc = subprocess.run(cmd + ["--top-k", str(groups)], capture_output=True,
-                                  text=True, timeout=1800)
+            proc = _run_analysis(cmd + ["--top-k", str(groups)])
             payload = json.loads(proc.stdout)
             if not payload.get("ok"):
                 return _err(payload.get("error") or "complete group analysis failed")
@@ -1059,6 +1129,8 @@ def analyze_dataset(file_path: str, operation: str, by: str = None, agg: str = N
             "accelerated": payload.get("accelerated"),
             "rows_scanned": rows_scanned,
             "seconds": payload.get("total_seconds"),
+            "phase_timings": payload.get("phase_timings"),
+            "transport_timings": getattr(proc, "transport_timings", None),
             "execution_decision": payload.get("execution_decision"),
             "result": _compact(result),
         }
@@ -1382,7 +1454,28 @@ def _err(message: str, hint: str = None, detail: str = None, exit_code: int = No
 # Tool map
 # --------------------------------------------------------------------------------------
 
+skill_definitions.append({"type": "function", "function": {
+    "name": "analyze_batch",
+    "description": "Run 1-8 independent, already specified analyses on one file in one call. "
+        "Loads required columns once, shares exact statistics, closes its session automatically. "
+        "Prefer this over multiple analyze_dataset calls when the columns and operations are "
+        "already known. Do not use for adaptive drill-down that depends on earlier results; "
+        "use dataset_session for that. No sampling. Check each result's engine/fallback. "
+        "Groupby defaults to top 30; do not infer omitted groups or a global minimum.",
+    "parameters": {"type": "object", "properties": {
+        "file_path": {"type": "string"},
+        "force_cpu": {"type": "boolean"},
+        "steps": {"type": "array", "minItems": 1, "maxItems": 8, "items": {
+            "type": "object", "additionalProperties": False,
+            "properties": {"op": {"type": "string", "enum":
+                ["auto", "profile", "summary", "groupby", "corr", "outliers"]},
+                "by": {"type": "string"}, "agg": {"type": "string"},
+                "columns": {"type": "string"},
+                "top_k": {"type": "integer", "minimum": 1, "maximum": 100}},
+            "required": ["op"]}}}, "required": ["file_path", "steps"]}}})
+
 skill_func_map = {
+    "analyze_batch": analyze_batch,
     "analyze_dataset": analyze_dataset,
     "dataset_session": dataset_session,
     "export_deliverables": export_deliverables,
