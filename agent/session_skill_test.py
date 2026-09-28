@@ -178,6 +178,16 @@ def open_session(path):
     return call(operation="open", file_path=path, **OPEN_KW)
 
 
+print("=== benchmarking is opt-in, and this suite opts in ===")
+# origin/main flipped `_speedup_enabled()` to default-off: two extra CPU passes must not delay an
+# ordinary answer. That is the right default and the wrong setting for a lifecycle test, because
+# `workflow_comparison` is then legitimately absent and the close checks below would pass on
+# nothing. Pin the default first, then opt in so the machinery is genuinely exercised.
+os.environ.pop("SKILL_SHOW_SPEEDUP", None)
+check("no speedup work requested by default", skills._speedup_enabled() is False)
+os.environ["SKILL_SHOW_SPEEDUP"] = "1"
+check("and the flag is what turns it on", skills._speedup_enabled() is True)
+
 print("=== open ===")
 t0 = time.perf_counter()
 r = open_session(DATA)
@@ -262,6 +272,20 @@ check("workflow speedup reported", isinstance(wc.get("speedup_x"), (int, float))
       str(wc.get("speedup_x")))
 check("workflow note keeps the claim honest",
       any(k in str(wc.get("note", "")) for k in ("not a pure", "not purely", "does not equal")))
+
+print("=== leaving it opted out really does skip the baseline ===")
+# `_speedup_enabled()` returning False is not the same promise as the worker producing no figure.
+# An opted-out session must invent nothing, otherwise the default is cosmetic.
+os.environ.pop("SKILL_SHOW_SPEEDUP", None)
+r2 = open_session(DATA)
+sid2 = r2.get("session_id")
+check("an opted-out session still opens", bool(sid2), str(r2.get("error"))[:60])
+if sid2:
+    call(operation="analyze", session_id=sid2, op="summary")
+    c2 = call(operation="close", session_id=sid2)
+    check("and reports no workflow figure", c2.get("workflow_comparison") in (None, {}),
+          json.dumps(c2)[:90])
+os.environ["SKILL_SHOW_SPEEDUP"] = "1"
 
 print("=== the cuDF branch is asserted under mock, not skipped ===")
 # Without this block a GPU-less machine would verify zero of the cudf code path. The engine is
