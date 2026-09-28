@@ -150,6 +150,24 @@ def _gate_mode(server) -> str:
         return "open"
     return "setup"
 
+
+def _probe_config_dir() -> bool:
+    """True when the config directory can actually hold a file.
+
+    A hardened user profile can leave the default ~/.config uncreatable for a normal
+    user; a browser-set gate password (and every saved connection setting) then fails
+    at the worst possible moment. The server says so at startup instead, naming the
+    way out: XDG_CONFIG_HOME pointed at a writable directory.
+    """
+    try:
+        gate_file().parent.mkdir(parents=True, exist_ok=True)
+        probe = gate_file().parent / ".write-probe"
+        probe.write_text("", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        return True
+    except OSError:
+        return False
+
 # Tools the workbench may invoke directly. Kept explicit: an HTTP body must never become a
 # call to something chosen by the caller.
 RUNNABLE_TOOLS = ("analyze_dataset", "dataset_session", "export_deliverables", "list_datasets")
@@ -882,7 +900,11 @@ class Handler(BaseHTTPRequestHandler):
             gate_file().parent.mkdir(parents=True, exist_ok=True)
             gate_file().write_text(json.dumps(payload, indent=2), encoding="utf-8")
         except OSError as exc:
-            return self._json(500, {"error": f"could not store the password digest: {exc}"})
+            return self._json(500, {"error": f"could not store the password digest in "
+                                             f"{gate_file()}: {exc}. The config directory "
+                                             f"must be writable; point XDG_CONFIG_HOME (or "
+                                             f"GPU_ANALYSIS_CONFIG) at one that is, and "
+                                             f"restart."})
         self.server.gate_credential = (salt, GATE_KDF_ITERATIONS, digest)
         self._issue_session()
 
@@ -1211,6 +1233,10 @@ def serve(port: int = DEFAULT_PORT, host: str = "127.0.0.1",
               "before leaving a trusted network.")
     print(f"  engine: {'ready' if status['engine_ready'] else 'not reachable: ' + status['engine_error']}")
     print(f"  model client: {model_state}")
+    if not _probe_config_dir():
+        print(f"  config dir NOT writable: {gate_file().parent}")
+        print("  a browser-set gate password and saved settings will fail until it is; "
+              "set XDG_CONFIG_HOME to a writable directory and restart")
     print("  Ctrl+C to stop; any resident session is released on the way out.")
     try:
         httpd.serve_forever()
