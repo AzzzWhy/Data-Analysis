@@ -96,7 +96,11 @@ h3 { font-size: 15px; }
 .asker { display: flex; gap: 10px; }
 .asker input { flex: 1; min-width: 0; height: 42px; padding: 0 13px; color: var(--ink); background: var(--surface-subtle); border: 1px solid var(--line); border-radius: 7px; }
 .asker input:focus { outline: none; border-color: #83aaa7; box-shadow: 0 0 0 3px var(--accent-soft); background: #fff; }
-.asker input:disabled { color: var(--faint); cursor: not-allowed; }
+/* Pending-configuration: the send button waits, visibly secondary but clickable -- a click
+   opens the form that finishes the setup. The field itself never locks, so a question can be
+   typed ahead; a grey input that refuses focus reads as broken, and it is not one. */
+.asker button[data-pending="1"] { border-color: #cfd5db; background: var(--surface-subtle); color: var(--muted); }
+.asker button[data-pending="1"]:hover:not(:disabled) { border-color: var(--line-strong); color: var(--ink); background: #eef1f3; }
 
 .result-panel { min-height: 520px; padding: 22px; }
 .result-header { padding-bottom: 17px; border-bottom: 1px solid var(--line); margin-bottom: 20px; }

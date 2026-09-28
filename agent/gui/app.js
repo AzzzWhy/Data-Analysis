@@ -35,6 +35,8 @@ let selected = null;      // absolute path of the chosen dataset
 let session = null;       // last session_id we opened, so "analyze" can reuse it
 let stream = null;        // active EventSource
 let canAsk = false;       // whether /api/state says a configured client exists
+let agentReady = false;   // whether the model client import itself worked
+let notReadyHint = "";    // why sending is gated, in the words renderState already chose
 let logVisible = true;    // the execution drawer
 
 /* ---------------------------------------------------------------- text helpers */
@@ -256,17 +258,21 @@ function renderState(state) {
     notes.unshift(t("分析引擎未响应：") + state.engine_error);
   }
 
-  // The question box is the model-driven path, so it opens exactly when a configured client
-  // exists and not one moment before. The reason is shown rather than left to be discovered.
+  // The question box is the model-driven path, so its submit opens exactly when a configured
+  // client exists. The input itself never locks: a question can be typed ahead of the config,
+  // and sending before that walks straight to the form that fixes it. A grey input that would
+  // not take focus used to read as "broken"; that was the button's job dressed up as the
+  // field's.
   const canAskNow = Boolean(state.agent_available && state.config_ready);
   canAsk = canAskNow;
-  els.prompt.disabled = !canAskNow;
-  els.ask.disabled = !canAskNow;
+  agentReady = Boolean(state.agent_available);
+  notReadyHint = agentReady
+    ? notReadyText(state)
+    : t("提问需要模型客户端（pip install -r requirements.txt）。下面「直接工具调用」不需要它。");
+  els.ask.dataset.pending = canAsk ? "" : "1";
   els.askHint.textContent = canAsk
     ? t("提问会把选中的文件路径作为一行上下文附在问题后面，日志里会显示模型实际收到的原文。")
-    : (!state.agent_available
-      ? t("提问需要模型客户端（pip install -r requirements.txt）。下面「直接工具调用」不需要它。")
-      : notReadyText(state));
+    : notReadyHint;
 
   if (notes.length) {
     els.banner.hidden = false;
@@ -724,13 +730,13 @@ function attach(jobId) {
     if (stream === me) stream = null;
     setBusy(false);
     els.run.disabled = false;
-    els.ask.disabled = !canAsk;
+    els.ask.disabled = false;   // the pending look carries the config state; busy no longer does
   });
   stream.addEventListener("done", () => {
     setPhase("完成");
     setBusy(false);
     els.run.disabled = false;
-    els.ask.disabled = !canAsk;
+    els.ask.disabled = false;
     me.close();
     if (stream === me) stream = null;
   });
@@ -760,9 +766,18 @@ async function run() {
   attach(data.job_id);
 }
 
-/* The model-driven path. Disabled until /api/state says a configured client exists, so it can
-   never look available while quietly doing nothing. */
+/* The model-driven path. The submit can arrive before a client is configured -- the input is
+   always typable -- and that click is spent guiding the operator to the form that fixes it,
+   with the question left in the box. */
 async function ask() {
+  if (!canAsk) {
+    if (agentReady) {
+      $("open-settings").click();
+      $("set-url").focus();
+    }
+    els.askHint.textContent = notReadyHint;
+    return;
+  }
   const question = els.prompt.value.trim();
   if (!question) return;
   els.prompt.value = "";
