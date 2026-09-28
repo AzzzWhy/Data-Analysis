@@ -213,6 +213,12 @@ button.primary[data-ok="1"] {
   background: rgba(255,255,255,.02);
   color: var(--slate-2); font-size: 11px;
 }
+/* The build tag answers "which page am I actually looking at" from the page itself, so a
+   tab rendered hours ago cannot masquerade as the current release. */
+.build-tag {
+  float: right; color: var(--slate-2); font-family: var(--mono);
+  font-size: 10px; letter-spacing: .04em; opacity: .8;
+}
 
 @media (prefers-reduced-motion: reduce) {
   .scene-grid, .orb, .product-mark,
