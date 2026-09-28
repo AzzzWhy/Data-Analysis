@@ -28,6 +28,7 @@ const els = {
   forceCpu: $("force-cpu"), forceGpu: $("force-gpu"),
   prompt: $("prompt"), ask: $("ask"), askHint: $("ask-hint"),
   pulse: $("pulse"), tabs: $("tabs"), chart: $("chart"), chartCap: $("chart-cap"),
+  placeholder: $("result-placeholder"),
 };
 
 let selected = null;      // absolute path of the chosen dataset
@@ -94,8 +95,7 @@ function applyChrome() {
   $("prompt").placeholder = LANG === "en"
     ? "e.g. Compare total and average revenue by region" : "例如：按地区统计 revenue 的总和与均值";
   $("goal").placeholder = t("例如：找出 revenue 离群点的成因");
-  $("drawer-toggle").textContent = t("执行详情") + " · "
-    + (logVisible ? t("收起") : t("展开"));
+  $("drawer-toggle").textContent = logVisible ? t("收起") : t("展开");
   // Attributes are outside the text sweep, so the tablist's accessible name is localised here --
   // leaving it in the HTML would strand a Chinese label under language=en.
   els.tabs.setAttribute("aria-label", t("图表类型"));
@@ -464,6 +464,7 @@ function renderToolResult(payload) {
     if (result.hint) line(els.log, "dim", `   hint: ${result.hint}`);
     return;
   }
+  if (els.placeholder) els.placeholder.hidden = true;
   setChip(chip);
   const engine = result.engine || (result.execution_decision || {}).actual_backend;
   line(els.log, "ok", `   OK engine=${engine} rows=${result.rows_scanned ?? "?"} ` +
@@ -703,6 +704,7 @@ function attach(jobId) {
   });
   stream.addEventListener("answer", (e) => {
     const body = JSON.parse(e.data);
+    if (els.placeholder) els.placeholder.hidden = true;
     els.answer.hidden = false;
     renderMarkdown(els.answer, body.text);
   });

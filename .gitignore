@@ -4,6 +4,7 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+.web-deps/
 
 # GPU/CPU comparison cache: machine-specific timings, useless in version control
 .gpu_vs_cpu_cache.json

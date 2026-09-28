@@ -3,151 +3,173 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GPU加速与数据分析 · 工作台</title>
+<title>Data Workbench</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
 
-<header>
-  <div class="brand">
-    <span class="mark">//✦</span>
-    <span class="eyebrow">GPU × DATA</span>
-    <h1>GPU加速与数据分析 · 工作台</h1>
+<header class="topbar">
+  <div class="product">
+    <span class="product-mark" aria-hidden="true">D</span>
+    <div class="product-copy">
+      <strong>Data Workbench</strong>
+      <span>GPU 数据分析工作台</span>
+    </div>
   </div>
-  <div class="context">
-    <span id="ctx-model">—</span> · <span id="ctx-host">—</span> · <span id="ctx-file">未选择文件</span>
-    <button id="lang" class="ghost inline">中文</button>
-    <button id="open-settings" class="ghost inline">设置</button>
+  <div class="topbar-meta">
+    <span class="connection"><i></i><span id="ctx-host">—</span></span>
+    <span id="ctx-model" class="model-name">—</span>
+    <button id="lang" class="text-button">中文</button>
+    <button id="open-settings" class="secondary small">连接设置</button>
   </div>
 </header>
 
 <div id="banner" class="banner" hidden></div>
 
-<main>
-  <aside>
-    <section class="sect">
-      <h2>数据文件</h2>
-      <div id="files" class="files"></div>
-      <p class="hint">列表来自 <code>list_datasets</code> 的有界搜索根，不含主目录子层。</p>
-    </section>
+<main class="workspace">
+  <aside class="sidebar">
+    <div class="sidebar-head">
+      <div><span class="overline">Workspace</span><h2>数据源</h2></div>
+      <span class="file-count" aria-label="可用文件">CSV</span>
+    </div>
+    <div id="files" class="files"></div>
+    <p class="hint sidebar-note">显示当前允许目录内可分析的数据文件。</p>
 
-    <section class="sect">
-      <h2>计划</h2>
-      <div id="plan-card" class="card plan">
-        <div class="row"><span class="k">类型</span><span class="v" id="plan-kind">—</span></div>
-        <div class="row"><span class="k">进度</span><span class="v" id="plan-progress">—</span></div>
+    <div class="sidebar-divider"></div>
+
+    <section class="side-section">
+      <div class="section-title-row"><h2>分析计划</h2><span id="plan-progress" class="subtle-value">—</span></div>
+      <div id="plan-card" class="plan-card">
+        <div class="plan-type"><span class="k">类型</span><span class="v" id="plan-kind">—</span></div>
         <ol id="plan-steps" class="plan-steps"></ol>
         <p class="hint" id="plan-next"></p>
       </div>
     </section>
 
-    <section class="sect">
-      <h2>会话</h2>
-      <div id="sess-card" class="card">
-        <div class="row"><span class="k">状态</span><span class="v" id="sess-state">—</span></div>
-        <div class="row"><span class="k">会话数</span><span class="v" id="sess-count">—</span></div>
-        <div class="row"><span class="k">步数</span><span class="v" id="sess-steps">—</span></div>
-        <div class="row"><span class="k">占用</span><span class="v" id="sess-mb">—</span></div>
-        <div class="row"><span class="k">保留帧</span><span class="v" id="sess-frames">—</span></div>
+    <section class="side-section session-section">
+      <div class="section-title-row"><h2>计算会话</h2><span class="status-dot" aria-hidden="true"></span></div>
+      <div id="sess-card" class="session-card">
+        <div class="row primary-row"><span class="k">状态</span><span class="v" id="sess-state">—</span></div>
+        <div class="session-metrics">
+          <div><span class="k">会话数</span><span class="v" id="sess-count">—</span></div>
+          <div><span class="k">步数</span><span class="v" id="sess-steps">—</span></div>
+          <div><span class="k">占用</span><span class="v" id="sess-mb">—</span></div>
+          <div><span class="k">保留帧</span><span class="v" id="sess-frames">—</span></div>
+        </div>
       </div>
       <p class="hint" id="sess-hint"></p>
-      <button id="release" class="ghost">释放会话</button>
+      <button id="release" class="secondary full">释放会话</button>
     </section>
   </aside>
 
-  <section class="pane">
-    <h2>提问</h2>
-    <form id="asker" class="asker">
-      <input id="prompt" type="text" autocomplete="off"
-             placeholder="例如：按 region 统计 revenue 的总和与均值，指出最高和最低的地区">
-      <button type="submit" id="ask">发送</button>
-    </form>
-    <p class="hint" id="ask-hint"></p>
+  <section class="content">
+    <div class="page-heading">
+      <div>
+        <span class="overline">Analysis</span>
+        <h1>分析工作台</h1>
+        <p>选择数据，用自然语言提问，或从右侧精确配置分析任务。</p>
+      </div>
+      <div class="selected-file">
+        <span class="selected-file-label">当前数据</span>
+        <span id="ctx-file">未选择文件</span>
+      </div>
+    </div>
 
-    <h2>输出</h2>
-    <button id="drawer-toggle" class="ghost inline-left" aria-expanded="true">执行详情 · 收起</button>
-    <div id="log" class="log" aria-live="polite"></div>
-  </section>
-
-  <section class="pane right">
-    <h2>结果</h2>
-    <details id="tool-drawer" class="tool-drawer">
-      <summary class="lt">直接工具调用（不经过模型）</summary>
-      <form id="runner" class="runner">
-        <label><span class="lt">工具</span>
-          <select id="tool">
-            <option value="analyze_dataset">analyze_dataset（单次，无驻留）</option>
-            <option value="dataset_session">dataset_session（驻留会话）</option>
-            <option value="export_deliverables">export_deliverables（出报告与图表）</option>
-            <option value="list_datasets">list_datasets（发现数据）</option>
-          </select>
-        </label>
-        <label><span class="lt">会话操作</span>
-          <select id="session-op" disabled>
-            <option value="open">open</option>
-            <option value="analyze">analyze</option>
-            <option value="close">close</option>
-            <option value="list">list</option>
-          </select>
-        </label>
-        <label><span class="lt">分析操作</span>
-          <select id="op">
-            <option value="auto">auto</option>
-            <option value="profile">profile</option>
-            <option value="summary">summary</option>
-            <option value="groupby">groupby</option>
-            <option value="corr">corr</option>
-            <option value="outliers">outliers</option>
-          </select>
-        </label>
-        <label><span class="lt">分组列</span> <input id="by" placeholder="region" autocomplete="off"></label>
-        <label><span class="lt">聚合</span> <input id="agg" placeholder="revenue:sum,mean" autocomplete="off"></label>
-        <label class="wide"><span class="lt">目标（可选，仅 open 用）</span>
-          <input id="goal" placeholder="例如：找出 revenue 离群点的成因" autocomplete="off"></label>
-        <label class="check"><input id="force-cpu" type="checkbox"> force_cpu</label>
-        <label class="check"><input id="force-gpu" type="checkbox"> force_gpu</label>
-        <button type="submit" id="run">直接工具调用</button>
+    <section class="query-card">
+      <div class="query-label"><span>问题</span><span class="keyboard-hint">Enter 发送</span></div>
+      <form id="asker" class="asker">
+        <input id="prompt" type="text" autocomplete="off" placeholder="例如：按地区统计收入的总和与均值，并比较差异">
+        <button type="submit" id="ask" class="primary">分析</button>
       </form>
-      <p class="hint">这一栏不经过模型：按下去就是真的一次 <code>skills</code> 调用，
-        返回的是引擎自己的 <code>execution_decision</code>。它存在是为了在没有 API 密钥的机器上
-        也能验证引擎标记、会话卡与图表产物，不是提问框的替代品。</p>
-    </details>
-    <div id="kpis" class="kpis"></div>
-    <div id="answer" class="answer markdown" hidden></div>
-    <div class="tabs" role="tablist" id="tabs" hidden></div>
-    <div id="chart" role="tabpanel" hidden></div>
-    <p class="cap" id="chart-cap"></p>
-    <div id="charts" class="charts"></div>
-    <div id="tables" class="tables"></div>
-  </section>
-</main>
+      <p class="hint" id="ask-hint"></p>
+    </section>
 
-<footer>
-  <span id="pulse" data-busy="0" aria-hidden="true">·</span>
-  <span id="phase">待命</span>
-  <span class="spacer"></span>
-  <span id="chip" class="chip muted">no result yet</span>
-  <span id="elapsed">—</span>
-</footer>
-<p class="keys"><b>F2</b> <span class="lt">执行详情</span> · <b>F3</b> <span class="lt">文件</span> ·
-   <b>F4</b> <span class="lt">提问</span> · <b>F5</b> <span class="lt">设置</span> ·
-   <b>F6</b> <span class="lt">语言</span> · <b>F8</b> <span class="lt">释放会话</span> ·
-   <b>Esc</b> <span class="lt">关闭弹窗</span> · <b>Enter</b> <span class="lt">提交</span></p>
+    <section class="result-panel">
+      <div class="result-header">
+        <div><span class="overline">Result</span><h2>分析结果</h2></div>
+        <div class="run-summary"><span id="chip" class="chip muted">尚无结果</span><span id="elapsed">—</span></div>
+      </div>
+      <div id="result-placeholder" class="result-placeholder">
+        <div class="placeholder-graphic" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
+        <h3>从一个问题开始</h3>
+        <p>运行结果、关键指标、图表和明细表会集中显示在这里。</p>
+      </div>
+      <div id="kpis" class="kpis"></div>
+      <div id="answer" class="answer markdown" hidden></div>
+      <div class="tabs" role="tablist" id="tabs" hidden></div>
+      <div id="chart" role="tabpanel" hidden></div>
+      <p class="cap" id="chart-cap"></p>
+      <div id="charts" class="charts"></div>
+      <div id="tables" class="tables"></div>
+    </section>
+  </section>
+
+  <aside class="inspector">
+    <div class="inspector-head">
+      <div><span class="overline">Controls</span><h2>运行分析</h2></div>
+      <span class="phase"><i id="pulse" data-busy="0" aria-hidden="true"></i><span id="phase">待命</span></span>
+    </div>
+    <form id="runner" class="runner">
+      <label><span class="lt">运行方式</span>
+        <select id="tool">
+          <option value="analyze_dataset">即时分析</option>
+          <option value="dataset_session">驻留会话</option>
+          <option value="export_deliverables">生成报告</option>
+          <option value="list_datasets">发现数据</option>
+        </select>
+      </label>
+      <label><span class="lt">会话操作</span>
+        <select id="session-op" disabled>
+          <option value="open">打开</option><option value="analyze">分析</option>
+          <option value="close">关闭</option><option value="list">查看</option>
+        </select>
+      </label>
+      <label><span class="lt">分析类型</span>
+        <select id="op">
+          <option value="auto">自动判断</option><option value="profile">数据概览</option>
+          <option value="summary">统计摘要</option><option value="groupby">分组聚合</option>
+          <option value="corr">相关性</option><option value="outliers">离群点</option>
+        </select>
+      </label>
+      <div class="field-pair">
+        <label><span class="lt">分组列</span><input id="by" placeholder="region" autocomplete="off"></label>
+        <label><span class="lt">聚合规则</span><input id="agg" placeholder="revenue:sum,mean" autocomplete="off"></label>
+      </div>
+      <label><span class="lt">分析目标</span><textarea id="goal" rows="3" placeholder="例如：找出收入离群点的成因"></textarea></label>
+      <div class="compute-options">
+        <span class="field-label">计算设备</span>
+        <div>
+          <label class="check"><input id="force-cpu" type="checkbox"><span>强制 CPU</span></label>
+          <label class="check"><input id="force-gpu" type="checkbox"><span>强制 GPU</span></label>
+        </div>
+      </div>
+      <button type="submit" id="run" class="primary full">运行任务</button>
+    </form>
+
+    <div class="activity-section">
+      <div class="section-title-row"><h2>执行记录</h2><button id="drawer-toggle" class="text-button" aria-expanded="true">收起</button></div>
+      <div id="log" class="log" aria-live="polite"></div>
+    </div>
+    <p class="keys"><b>F2</b> <span class="lt">执行详情</span> · <b>F3</b> <span class="lt">文件</span> ·
+       <b>F4</b> <span class="lt">提问</span> · <b>F5</b> <span class="lt">设置</span> ·
+       <b>F6</b> <span class="lt">语言</span> · <b>F8</b> <span class="lt">释放会话</span> ·
+       <b>Esc</b> <span class="lt">关闭弹窗</span> · <b>Enter</b> <span class="lt">提交</span></p>
+  </aside>
+</main>
 
 <div id="veil" class="veil">
   <form id="settings" class="modal">
-    <h2>连接设置</h2>
-    <label><span class="lt">API 地址</span> <input id="set-url" type="text" placeholder="https://api.example.com/v1" autocomplete="off"></label>
-    <label><span class="lt">模型</span> <input id="set-model" type="text" placeholder="模型 ID" autocomplete="off"></label>
-    <label><span class="lt">API 密钥</span> <input id="set-key" type="password" autocomplete="new-password"
-                          placeholder="留空表示不修改"></label>
-    <label class="check"><input id="set-remember" type="checkbox"> 把密钥保存到本机明文文件</label>
-    <p class="hint">保存的密钥不会回显到浏览器。换 API 地址会清掉上一个服务商的密钥与模型。</p>
-    <p class="hint" id="set-msg"></p>
-    <div class="modal-actions">
-      <button type="button" id="cancel" class="ghost">取消</button>
-      <button type="submit">保存</button>
+    <div class="modal-header">
+      <div><span class="overline">Connection</span><h2>连接设置</h2></div>
+      <button type="button" id="cancel" class="close-button" aria-label="关闭">×</button>
     </div>
+    <label><span class="lt">API 地址</span><input id="set-url" type="text" placeholder="https://api.example.com/v1" autocomplete="off"></label>
+    <label><span class="lt">模型</span><input id="set-model" type="text" placeholder="模型 ID" autocomplete="off"></label>
+    <label><span class="lt">API 密钥</span><input id="set-key" type="password" autocomplete="new-password" placeholder="留空表示不修改"></label>
+    <label class="check remember"><input id="set-remember" type="checkbox"><span>将密钥保存到本机明文文件</span></label>
+    <p class="hint">密钥不会回显到浏览器。更换 API 地址会清除上一服务商的密钥与模型。</p>
+    <p class="hint" id="set-msg"></p>
+    <div class="modal-actions"><button type="submit" class="primary">保存设置</button></div>
   </form>
 </div>
 

@@ -71,6 +71,17 @@ STRINGS = {
     # Browser workbench chrome. Kept here rather than in app.js so the terminal and the browser
     # translate from one table; two vocabularies is how they drift apart. These label the
     # interface only -- model prose and raw engine values are never rewritten through this table.
+    '数据源': 'Data sources', '分析计划': 'Analysis plan', '计算会话': 'Compute session',
+    '分析工作台': 'Analysis workspace', '分析结果': 'Analysis results', '运行分析': 'Run analysis',
+    '运行方式': 'Run mode', '分析类型': 'Analysis type', '聚合规则': 'Aggregation',
+    '分析目标': 'Analysis goal', '运行任务': 'Run task', '执行记录': 'Execution log',
+    '保存设置': 'Save settings', '强制 CPU': 'Force CPU', '强制 GPU': 'Force GPU',
+    '问题': 'Question', '分析': 'Analyze',
+    '即时分析': 'One-shot analysis', '驻留会话': 'Resident session',
+    '生成报告': 'Generate report', '发现数据': 'Discover data',
+    '打开': 'Open', '关闭': 'Close', '查看': 'List', '自动判断': 'Auto',
+    '数据概览': 'Profile', '统计摘要': 'Summary', '分组聚合': 'Group by',
+    '相关性': 'Correlation',
     '数据文件': 'Data files', '会话': 'Session', '状态': 'Status', '会话数': 'Sessions',
     '步数': 'Steps', '占用': 'Held', '保留帧': 'Warm frames', '释放会话': 'Release session',
     '计划': 'Plan', '类型': 'Kind', '进度': 'Progress',
