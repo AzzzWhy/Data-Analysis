@@ -10,6 +10,7 @@
 | 已知的多项分析 | Agent 的 `analyze_batch`，或下述批量命令 | 所需列取并集，读取和转换一次，多步骤共享精确统计；结束即释放，不占用对话会话。 |
 | 固定报表、系统定时任务 | `python agent/batch_job.py --plan ... --output-root ...` | 每次生成独立的 `report.md` 与完整 `result.json`，有失败退出码。定时频率由操作系统调度器决定。 |
 | 多个已规划的报表 | `python agent/batch_queue.py --manifest ... --output-root ...` | 有上限的分析进程池；兼容的相邻同文件计划共用读取及精确结果。CPU 不同文件可并行，GPU 风险事务独占，结果分别保存。 |
+| 高频重复提交固定报表 | `python agent/report_service.py --output-root ...` | 可选的本地标准输入/输出服务；复用分析进程，每次重读文件，不跨请求保留数据帧。调用者负责保持进程和发送 `close`。 |
 
 两种路径都可按实际任务选 pandas/CPU、cuDF 原生读取＋GPU 计算，或受支持的 CPU 读取＋GPU 计算。`auto` 批量模式只使用**同文件、同列、同任务、同运行环境**且仍有效的校准结果；没有相符校准时保守采用现有路由。对话会话在打开时尚不知道后续操作，因此 `load_backend=auto` 使用原生读取；已实测需要混合读取时，可在 `dataset_session(operation="open", load_backend="cpu_gpu", usecols="数值列1,数值列2")` 显式选择。`usecols` 限定常驻帧的列，后续分析无法访问未加载列。返回值中的 `loading.actual` 和每步 `engine` 才是实际执行路径。混合读取目前适用于受支持的数值 Parquet 与 XLSX；不适用时显式请求会报错。
 
@@ -64,9 +65,13 @@ with QueueExecutor(max_cpu_workers=2) as pool:
 
 每次提交仍重新读取文件、验证身份；这里只跨提交复用进程，不复用旧数据。相符的 `reports_warm` 校准按整份共享事务实测总时间选路径，差异落在实测波动内时保留 CPU；普通单批继续使用 `batch_warm`/`batch_cold` 校准，两者不混用。校准包含机器与文件身份，只保存在本机，不上传。算法版本变更使旧校准失效，需要重新测量。没有校准时，热 Parquet 路由结合投影列解码大小，不再拿 CSV 换行估计其行数；启发式不保证未知数据的绝对最优。
 
+不写 Python 调用者时，也可启动 `python agent/report_service.py --output-root /absolute/path/to/reports`，等待首行 `{"event":"ready",...}`，再向标准输入逐行发送 `{"cmd":"run","manifest":"/absolute/path/to/manifest.json","id":"job-1"}`。每次返回的 `run_dir` 指向独立报告目录；`{"cmd":"status"}` 查询已完成请求和当前 worker，`{"cmd":"close"}` 正常释放进程。消息上限 16 KiB；它不是网络服务，不提供定时调度，也不宜对不可信用户开放该进程的标准输入。固定低频任务继续使用一次性 CLI。
+
 ## 性能与限制
 
 最新的精确分析、进程池和跨报表共享优化见 [2026-09-28 GB10 优化验收](GB10_OPTIMIZATION_RESULTS.md)，含小、中、亿级五轮对照与原始证据。下面保留早期实验口径，不能混合比较为同一个加速比。
+
+后续[最后一轮算法与端到端对照](FINAL_ROUND_RESULTS.md)进一步加入低基数数值列的全量频数路径与可选常驻报表服务；回退开关为 `GPU_ANALYSIS_FREQUENCY_STATS=0`。这轮与前述验收使用不同代码版本，应以各自原始记录中的同口径对照为准。
 
 既有 GB10 实验在同一组三项分析中，批量比逐项重新读取的热工作进程快约 1.4～1.8 倍，主要因为批量共用一次读取和转换。具体数值见[修复与验收记录](PUBLIC_DATA_REPAIR.md)及[原始规模样本](hybrid-evidence/public-repair-scale.jsonl)。这描述的是旧热工作口径。
 

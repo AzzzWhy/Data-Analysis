@@ -11,6 +11,7 @@
 [更快的执行：常驻工作进程、批量分析与耗时口径](docs/FAST_EXECUTION.md)
 
 [GB10 复测与真实 1.135 亿行实验](docs/POST_CACHE_AND_PUBLIC_DATA_RESULTS.md)
+[最后一轮 GB10 算法与端到端优化对照](docs/FINAL_ROUND_RESULTS.md)
 
 [CPU 加载＋GPU 计算：三个独立开发分支](docs/HYBRID_BRANCHES.md)
 

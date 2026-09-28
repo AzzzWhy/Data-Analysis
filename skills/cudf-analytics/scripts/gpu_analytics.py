@@ -667,6 +667,24 @@ def op_profile(df: Any, eng: Engine, args: argparse.Namespace) -> Dict[str, Any]
 
 
 def _describe_stats(s: Any, is_gpu: bool) -> Dict[str, Any]:
+    # Full-frequency reductions preserve exact order statistics; the selector
+    # never uses sampled answers. An environment switch retains the old path
+    # for reproducible A/B tests and operational rollback.
+    if os.environ.get("GPU_ANALYSIS_FREQUENCY_STATS", "1") == "0":
+        return _describe_stats_native(s, is_gpu)
+    from exact_statistics import frequency_describe
+    try:
+        return frequency_describe(s, is_gpu, _describe_stats_native)
+    except hybrid_execution.HybridMemoryRefused:
+        raise
+    except Exception as exc:
+        if is_gpu and "out of memory" in str(exc).lower():
+            raise hybrid_execution.HybridMemoryRefused("frequency statistics temporary memory refused") from exc
+        _log(f"frequency statistics unavailable ({type(exc).__name__}); retained native exact statistics")
+        return _describe_stats_native(s, is_gpu)
+
+
+def _describe_stats_native(s: Any, is_gpu: bool) -> Dict[str, Any]:
     """count/mean/std/min/q1/median/q3/max computed without relying on describe()."""
     import pandas as pd
 

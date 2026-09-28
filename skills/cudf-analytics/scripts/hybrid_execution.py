@@ -42,7 +42,8 @@ def identity(path):
 def fingerprint():
     affinity = tuple(sorted(os.sched_getaffinity(0))) if hasattr(os, "sched_getaffinity") else os.cpu_count()
     key = (affinity, os.environ.get("OMP_NUM_THREADS"), os.environ.get("ARROW_NUM_THREADS"),
-           os.environ.get("CUDA_VISIBLE_DEVICES", "default"))
+           os.environ.get("CUDA_VISIBLE_DEVICES", "default"),
+           os.environ.get("GPU_ANALYSIS_FREQUENCY_STATS", "1"))
     return copy.deepcopy(_fingerprint_cached(key))
 
 
@@ -65,7 +66,7 @@ def _fingerprint_cached(key):
     except OSError:
         pass
     affinity = sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count()
-    return {"implementation": "hybrid-nullable-pearson-v4-shared", "host": platform.node(), "arch": platform.machine(), "devices": sorted(devices),
+    return {"implementation": "hybrid-nullable-pearson-v5-frequency", "frequency_stats": key[-1], "host": platform.node(), "arch": platform.machine(), "devices": sorted(devices),
             "python": platform.python_version(), "packages": packages,
             "cpu_affinity": affinity, "omp_threads": os.environ.get("OMP_NUM_THREADS"),
             "arrow_threads_env": os.environ.get("ARROW_NUM_THREADS"),
