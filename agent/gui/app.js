@@ -237,6 +237,18 @@ function notReadyText(state) {
   return t("模型客户端已安装，但还缺少：{fields}").replace("{fields}", names);
 }
 
+/* True when a style on the given root makes it a containing block for fixed-position
+   descendants, which unpins the composer. Nothing on this page sets such a style; what
+   does is a browser extension (Dark Reader and friends), and the page cannot undo it --
+   only name it. */
+function rootBlocksFixed(node) {
+  const style = getComputedStyle(node || document.documentElement);
+  const backdrop = style.backdropFilter;
+  return style.transform !== "none" || style.filter !== "none" ||
+         style.perspective !== "none" || String(style.willChange || "").includes("transform") ||
+         (backdrop !== undefined && backdrop !== "none" && backdrop !== "");
+}
+
 function renderState(state) {
   I18N = state.i18n || {};
   LANG = state.language === "en" ? "en" : "zh";
@@ -247,6 +259,13 @@ function renderState(state) {
   if (!selected) els.file.textContent = t("未选择数据文件");
 
   const notes = [];
+  // A transform, filter or backdrop-filter on the root -- Dark Reader and friends inject
+  // exactly that -- silently turns every position:fixed element into a child of the page:
+  // the composer stops being pinned, and no CSS inside the page can undo it. The page can,
+  // however, say so, in the banner, at the moment it starts.
+  if (rootBlocksFixed() || rootBlocksFixed(document.body)) {
+    notes.unshift(t("浏览器扩展改写了页面根样式（transform/filter），底部输入栏将不固定：请用无痕窗口（Ctrl+Shift+N）打开本页验证。"));
+  }
   if (!state.agent_available) {
     notes.push(t("模型客户端不可用：") + (state.agent_import_error || t("未知原因")) +
                "\n" + t("安装：pip install -r requirements.txt\n" +

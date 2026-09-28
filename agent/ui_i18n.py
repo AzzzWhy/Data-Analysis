@@ -153,6 +153,9 @@ STRINGS = {
     '数据初始化': 'Data reset',
     '恢复初始状态': 'Restore initial state',
     '再点一次确认擦除': 'Click again to confirm the wipe',
+    '浏览器扩展改写了页面根样式（transform/filter），底部输入栏将不固定：请用无痕窗口（Ctrl+Shift+N）打开本页验证。':
+        'A browser extension rewrote this page\'s root styling (transform/filter), so the '
+        'bottom composer will not stay pinned. Verify in an incognito window (Ctrl+Shift+N).',
     '擦除本机的会话、缓存、连接设置与访问密码，恢复初始状态。数据文件与已生成的报告不会被删除。':
         'Erases this machine\'s sessions, cache, connection settings and access password, '
         'returning the workbench to its initial state. Dataset files and generated '
