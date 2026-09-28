@@ -1,0 +1,2 @@
+{"mode":"warm","rows":541909,"steps":3,"results_agree":true,"engines":["cudf","cudf","cudf"],"reads":3,"conversions":3,"seconds_single_run":35.550330261932686,"sources_unchanged":true,"active_sessions":0,"scope":"full original XLSX integration, not a speedup claim"}
+{"mode":"batch","rows":541909,"steps":3,"results_agree":true,"engines":["cudf","cudf","cudf"],"reads":1,"conversions":1,"seconds_single_run":12.28650452697184,"sources_unchanged":true,"active_sessions":0,"scope":"full original XLSX integration, not a speedup claim"}

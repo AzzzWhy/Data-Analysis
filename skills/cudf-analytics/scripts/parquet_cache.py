@@ -23,7 +23,7 @@ def read(engine: Any, path: str, cache_dir: Optional[str], *, usecols=None, nrow
     before = _identity(path)
     # Do not share a converted schema across different CSV parsers or engine versions.
     engine_id = (getattr(engine, "name", type(engine).__name__),
-                 getattr(engine, "version", "unknown"))
+                 getattr(engine, "version", "unknown"), "csv-reader-v2")
     key = hashlib.sha256(repr((before, engine_id)).encode("utf-8")).hexdigest()[:32]
     try:
         os.makedirs(cache_dir, exist_ok=True)

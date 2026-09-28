@@ -22,6 +22,7 @@ if GPU:
 class DiversityContracts(unittest.TestCase):
     def test_pairwise_finite_semantics(self):
         cases = [
+            pd.DataFrame({"a": [1, 2, None, 4, 5], "b": [2, 1, None, 5, 1]}),
             pd.DataFrame({"a": [1, 2, None, 4, 5], "b": [2, None, 3, 5, 1],
                           "constant": [1]*5, "empty": [np.nan]*5}),
             pd.DataFrame({"a": [1, np.inf, 3, 4], "b": [4, 3, -np.inf, 2]}),
@@ -55,6 +56,9 @@ class DiversityContracts(unittest.TestCase):
                     import cudf
                     got = GA.Engine("cudf", cudf).read(str(path), usecols=["value"])
                     self.assertEqual(got.to_pandas().value.tolist(), [3, 5])
+            path.write_text("label;value\na;7\n", encoding="utf-8")
+            self.assertEqual(GA.csv_separator(str(path)), ";")
+            self.assertEqual(GA.Engine("pandas", pd).read(str(path)).value.tolist(), [7])
 
     def test_preflight_no_cuda_or_read(self):
         self.assertIn("CPU-only", H.preflight("none.parquet", None,
@@ -81,6 +85,34 @@ class DiversityContracts(unittest.TestCase):
             self.assertEqual(result["engine"], "pandas")
             self.assertIsNone(result["fallback_reason"])
             self.assertEqual(len(result["phase_timings"]["attempts"]), 1)
+
+    def test_pearson_budget_refusal_never_retries_cpu(self):
+        frame = pd.DataFrame({"a": [1., 2., 3.], "b": [3., 1., 2.]})
+        args = GA.build_parser().parse_args(["--input", "unused", "--op", "corr"])
+        calls = []
+        def load(engine):
+            calls.append(engine.name)
+            return frame
+        with patch.dict(sys.modules, {"cupy": np}), \
+                patch.object(H, "memory_available", return_value=(1, 1)), \
+                patch.object(GA, "sync_device"):
+            with self.assertRaises(H.HybridMemoryRefused):
+                GA.execute(GA.Engine("cudf", pd), load, "corr", args)
+        self.assertEqual(calls, ["cudf"])
+
+    def test_warm_request_does_not_use_or_record_cold_costs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "d.csv"
+            path.write_text("a,b\n1,2\n2,1\n")
+            with patch.object(GA, "pick_engine_for", wraps=GA.pick_engine_for) as choose, \
+                    patch.object(GA.cost_model, "record") as record, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                code = GA.main(["--input", str(path), "--op", "summary",
+                                "--calibration-file", str(Path(tmp) / "cold.jsonl")],
+                               execution_context="warm")
+            self.assertEqual(code, 0)
+            self.assertEqual(choose.call_args.kwargs["calibration_file"], "")
+            record.assert_not_called()
 
     @unittest.skipUnless(GPU, "real GPU bridge needs cuDF and openpyxl")
     def test_excel_real_bridge_and_admission(self):

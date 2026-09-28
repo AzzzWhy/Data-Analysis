@@ -461,7 +461,7 @@ def do_open(req: dict) -> dict:
         loading={"actual": "cpu_gpu" if eng.is_gpu and (load_backend == "cpu_gpu" or
                  any(a.get("conversion_count") for a in load_attempts)) else
                  "native_gpu" if eng.is_gpu else "cpu", "attempts": load_attempts,
-                 "engine_init_seconds": init_seconds},
+                 "engine_init_seconds": init_seconds, "load_seconds": load_seconds},
     )
     # Explicit multi-step demonstrations still measure the CPU read baseline.
     # Interactive one-shot reuse does not: an unseen extra full CPU pass would

@@ -106,6 +106,17 @@ class HybridTests(unittest.TestCase):
         self.save(self.measures(4.))
         self.assertEqual(self.select(), "native")
 
+    def test_native_calibration_without_hybrid_candidate(self):
+        measures = self.measures()
+        del measures["cpu_gpu"]
+        self.save(measures)
+        self.assertEqual(self.select(), "native")
+
+    def test_unsupported_hybrid_schema_keeps_valid_native_candidate(self):
+        self.columns = ["revenue", "ignored"]
+        self.save()
+        self.assertEqual(self.select(), "native")
+
     def test_cpu_can_win_even_when_cpu_read_is_faster(self):
         measurements = self.measures()
         measurements["cpu"] = [{"seconds": 1., "read_seconds": .2, "compute_seconds": .5}]*2

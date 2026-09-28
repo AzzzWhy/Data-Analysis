@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from functools import lru_cache
 import json
 import math
 import os
@@ -87,7 +88,12 @@ class Engine:
         self.last_read = {}
         ext = os.path.splitext(path)[1].lower()
         if self.is_gpu and ext in (".xlsx", ".xls"):
-            return hybrid_execution.read_gpu(self, path, usecols, self.last_read, nrows=nrows)
+            try:
+                return hybrid_execution.read_gpu(self, path, usecols, self.last_read, nrows=nrows)
+            except (hybrid_execution.HybridMemoryRefused, hybrid_execution.HybridInputChanged):
+                raise
+            except hybrid_execution.HybridRefused as exc:
+                raise OpNotSupported(str(exc)) from exc
         if self.is_gpu and ext in (".json", ".jsonl", ".ndjson"):
             raise OpNotSupported("JSON reader is CPU-only; select pandas before loading")
         return _read_table(self.mod, path, usecols=usecols, nrows=nrows)
@@ -122,6 +128,11 @@ SMALL_ROWS = 6_500_000
 
 def csv_separator(path: str) -> str:
     """Bounded, quote-aware sniff; never scan a large CSV to choose its parser."""
+    return _csv_separator_cached(*hybrid_execution.identity(path))
+
+
+@lru_cache(maxsize=128)
+def _csv_separator_cached(path: str, size: int, modified_ns: int) -> str:
     with open(path, "r", encoding="utf-8-sig", errors="replace", newline="") as source:
         sample = source.read(65536)
     try:
@@ -813,14 +824,22 @@ def pairwise_pearson(sub: Any, xp: Any) -> Any:
         series = sub[c].astype("float64")
         arrays.append(series.to_cupy(na_value=float("nan")) if hasattr(series, "to_cupy")
                       else xp.asarray(series.fillna(float("nan"))))
-    if len(sub) >= 2 and all(bool(xp.all(xp.isfinite(a))) for a in arrays):
-        centered = xp.stack([a - a[0] for a in arrays])
-        return xp.corrcoef(centered)
+    masks = [xp.isfinite(a) for a in arrays]
+    if len(sub) >= 2:
+        complete = all(bool(xp.all(m)) for m in masks)
+        # Shared validity is common in instrument datasets. ONLY after proving
+        # every pair has exactly the same mask may we use one matrix reduction.
+        same_mask = complete or all(bool(xp.all(m == masks[0])) for m in masks[1:])
+        if same_mask:
+            selected = arrays if complete else [a[masks[0]] for a in arrays]
+            if selected[0].size >= 2:
+                centered = xp.stack([a - a[0] for a in selected])
+                return xp.corrcoef(centered)
     result = xp.full((len(arrays), len(arrays)), xp.nan, dtype=xp.float64)
     for i, left in enumerate(arrays):
         for j in range(i, len(arrays)):
             right = arrays[j]
-            valid = xp.isfinite(left) & xp.isfinite(right)
+            valid = masks[i] & masks[j]
             x, y = left[valid], right[valid]
             if x.size < 2:
                 continue
@@ -862,13 +881,17 @@ def op_corr(df: Any, eng: Engine, args: argparse.Namespace) -> Dict[str, Any]:
         try:
             import cupy as cp
             free, available = hybrid_execution.memory_available()
-            required = len(sub) * (len(wanted) * 24 + 96) + 4 * 1024**3
+            # Covers float arrays, masks, filtered arrays, stacking and covariance
+            # copies simultaneously; the existing frame is already in use.
+            required = len(sub) * (len(wanted) * 48 + 96) + 4 * 1024**3
             if min(free, available) < required:
-                raise ValueError("Pearson GPU temporary memory budget refused")
+                raise hybrid_execution.HybridMemoryRefused("Pearson GPU temporary memory budget refused")
             # cuDF corr refuses nulls. Use the same finite pairwise semantics for
             # complete data too, including constants, NaNs and infinities.
             values = pairwise_pearson(sub, cp)
             cm = pd.DataFrame(cp.asnumpy(values), index=wanted, columns=wanted)
+        except hybrid_execution.HybridMemoryRefused:
+            raise
         except Exception as exc:
             raise OpNotSupported(f"cuDF DataFrame.corr failed: {exc}") from exc
     else:
@@ -1229,7 +1252,8 @@ def main(argv: Optional[Sequence[str]] = None, *, execution_context: str = "cold
         elif not force_cpu and not force_gpu:
             use_gpu, route_reason = pick_engine_for(
                 path, args.op, verbose=args.verbose, details=route_details,
-                calibration_file="" if args.parquet_cache_dir or usecols else args.calibration_file,
+                calibration_file="" if args.parquet_cache_dir or usecols or execution_context != "cold"
+                                 else args.calibration_file,
             )
             force_cpu = not use_gpu
             if args.verbose and route_reason:
@@ -1267,7 +1291,7 @@ def main(argv: Optional[Sequence[str]] = None, *, execution_context: str = "cold
         fallback_reason = used.reason
 
     total_seconds = round(time.perf_counter() - t_start, 6)
-    if not fallback_reason and load_backend != "cpu_gpu" and cache_trace["status"] == "disabled" and not nrows and not usecols:
+    if execution_context == "cold" and not fallback_reason and load_backend != "cpu_gpu" and cache_trace["status"] == "disabled" and not nrows and not usecols:
         try:
             cost_model.record(args.calibration_file, op=args.op, source=path,
                               backend=used.name, size=os.path.getsize(path),

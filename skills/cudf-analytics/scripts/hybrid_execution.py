@@ -53,7 +53,7 @@ def fingerprint():
     except OSError:
         pass
     affinity = sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count()
-    return {"implementation": "hybrid-nullable-pearson-v2", "host": platform.node(), "arch": platform.machine(), "devices": sorted(devices),
+    return {"implementation": "hybrid-nullable-pearson-v3", "host": platform.node(), "arch": platform.machine(), "devices": sorted(devices),
             "python": platform.python_version(), "packages": packages,
             "cpu_affinity": affinity, "omp_threads": os.environ.get("OMP_NUM_THREADS"),
             "arrow_threads_env": os.environ.get("ARROW_NUM_THREADS"),
@@ -101,7 +101,13 @@ def choose(profile_path, path, columns, workflow, context):
         if age < 0 or age > MAX_AGE_SECONDS or entry.get("verified_equal") is not True:
             raise ValueError("expired or unverified calibration")
         estimates = {}
-        for backend in PATHS:
+        # A verified native GPU path remains useful when the mixed loader cannot
+        # represent a string/timestamp schema. Never treat a CPU fallback as a
+        # successful GPU measurement merely to fill the third slot.
+        candidates = ["cpu", "native"]
+        if "cpu_gpu" in entry["measurements"] and not preflight(path, columns, workflow, "cpu_gpu"):
+            candidates.append("cpu_gpu")
+        for backend in candidates:
             runs = entry["measurements"][backend]
             if not isinstance(runs, list) or not 2 <= len(runs) <= 20:
                 raise ValueError("calibration requires 2-20 runs per path")
@@ -114,8 +120,9 @@ def choose(profile_path, path, columns, workflow, context):
                     raise ValueError("zero wall time")
             estimates[backend] = {key: statistics.median(run[key] for run in runs)
                                   for key in ("seconds", "read_seconds", "compute_seconds")}
-        cpu, gpu, hybrid = (estimates[backend] for backend in PATHS)
-        hybrid_wins = (hybrid["read_seconds"] < .95 * gpu["read_seconds"]
+        cpu, gpu = estimates["cpu"], estimates["native"]
+        hybrid = estimates.get("cpu_gpu")
+        hybrid_wins = (hybrid is not None and hybrid["read_seconds"] < .95 * gpu["read_seconds"]
                        and hybrid["compute_seconds"] < .90 * cpu["compute_seconds"]
                        and hybrid["seconds"] < .90 * min(cpu["seconds"], gpu["seconds"]))
         selected = "cpu_gpu" if hybrid_wins else (
@@ -235,9 +242,12 @@ def read_gpu(engine, path, columns, trace, nrows=None):
             import pandas as pd
             cpu = pd.read_excel(path, usecols=list(columns) if columns else None,
                                **({"nrows": nrows} if nrows else {}))
+            trace.update(cpu_read_seconds=time.perf_counter() - start, read_count=1)
             rows = len(cpu)
             actual_required = int(cpu.memory_usage(index=True, deep=True).sum()) * 6 + 4 * 1024**3
             free, available = memory_available()
+            trace["decoded_admission"] = {"required_bytes": actual_required,
+                "device_free_bytes": free, "host_available_bytes": available}
             if min(free, available) < actual_required:
                 raise HybridMemoryRefused("Excel decoded memory budget refused before conversion")
             table = pa.Table.from_pandas(cpu, preserve_index=False)

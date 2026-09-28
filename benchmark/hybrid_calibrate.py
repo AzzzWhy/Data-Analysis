@@ -81,7 +81,7 @@ def batch_measure(path, steps, backend, context):
     assert sum(item.get("read_count", 0) for item in attempts) == 1, reply
     assert sum(item.get("conversion_count", 0) for item in attempts) == (1 if backend == "cpu_gpu" else 0), reply
     return reply, {"seconds": elapsed,
-        "read_seconds": sum(item.get("cpu_read_seconds", 0) for item in attempts) if backend == "cpu_gpu" else reply["load_seconds"],
+        "read_seconds": sum(item.get("cpu_read_seconds", 0) for item in attempts) if backend == "cpu_gpu" else reply["loading"]["load_seconds"],
         "compute_seconds": sum(result["execution_decision"]["observed"]["compute_seconds"] for result in reply["results"]),
         "conversion_seconds": sum(item.get("conversion_seconds", 0) for item in attempts)}
 
