@@ -9,6 +9,7 @@
 | Agent 对话、逐条提问 | `python agent/agent_main.py` | 常驻工作进程。单次分析可用有上限的 GPU 帧缓存；自适应追问使用 `dataset_session`，在会话内复用同一帧。 |
 | 已知的多项分析 | Agent 的 `analyze_batch`，或下述批量命令 | 所需列取并集，读取和转换一次，多步骤共享精确统计；结束即释放，不占用对话会话。 |
 | 固定报表、系统定时任务 | `python agent/batch_job.py --plan ... --output-root ...` | 每次生成独立的 `report.md` 与完整 `result.json`，有失败退出码。定时频率由操作系统调度器决定。 |
+| 多个已规划的报表 | `python agent/batch_queue.py --manifest ... --output-root ...` | 每份计划在独立子进程执行；纯 CPU 任务有界并行，可能使用 GPU 的任务独占队列，结果分别保存。 |
 
 两种路径都可按实际任务选 pandas/CPU、cuDF 原生读取＋GPU 计算，或受支持的 CPU 读取＋GPU 计算。`auto` 批量模式只使用**同文件、同列、同任务、同运行环境**且仍有效的校准结果；没有相符校准时保守采用现有路由。对话会话在打开时尚不知道后续操作，因此 `load_backend=auto` 使用原生读取；已实测需要混合读取时，可在 `dataset_session(operation="open", load_backend="cpu_gpu", usecols="数值列1,数值列2")` 显式选择。`usecols` 限定常驻帧的列，后续分析无法访问未加载列。返回值中的 `loading.actual` 和每步 `engine` 才是实际执行路径。混合读取目前适用于受支持的数值 Parquet 与 XLSX；不适用时显式请求会报错。
 
@@ -31,6 +32,20 @@ python agent/batch_job.py --plan examples/batch-plan.json --output-root reports
 ```
 
 定时任务应使用绝对解释器、计划和输出路径；所需 pandas/pyarrow/cuDF 环境由该解释器提供。运行目录要有写权限。数据文件改变后，下次运行读取新文件；不会跨批次借用旧帧。
+
+## 多进程、多批次队列
+
+一个清单可含 1～32 份固定计划，每份计划仍限 1～8 个分析步骤。清单里的计划路径相对于清单文件；每份计划读取自己的数据、在独立 Python 子进程及分析 worker 中执行，产出独立报告。示例：
+
+```bash
+python agent/batch_queue.py --manifest examples/batch-queue.json --output-root reports/queues --max-cpu-workers 2
+```
+
+每次队列执行新建 `queue-*` 目录，内有 `queue-summary.json` 和 `reports/`。摘要保留每个任务的进程 ID、耗时、成功/失败与报告路径；有任何失败时命令返回非零，但其他任务的结果不会被丢弃。默认单任务上限一小时，可用 `--timeout-seconds` 在 1～86400 秒间调整；超时会停止该任务的子进程组。可将上面命令交给操作系统定时器定期执行。
+
+队列按清单顺序调度：连续的 `force_cpu=true` 任务最多并行 2 份（可调 1～4）；其余任务包括 `auto` 都按“可能使用 GPU”对待，**一次只运行一份，且与该队列的 CPU 任务不重叠**。这是统一内存机器上的保守上限，不能把多个进程同时启动误称为数据分块并行、CPU/GPU 流水线重叠或多 GPU 加速。每份任务内部的 CPU 读取＋GPU 计算仍是读取、转换、计算的顺序流水，不并发叠加算力。
+
+队列只协调**同一次清单运行内**的任务。它不管理另一个队列进程或正在运行的 Agent 热会话；部署时应避免让多个大 GPU 队列和大热会话互相争抢共享内存。Agent 对话继续使用原有常驻工作进程，不会为每次提问新建队列；已经规划好的跨报告任务才使用这里的队列。当前尚无跨 Agent/队列的全局 GPU 资源管理器、跨批次帧共享或多 GPU 分布式调度。
 
 ## 性能与限制
 

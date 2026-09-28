@@ -1,0 +1,9 @@
+{
+  "title": "示例地区报表",
+  "file_path": "../benchmark/portability/fixture.csv",
+  "language": "zh",
+  "force_cpu": true,
+  "steps": [
+    {"op": "groupby", "by": "region", "agg": "revenue:sum", "top_k": 20}
+  ]
+}

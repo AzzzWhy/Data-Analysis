@@ -1,0 +1,6 @@
+{
+  "jobs": [
+    {"name": "summary", "plan": "batch-plan-summary-cpu.json"},
+    {"name": "groupby", "plan": "batch-plan-groupby-cpu.json"}
+  ]
+}
