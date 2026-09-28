@@ -156,6 +156,20 @@ class FastExecutionTests(unittest.TestCase):
         self.assertTrue(reply["success"], reply)
         self.assertEqual(len(reply["results"]), 1)
 
+    def test_interactive_session_projects_requested_columns(self):
+        opened = json.loads(skills.dataset_session("open", file_path=str(self.path),
+                             force_cpu=True, usecols="region,revenue"))
+        self.assertTrue(opened["success"], opened)
+        self.assertEqual(opened["columns"], ["region", "revenue"])
+        self.assertEqual(opened["loading"]["actual"], "cpu")
+        sid = opened["session_id"]
+        step = json.loads(skills.dataset_session("analyze", session_id=sid,
+                          op="summary", columns="revenue"))
+        self.assertTrue(step["success"], step)
+        self.assertEqual(step["rows_scanned"], 3)
+        closed = json.loads(skills.dataset_session("close", session_id=sid))
+        self.assertTrue(closed["success"], closed)
+
 
 if __name__ == "__main__":
     try:

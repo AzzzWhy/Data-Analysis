@@ -166,6 +166,21 @@ class BatchTests(unittest.TestCase):
         self.assertEqual(opened["execution_decision"]["mode"], "auto")
         self.assertEqual(opened["execution_decision"]["policy"], "capability_preflight")
 
+    def test_uncalibrated_batch_reports_the_actual_cpu_route_reason(self):
+        with patch.object(hybrid, "choose", return_value=(None, {
+                "reason": "no matching, verified calibration"})), \
+                patch.object(ga, "pick_engine_for", return_value=(False,
+                    "measured file-size crossover selected CPU")):
+            reply = gs.do_batch({"path": self.path, "steps": self.steps,
+                                 "load_backend": "auto"})
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(reply["loading"]["decision"]["selected"], "cpu")
+        self.assertEqual(reply["loading"]["decision"]["policy"],
+                         "measured_file_size_crossover")
+        self.assertEqual(reply["results"][0]["routing_reason"],
+                         "measured file-size crossover selected CPU")
+        self.assertEqual(reply["loading"]["open_decision"]["mode"], "auto")
+
 
 if __name__ == "__main__":
     unittest.main()

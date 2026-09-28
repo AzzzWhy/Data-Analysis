@@ -197,6 +197,13 @@ skill_definitions = [
                                        "the user explicitly requested it. The response reports "
                                        "the actual loader and compute engine.",
                     },
+                    "usecols": {
+                        "type": "string",
+                        "description": "optional for open: comma-separated columns to keep resident. "
+                                       "For cpu_gpu on a file with text columns, list only "
+                                       "the numeric columns needed for subsequent steps; "
+                                       "later analyses cannot access omitted columns.",
+                    },
                 },
                 "required": ["operation"],
             },
@@ -957,7 +964,8 @@ def dataset_session(operation: str, file_path: str = None, session_id: str = Non
                     op: str = None, by: str = None, agg: str = None,
                     columns: str = None, top_k: int = None,
                     force_cpu: bool = False, force_gpu: bool = False,
-                    goal: str = None, load_backend: str = "auto") -> str:
+                    goal: str = None, load_backend: str = "auto",
+                    usecols: str = None) -> str:
     """
     Load a dataset into memory once, then run several analyses against that copy.
 
@@ -976,7 +984,7 @@ def dataset_session(operation: str, file_path: str = None, session_id: str = Non
         if operation == "open":
             req = {"cmd": "open", "path": _resolve_data_path(file_path),
                    "force_cpu": bool(force_cpu), "force_gpu": bool(force_gpu),
-                   "load_backend": load_backend,
+                   "load_backend": load_backend, "usecols": usecols,
                    "measure_cpu": _speedup_enabled()}
             if goal and str(goal).strip():
                 req["goal"] = str(goal).strip()

@@ -415,9 +415,9 @@ def do_open(req: dict) -> dict:
 
     force_cpu = bool(req.get("force_cpu"))
     force_gpu = bool(req.get("force_gpu")) or load_backend == "cpu_gpu"
-    decision_mode = ("force_cpu" if requested_force_cpu else
-                     "force_gpu" if requested_force_gpu or requested_backend == "cpu_gpu" else
-                     "auto")
+    decision_mode = req.get("_decision_mode") or (
+        "force_cpu" if requested_force_cpu else
+        "force_gpu" if requested_force_gpu or requested_backend == "cpu_gpu" else "auto")
     route_reason = req.get("_route_reason") or (
         "CPU forced by the caller" if requested_force_cpu else None)
     route_details: Dict[str, Any] = {}
@@ -542,9 +542,10 @@ def do_open(req: dict) -> dict:
         "resident_mb": resident_mb,
         "execution_decision": GA.execution_decision_record(
             mode=decision_mode,
-            policy="capability_preflight" if eligibility and not requested_force_cpu else
-                   "caller_override" if decision_mode != "auto" else
-                   "measured_file_size_crossover",
+            policy=req.get("_route_policy") or (
+                "capability_preflight" if eligibility and not requested_force_cpu else
+                "caller_override" if decision_mode != "auto" else
+                "measured_file_size_crossover"),
             selected_backend=selected_backend,
             actual_backend=eng.name,
             reason=route_reason or (
@@ -969,13 +970,20 @@ def do_batch(req: dict) -> dict:
         force_cpu = selected == "cpu"
         force_gpu = not force_cpu
     elif not force_cpu and not force_gpu:
-        use_gpu, _reason = GA.pick_engine_for(path, "session")
+        use_gpu, route_reason = GA.pick_engine_for(path, "session")
         force_cpu = not use_gpu
+        decision = {"selected": "native" if use_gpu else "cpu",
+                    "policy": "measured_file_size_crossover",
+                    "reason": route_reason,
+                    "calibration": decision}
     started = time.perf_counter()
     opened = do_open({"path": path, "usecols": ",".join(sorted(columns)) if columns else None,
                       "force_cpu": force_cpu, "force_gpu": force_gpu,
                       "measure_cpu": False, "_fresh_batch": True,
-                      "_route_reason": decision.get("reason") if eligibility else None,
+                      "_route_reason": decision.get("reason"),
+                      "_route_policy": decision.get("policy"),
+                      "_decision_mode": "auto" if req.get("load_backend", "auto") == "auto"
+                      and not req.get("force_cpu") and not req.get("force_gpu") else None,
                       "_batch_load_backend": backend})
     if not opened.get("ok"):
         return opened
@@ -999,6 +1007,7 @@ def do_batch(req: dict) -> dict:
                 "projected_columns": sorted(columns) if columns else None,
                 "loading": {**opened.get("loading", {}), "requested": req.get("load_backend", "auto"),
                             "decision": decision, "execution_context": context,
+                            "open_decision": opened.get("execution_decision"),
                             "scope": "one fresh load/conversion per batch; no cross-batch data cache"},
                 "note": "One load, exact full-data operations; no CPU baseline or sampling. "
                         "Any per-step fallback is reported in that step."}
