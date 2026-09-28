@@ -64,46 +64,6 @@
     </form>
     <p class="hint" id="ask-hint"></p>
 
-    <h2>直接工具调用</h2>
-    <form id="runner" class="runner">
-      <label><span class="lt">工具</span>
-        <select id="tool">
-          <option value="analyze_dataset">analyze_dataset（单次，无驻留）</option>
-          <option value="dataset_session">dataset_session（驻留会话）</option>
-          <option value="export_deliverables">export_deliverables（出报告与图表）</option>
-          <option value="list_datasets">list_datasets（发现数据）</option>
-        </select>
-      </label>
-      <label><span class="lt">会话操作</span>
-        <select id="session-op" disabled>
-          <option value="open">open</option>
-          <option value="analyze">analyze</option>
-          <option value="close">close</option>
-          <option value="list">list</option>
-        </select>
-      </label>
-      <label><span class="lt">分析操作</span>
-        <select id="op">
-          <option value="auto">auto</option>
-          <option value="profile">profile</option>
-          <option value="summary">summary</option>
-          <option value="groupby">groupby</option>
-          <option value="corr">corr</option>
-          <option value="outliers">outliers</option>
-        </select>
-      </label>
-      <label><span class="lt">分组列</span> <input id="by" placeholder="region" autocomplete="off"></label>
-      <label><span class="lt">聚合</span> <input id="agg" placeholder="revenue:sum,mean" autocomplete="off"></label>
-      <label class="wide"><span class="lt">目标（可选，仅 open 用）</span>
-        <input id="goal" placeholder="例如：找出 revenue 离群点的成因" autocomplete="off"></label>
-      <label class="check"><input id="force-cpu" type="checkbox"> force_cpu</label>
-      <label class="check"><input id="force-gpu" type="checkbox"> force_gpu</label>
-      <button type="submit" id="run">直接工具调用</button>
-    </form>
-    <p class="hint">这一栏不经过模型：按下去就是真的一次 <code>skills</code> 调用，
-      返回的是引擎自己的 <code>execution_decision</code>。它存在是为了在没有 API 密钥的机器上
-      也能验证引擎标记、会话卡与图表产物，不是提问框的替代品。</p>
-
     <h2>输出</h2>
     <button id="drawer-toggle" class="ghost inline-left" aria-expanded="true">执行详情 · 收起</button>
     <div id="log" class="log" aria-live="polite"></div>
@@ -111,19 +71,68 @@
 
   <section class="pane right">
     <h2>结果</h2>
+    <details id="tool-drawer" class="tool-drawer">
+      <summary class="lt">直接工具调用（不经过模型）</summary>
+      <form id="runner" class="runner">
+        <label><span class="lt">工具</span>
+          <select id="tool">
+            <option value="analyze_dataset">analyze_dataset（单次，无驻留）</option>
+            <option value="dataset_session">dataset_session（驻留会话）</option>
+            <option value="export_deliverables">export_deliverables（出报告与图表）</option>
+            <option value="list_datasets">list_datasets（发现数据）</option>
+          </select>
+        </label>
+        <label><span class="lt">会话操作</span>
+          <select id="session-op" disabled>
+            <option value="open">open</option>
+            <option value="analyze">analyze</option>
+            <option value="close">close</option>
+            <option value="list">list</option>
+          </select>
+        </label>
+        <label><span class="lt">分析操作</span>
+          <select id="op">
+            <option value="auto">auto</option>
+            <option value="profile">profile</option>
+            <option value="summary">summary</option>
+            <option value="groupby">groupby</option>
+            <option value="corr">corr</option>
+            <option value="outliers">outliers</option>
+          </select>
+        </label>
+        <label><span class="lt">分组列</span> <input id="by" placeholder="region" autocomplete="off"></label>
+        <label><span class="lt">聚合</span> <input id="agg" placeholder="revenue:sum,mean" autocomplete="off"></label>
+        <label class="wide"><span class="lt">目标（可选，仅 open 用）</span>
+          <input id="goal" placeholder="例如：找出 revenue 离群点的成因" autocomplete="off"></label>
+        <label class="check"><input id="force-cpu" type="checkbox"> force_cpu</label>
+        <label class="check"><input id="force-gpu" type="checkbox"> force_gpu</label>
+        <button type="submit" id="run">直接工具调用</button>
+      </form>
+      <p class="hint">这一栏不经过模型：按下去就是真的一次 <code>skills</code> 调用，
+        返回的是引擎自己的 <code>execution_decision</code>。它存在是为了在没有 API 密钥的机器上
+        也能验证引擎标记、会话卡与图表产物，不是提问框的替代品。</p>
+    </details>
     <div id="kpis" class="kpis"></div>
     <div id="answer" class="answer markdown" hidden></div>
+    <div class="tabs" role="tablist" id="tabs" hidden></div>
+    <div id="chart" role="tabpanel" hidden></div>
+    <p class="cap" id="chart-cap"></p>
     <div id="charts" class="charts"></div>
     <div id="tables" class="tables"></div>
   </section>
 </main>
 
 <footer>
+  <span id="pulse" data-busy="0" aria-hidden="true">·</span>
   <span id="phase">待命</span>
   <span class="spacer"></span>
   <span id="chip" class="chip muted">no result yet</span>
   <span id="elapsed">—</span>
 </footer>
+<p class="keys"><b>F2</b> <span class="lt">执行详情</span> · <b>F3</b> <span class="lt">文件</span> ·
+   <b>F4</b> <span class="lt">提问</span> · <b>F5</b> <span class="lt">设置</span> ·
+   <b>F6</b> <span class="lt">语言</span> · <b>F8</b> <span class="lt">释放会话</span> ·
+   <b>Esc</b> <span class="lt">关闭弹窗</span> · <b>Enter</b> <span class="lt">提交</span></p>
 
 <div id="veil" class="veil">
   <form id="settings" class="modal">

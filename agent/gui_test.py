@@ -19,6 +19,9 @@ forever on any line containing a `|` that does not start a table.
 """
 import json
 import os
+import re
+import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -80,6 +83,21 @@ def main() -> int:
     data = os.path.join(tmp, "sales.csv")
     rows = make_fixture(data, 20_000)["rows"]
 
+    # Readiness is measured from the operator's real connection.json plus any exported GPU_API_KEY,
+    # so this suite inherited whatever credential state the machine happened to be in. On a node
+    # whose stored file has a base_url and a model but no key (`remember_key` off), the very first
+    # check failed for a reason that had nothing to do with the code under test -- and the same file
+    # passes when a key is exported. Pin a scratch config for the run, and leave the operator's file
+    # out of it entirely.
+    fixture_cfg = os.path.join(tmp, "connection-fixture.json")
+    with open(fixture_cfg, "w", encoding="utf-8") as fh:
+        json.dump({"base_url": "http://127.0.0.1:1/v1", "model": "fixture-model",
+                   "api_key": "fixture-key", "language": "zh"}, fh)
+    ambient_cfg = os.environ.get("GPU_ANALYSIS_CONFIG")
+    ambient_key = os.environ.get("GPU_API_KEY")
+    os.environ["GPU_ANALYSIS_CONFIG"] = fixture_cfg
+    os.environ.pop("GPU_API_KEY", None)
+
     httpd, wb = gui.make_server(port=0, host="127.0.0.1")
     base = f"http://127.0.0.1:{httpd.server_address[1]}"
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -135,10 +153,18 @@ def main() -> int:
           state["engine_ready"] is True, state.get("engine_error", ""))
     check("session block is present and typed", isinstance(state["session"], dict))
     check("the state is self-consistent: ready implies a model, not-ready implies a reason",
-          (state["config_ready"] and bool(state["model"]))
+          (state["config_ready"] and bool(state["model"]) and state["missing_fields"] == [])
           or (not state["config_ready"]
-              and bool(state["model_error"] or state["agent_import_error"])),
-          json.dumps({k: state[k] for k in ("agent_available", "config_ready", "model")}))
+              and (bool(state["missing_fields"])
+                   or bool(state["model_error"] or state["agent_import_error"]))),
+          json.dumps({k: state[k] for k in ("agent_available", "config_ready", "model")})
+          + " missing=" + json.dumps(state.get("missing_fields")))
+    # `ready` is a conjunction in api_config.py:23. A bare false cannot say whether to type a key or
+    # pick a model, and the browser had one fixed sentence covering all three -- so the field list is
+    # the fact, and the UI assembles the sentence from it.
+    check("missing_fields only ever names fields, never a value",
+          all(f in ("base_url", "model", "api_key") for f in state["missing_fields"]),
+          json.dumps(state["missing_fields"]))
 
     print("=== spec #1: SSE ordering, done last ===")
     code, started = request("/api/run", {"tool": "analyze_dataset",
@@ -471,6 +497,25 @@ def main() -> int:
         check("and it is genuinely not on disk",
               "temp-only" not in Path(scratch_cfg).read_text(encoding="utf-8"))
 
+        # api_config authors its refusals in Chinese. They are in the label table, so the server can
+        # answer in the language the screen is using -- otherwise an English interface shows one
+        # Chinese sentence at exactly the moment the operator made a mistake.
+        request("/api/settings", {"language": "zh"}, method="PATCH")
+        code, zh_refusal = request("/api/settings", {"base_url": "http://remote.example/v1"},
+                                   method="PATCH")
+        request("/api/settings", {"language": "en"}, method="PATCH")
+        code, en_refusal = request("/api/settings", {"base_url": "http://remote.example/v1"},
+                                   method="PATCH")
+        zh_err, en_err = zh_refusal.get("error", ""), en_refusal.get("error", "")
+        han = lambda s: any("\u4e00" <= c <= "\u9fff" for c in s)
+        check("a refused URL is explained in the language the screen is in, not only in Chinese",
+              code == 200 and zh_err and en_err and han(zh_err) and not han(en_err)
+              and en_err.startswith("base_url rejected: "),
+              f"zh={zh_err[:44]!r} en={en_err[:66]!r}")
+        check("the refusal still wrote nothing",
+              json.loads(Path(scratch_cfg).read_text(encoding="utf-8"))["base_url"] != "http://remote.example/v1")
+        request("/api/settings", {"language": "zh"}, method="PATCH")
+
         # Regression for the 2026-09-28 review finding: the submission above also carried
         # remember_key=false, and persisting that flag made `save_config` write a key-less file
         # (api_config.py:104), deleting a credential the operator already had working. Refusing one
@@ -508,8 +553,133 @@ def main() -> int:
         check("and it says so instead of leaving the operator to discover it",
               "removes the stored plaintext key" in drop.get("warning", ""),
               json.dumps(drop)[:200])
+        code, named = request("/api/state")
+        check("the state then names the one missing field, instead of guessing all three",
+              named.get("config_ready") is False
+              and named.get("missing_fields") == ["api_key"]
+              and bool(named.get("model")),
+              json.dumps({k: named.get(k) for k in ("config_ready", "missing_fields",
+                                                    "model")})[:160])
+
+        # The semantics above are deliberate and now pinned. What was still missing is the form:
+        # app.js submits `remember_key` verbatim from a checkbox that nothing ever prefilled, so
+        # an unrelated edit arrived as an explicit uncheck. Verified on GB10 against the real
+        # route -- a model-only save wiped a stored key while the response went on saying
+        # config_ready=True, i.e. the question box kept working until the next restart.
+        stored = "synthetic-stored-DO-NOT-LEAK"
+        # Isolate from the ambient environment: an exported GPU_API_KEY outranks the stored one in
+        # load_config, so asserting on what the file contains while that var is set measures the
+        # env override instead of the credential being managed.
+        ambient = os.environ.pop("GPU_API_KEY", None)
+        try:
+            code, mk = request("/api/settings", {"base_url": "https://first.example/v1",
+                                                 "model": "m-one", "api_key": stored,
+                                                 "remember_key": True}, method="PATCH")
+            check("setup: a consented save stores the key",
+                  mk.get("api_key_stored") is True
+                  and stored in Path(scratch_cfg).read_text(encoding="utf-8"), json.dumps(mk)[:120])
+            code, st = request("/api/state")
+            check("state publishes remember_key so the settings form can prefill it",
+                  st.get("remember_key") is True, f"got {st.get('remember_key')!r}")
+            check("and reports nothing missing once URL, model and key are all there",
+                  st.get("config_ready") is True and st.get("missing_fields") == [],
+                  json.dumps({k: st.get(k) for k in ("config_ready", "missing_fields")}))
+            code, kept = request("/api/settings", {"base_url": "https://first.example/v1",
+                                                   "model": "m-two",
+                                                   "remember_key": True}, method="PATCH")
+            check("with the box prefilled, editing only the model keeps the key",
+                  kept.get("ok") is True and stored in Path(scratch_cfg).read_text(encoding="utf-8"),
+                  json.dumps({k: kept.get(k) for k in ("ok", "api_key_stored", "config_ready")}))
+
+            # Editing the model ID used to be a no-op with a success message: apply_settings wrote
+            # the new value to disk, then called _configure(self.model) -- the value the screen had
+            # been showing *before* the edit -- which read the file back and overrode it again. The
+            # node showed disk=beta-model, /api/state=alpha-model, agent=alpha-model.
+            code, renamed = request("/api/settings", {"model": "beta-model"}, method="PATCH")
+            code, st_after = request("/api/state")
+            check("a saved model ID takes effect in the running server, not only on disk",
+                  renamed.get("model") == "beta-model"
+                  and st_after.get("model") == "beta-model"
+                  and json.loads(Path(scratch_cfg).read_text(encoding="utf-8"))["model"] == "beta-model",
+                  json.dumps({"patch": renamed.get("model"), "state": st_after.get("model")}))
+            check("and the client the agent will actually call holds the model the screen shows",
+                  getattr(wb.agent, "model", None) == st_after.get("model"),
+                  f"agent={getattr(wb.agent, 'model', None)!r} state={st_after.get('model')!r}")
+            check("the missing-field list survives the edit (nothing was cleared on the way)",
+                  st_after.get("missing_fields") == [] and st_after.get("config_ready") is True,
+                  json.dumps(st_after.get("missing_fields")))
+            # The mirror-image bug would be worse: `--model` is a launch-time pin, so it has to keep
+            # winning after the form edits something, instead of being replaced by the typed value.
+            pinned = gui.Workbench(model_override="cli-pinned")
+            try:
+                check("the --model launch override is what a fresh workbench reports",
+                      pinned.model == "cli-pinned", f"model={pinned.model!r}")
+                pinned.apply_settings({"model": "typed-in-form"})
+                check("and it survives a settings edit rather than being overwritten by the form",
+                      pinned.model == "cli-pinned", f"after edit: model={pinned.model!r}")
+            finally:
+                pinned.agent = None
+        finally:
+            if ambient is not None:
+                os.environ["GPU_API_KEY"] = ambient
     finally:
         os.environ.pop("GPU_ANALYSIS_CONFIG", None)
+
+    print("=== spec #12: a body the server cannot read is refused, not answered ok ===")
+    # Four different failures used to collapse into one: a chunked body this HTTP/1.0 handler cannot
+    # read at all, a garbage Content-Length, JSON that is valid but not an object, and JSON that does
+    # not parse. Each arrived as `{}`, `{}` is a legal empty patch, and the server said `ok: true`
+    # about a body it had never seen. The chunked shape is not hypothetical -- the jsdom harness sent
+    # {"language":"en"} twice on this node and got a success back both times, which read as the
+    # product ignoring the operator. urllib cannot produce any of these shapes, so this talks socket.
+    os.environ["GPU_ANALYSIS_CONFIG"] = scratch_cfg
+    port = httpd.server_address[1]
+
+    def raw_http(headers, body=b""):
+        with socket.create_connection(("127.0.0.1", port), timeout=10) as sock:
+            sock.sendall(("\r\n".join(headers) + "\r\n\r\n").encode() + body)
+            got = b""
+            try:
+                while True:
+                    chunk = sock.recv(4096)
+                    if not chunk:
+                        break
+                    got += chunk
+            except OSError:
+                pass
+        text = got.decode("utf-8", "replace")
+        head = text.split("\r\n", 1)[0].split(" ")
+        return (int(head[1]) if len(head) > 1 and head[1].isdigit() else 0), text
+
+    req = ["PATCH /api/settings HTTP/1.1", "Host: 127.0.0.1", "Connection: close",
+           "Content-Type: application/json"]
+    status, chunked = raw_http(req + ["Transfer-Encoding: chunked"],
+                               b"8\r\n{\"langua\r\n6\r\nge\":\"en\r\n0\r\n\r\n")
+    check("a chunked body is refused outright instead of being read as an empty patch",
+          status == 400 and "chunked" in chunked.lower(), chunked.split("\r\n", 1)[0])
+    check("and the field it claimed to set really stayed untouched",
+          json.loads(Path(scratch_cfg).read_text(encoding="utf-8")).get("language") != "en")
+
+    for label, extra, body in (
+        ("a garbage Content-Length", ["Content-Length: twelve"], b'{"language":"en"}'),
+        ("a valid JSON body that is not an object", ["Content-Length: 3"], b"[1]"),
+        ("a body that is not JSON at all", ["Content-Length: 5"], b"{oops"),
+    ):
+        status, text = raw_http(req + extra, body)
+        check(f"{label} gets a 400 with a reason, not a success",
+              status == 400 and bool(text.split("\r\n\r\n", 1)[-1].strip()),
+              text.split("\r\n", 1)[0])
+
+    status, text = raw_http(req)                       # no Content-Length, no body: the legal no-op
+    check("a genuinely absent body is still the legal empty patch (200, ok:true, nothing written)",
+          status == 200 and json.loads(text.split("\r\n\r\n", 1)[-1] or "{}").get("ok") is True,
+          text.split("\r\n", 1)[0])
+
+    status, text = raw_http(req + ["Content-Length: 17"], b'{"language":"en"}')
+    check("and the well-formed request still works, so the refusal is not a blanket block",
+          status == 200 and json.loads(Path(scratch_cfg).read_text(encoding="utf-8")
+                                       ).get("language") == "en", text.split("\r\n", 1)[0])
+    os.environ["GPU_ANALYSIS_CONFIG"] = fixture_cfg
 
     print("=== spec #9: the engine chips are pinned by literal, not just by predicate ===")
     # `decision_is_warm` was already asserted above, but nothing locked the strings the operator
@@ -551,6 +721,91 @@ def main() -> int:
     check("the openai double never pulled in a real HTTP client",
           "httpx" not in sys.modules,
           f"httpx in sys.modules: {'httpx' in sys.modules}")
+    # The replay cache used to grow by one full transcript per question and never shrink; a
+    # workbench left open across a long demo accumulates them silently. Pruning must never take a
+    # run the viewer is still attached to, because /api/events answers 404 for anything forgotten.
+    saved_jobs = dict(wb.jobs)
+    try:
+        wb.jobs.clear()
+        for n in range(gui.JOB_HISTORY + 40):
+            stale = gui.Job("run", f"finished {n}")
+            stale.id = f"j-old-{n}"      # real ids collide inside one millisecond; be explicit
+            stale.finish()
+            wb.jobs[stale.id] = stale
+        live = gui.Job("run", "still running")
+        live.id = "j-live"
+        wb.jobs[live.id] = live
+        wb._prune_jobs()
+        check("the replay cache is bounded", len(wb.jobs) <= gui.JOB_HISTORY,
+              f"{len(wb.jobs)} kept of {gui.JOB_HISTORY + 1} created")
+        check("pruning never drops a run that has not finished", live.id in wb.jobs, "")
+    finally:
+        wb.jobs.clear()
+        wb.jobs.update(saved_jobs)
+
+    print("=== spec #11: the key row and the referenced ids are checked against the shipped sources ===")
+    # Two ways this screen can lie while every HTTP route still passes: the footer advertises a key
+    # that no handler binds, and app.js reaches for an id that markup no longer has. Both are
+    # invisible to a Python test that only talks to the server, and both are cheap to catch by
+    # reading the two files that are actually served.
+    page = (HERE / "gui" / "index.html").read_text(encoding="utf-8")
+    script = (HERE / "gui" / "app.js").read_text(encoding="utf-8")
+    row = re.search(r'<p class="keys">.*?</p>', page, re.S)
+    check("the key row exists", row is not None)
+    if row:
+        markup = row.group(0)
+        advertised = [key.strip() for key in re.findall(r"<b>([^<]+)</b>", markup)]
+        reserved = [key for key in ("Ctrl+L", "Ctrl+Q", "Ctrl+W", "Ctrl+N", "Ctrl+T", "Ctrl+,")
+                    if key in markup]
+        check("no browser-reserved chord is advertised", not reserved, ",".join(reserved))
+        bound = re.findall(r"^\s*(F\d+):\s*\(\)", script, re.M)
+
+        def is_bound(key):
+            if key.startswith("F"):
+                return key in bound
+            if key == "Esc":       # handled by the modal's own listener, not by the table
+                return 'event.key === "Escape"' in script
+            if key == "Enter":     # native form submission, so the forms are the binding
+                return 'addEventListener("submit"' in script
+            return False
+
+        unbound = [key for key in advertised if not is_bound(key)]
+        check(f"all {len(advertised)} advertised keys are bound", not unbound, ",".join(unbound))
+        # The other direction: a binding that works but is never mentioned is a feature nobody
+        # finds, and it is exactly how the terminal's own key row drifted from its handlers.
+        silent = [key for key in bound if key not in advertised]
+        check("no bound key hides from the row", not silent, ",".join(silent))
+    referenced = set(re.findall(r'\$\("([^"]+)"\)', script))
+    declared = set(re.findall(r'id="([^"]+)"', page))
+    missing = sorted(referenced - declared)
+    check(f"all {len(referenced)} ids app.js looks up exist in index.html",
+          not missing, ",".join(missing))
+
+    for name, value in (("GPU_ANALYSIS_CONFIG", ambient_cfg), ("GPU_API_KEY", ambient_key)):
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
+
+    # The server and the browser-side renderer are two different programs, and this file can only
+    # reach the first. Run the renderer probe as its own process and print its verdict, so a green
+    # suite can never quietly mean "the JavaScript was never executed on this machine".
+    try:
+        probe = subprocess.run([sys.executable, str(HERE / "renderer_probe.py")],
+                               capture_output=True, text=True, timeout=300,
+                               encoding="utf-8", errors="replace")
+        prc, pout = probe.returncode, (probe.stdout or "")
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        prc, pout = 2, f"probe could not run: {type(exc).__name__}: {exc}"
+    last = next((ln for ln in pout.splitlines()[::-1] if ln.strip()), "")
+    check("the renderer probe did not report a failure", prc != 1, f"exit {prc}; {last[:120]}")
+    if prc == 2:
+        print("  [SKIP] gui/app.js was NEVER executed on this machine: no Chromium-family browser "
+              "and no jsdom driver. Nothing above proves the renderer.")
+    elif "jsdom" in pout:
+        print("  [NOTE] the renderer ran under DOM emulation, not Chromium: CSP, layout and the "
+              "real parser are still unproven here.")
+
     # Both numbers, because they are not the same thing: a parametrised label calls `check` from
     # one site several times, so "74" and "75" can both be true of one run. Printing the pair means
     # nobody has to reconstruct which counting rule produced a diff against another machine.

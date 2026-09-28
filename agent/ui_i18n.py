@@ -93,6 +93,52 @@ STRINGS = {
     '本机不可观测（需 cuDF）': 'Not observable here (needs cuDF)',
     '暂无产物': 'No artifacts yet', '暂无结果表': 'No result tables yet',
     '留空表示不修改': 'Leave empty to keep unchanged',
+
+    # The chart viewer and the key row. Tab labels are matched against the artifact names the report
+    # generator actually writes (groupby_bar / groupby_line / corr_heatmap / outliers_bar), so a kind
+    # with no file gets no tab and no label is ever shown for a chart that does not exist.
+    '折线': 'Line', '柱状': 'Bar', '热力': 'Heat', '直方': 'Histogram', '散点': 'Scatter',
+    '图表类型': 'Chart type', '语言': 'Language', '关闭弹窗': 'Close dialog', '提交': 'Submit',
+    '直接工具调用（不经过模型）': 'Direct tool call (no model)',
+
+    # Added when the browser sweep learned to reach #phase, <option> and <title>: every string
+    # below was already reaching the screen untranslated under language=en, so this is not new
+    # vocabulary -- it is the part of the interface the table had never covered.
+    'GPU加速与数据分析 · 工作台': 'GPU Acceleration & Data Analysis · Workbench',
+    '执行工具': 'Running a tool', '完成': 'Done', '提交中': 'Submitting',
+    '连接中断': 'Connection lost',
+    '模型客户端不可用：': 'Model client unavailable: ', '未知原因': 'unknown reason',
+    '安装：pip install -r requirements.txt\n在此之前，下方“直接工具调用”仍然真实可用，提问区不可用。':
+        'Install it with: pip install -r requirements.txt\n'
+        'Until then the direct tool calls below still run for real; only the question box is closed.',
+    '模型客户端已安装，但没有配置 API 地址 / 密钥 / 模型。':
+        'The model client is installed, but no API base URL / key / model is configured.',
+    # The precise version: /api/state names the fields it found empty, so the sentence is assembled
+    # from facts instead of guessing that all three are missing. Field labels above are reused, and
+    # only the names ever reach the screen -- never a value.
+    '模型客户端已安装，但还缺少：{fields}':
+        'The model client is installed, but these are still missing: {fields}',
+    '已保存，但提问框还不可用，缺少：{fields}':
+        'Saved, but the question box is still unavailable; missing: {fields}',
+    '已保存，提问框已可用。': 'Saved. The question box is now available.',
+    '已保存。': 'Saved. ', '未知项': 'an unknown item',
+    '未保存：': 'Not saved: ',
+    '分析引擎未响应：': 'Analysis engine not responding: ',
+    '引擎与模型客户端均就绪。': 'Engine and model client both ready.',
+    '提问会把选中的文件路径作为一行上下文附在问题后面，日志里会显示模型实际收到的原文。':
+        'Your question is sent with the selected file path as one line of context, and the log '
+        'shows exactly what the model received.',
+    '提问需要模型客户端（pip install -r requirements.txt）。下面「直接工具调用」不需要它。':
+        'Asking needs the model client (pip install -r requirements.txt). '
+        'The direct tool calls below do not.',
+    '共 {total} 个可分析文件，这里按大小列出前 {shown} 个':
+        '{total} analysable files found; the {shown} largest are listed here',
+    '共 {total} 个可分析文件，按大小排序': '{total} analysable files found, sorted by size',
+    '没有可分析的数据文件': 'No analysable data files',
+    'analyze_dataset（单次，无驻留）': 'analyze_dataset (one shot, nothing resident)',
+    'dataset_session（驻留会话）': 'dataset_session (resident session)',
+    'export_deliverables（出报告与图表）': 'export_deliverables (report and charts)',
+    'list_datasets（发现数据）': 'list_datasets (discover data)',
 }
 
 ZH_SPECIAL = {

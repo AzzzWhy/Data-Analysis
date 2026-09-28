@@ -8,7 +8,12 @@ against `gui/renderer_probe.html` over file:// and reads the verdict back out of
     python3 agent/renderer_probe.py            # auto-detect Edge or Chrome
     GPU_GUI_BROWSER="C:/path/to/chrome.exe" python3 agent/renderer_probe.py
 
-Exit codes: 0 all cases passed, 1 something failed, 2 no browser found (skipped, not passed --
+A machine with no Chromium-family browser -- which is the normal state of a GPU node -- falls back
+to `gui/renderer_probe_jsdom.js`, which runs the same probe page under a DOM implementation. The
+fallback is loud about what it cannot see (CSP, layout, Chromium's parser), because "the renderer
+assertions ran" and "the page was verified in a browser" are different claims.
+
+Exit codes: 0 all cases passed, 1 something failed, 2 nothing could run (skipped, not passed --
 a probe that silently no-ops is worse than one that says it did not run).
 """
 from __future__ import annotations
@@ -16,12 +21,14 @@ from __future__ import annotations
 import html
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 PROBE = HERE / "gui" / "renderer_probe.html"
+JSDOM_DRIVER = HERE / "gui" / "renderer_probe_jsdom.js"
 
 # Program Files on the left, x86 on the right: Edge installs 32-bit even on 64-bit Windows.
 CANDIDATES = (
@@ -48,6 +55,36 @@ def browser() -> str | None:
     return None
 
 
+def run_jsdom() -> int:
+    """Drive the same probe page through jsdom when no browser exists on this machine.
+
+    Returns this driver's own exit-code vocabulary, so the caller never has to guess whether an
+    emulation pass is a browser pass. It is not: the driver prints what it cannot see.
+    """
+    node = shutil.which("node") or shutil.which("nodejs")
+    if node is None or not JSDOM_DRIVER.is_file():
+        print("[probe] no browser here and no node driver to fall back on.")
+        return 2
+    try:
+        out = subprocess.run([node, str(JSDOM_DRIVER), str(PROBE)], capture_output=True,
+                             text=True, timeout=180, encoding="utf-8", errors="replace")
+    except subprocess.TimeoutExpired:
+        print("[probe] FAIL: the jsdom driver did not return within 180 s")
+        return 1
+    for line in (out.stdout or "").splitlines():
+        print(line)
+    if out.returncode == 2:
+        print("[probe] SKIPPED: jsdom is not installed, so the renderer assertions never ran.")
+        return 2
+    if out.returncode != 0:
+        print("[probe] FAIL under DOM emulation (see the cases above).")
+        if out.stderr:
+            print("        stderr: " + out.stderr.strip()[:300])
+        return 1
+    print("[probe] PASS under jsdom emulation -- NOT a Chromium run.")
+    return 0
+
+
 def main() -> int:
     # Chinese case names on a GBK console would otherwise raise UnicodeEncodeError, and a probe
     # that dies while printing its own verdict is worse useless than useless misleading.
@@ -60,9 +97,11 @@ def main() -> int:
         return 1
     found = browser()
     if found is None:
-        print("[probe] SKIPPED: no Edge or Chrome found. Set GPU_GUI_BROWSER to the executable.")
+        print("[probe] no Edge or Chrome found here. Set GPU_GUI_BROWSER to the executable, "
+              "or fall back to DOM emulation:")
+        print(f"[probe]   npm install jsdom@24 && node {JSDOM_DRIVER.name} {PROBE}")
         print(f"[probe] alternatively open this file in a browser and read the summary: {PROBE}")
-        return 2
+        return run_jsdom()
     target = PROBE.as_uri()
     try:
         # A dedicated profile keeps this from touching the operator's real browser state, and

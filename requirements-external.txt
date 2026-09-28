@@ -2,3 +2,7 @@
 # MCP v1 API is deliberately pinned; v2 uses a different client interface.
 mcp>=1.28,<2
 jsonschema>=4.23,<5
+
+# Renderer fallback on a browser-less machine (agent/gui/renderer_probe_jsdom.js):
+#   npm install jsdom@24      # v24 is the last line that loads on Node 18; newer needs Node 20+/22
+# Without it agent/renderer_probe.py exits 2 and gui_test.py prints an explicit SKIP.

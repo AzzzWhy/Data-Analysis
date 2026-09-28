@@ -76,6 +76,9 @@ def chrome(language: str) -> dict:
 GUI_DIR = HERE / "gui"
 DEFAULT_PORT = 8765
 EVENT_BUFFER = 200          # a reload re-attaches and replays; it is not a run log
+# How many finished runs stay replayable. Each one holds its whole transcript and result payload,
+# and the dict was never trimmed: a workbench left open for a day accumulated one per question.
+JOB_HISTORY = 20
 # The worker's own read has no deadline: skills._worker_call accepts a `timeout` argument and
 # then never uses it, so a wedged worker blocks the readline forever while holding the module
 # lock. Every call the workbench makes therefore needs a deadline it owns itself.
@@ -238,7 +241,15 @@ class Workbench:
         self.jobs: dict[str, Job] = {}
         self.agent = None
         self.config_ready = False
+        self.missing_fields: list[str] = []      # filled once a config file could be read
+        self.remember_key = False
         self.model = None
+        # `--model` is a launch-time override and the only thing allowed to outrank the file. It has
+        # to be remembered separately: `apply_settings` used to reconfigure with `self.model` -- the
+        # model the screen was showing *before* the edit -- so saving a new model ID wrote it to disk
+        # and then immediately overrode it in memory. Measured on the node: disk had beta-model while
+        # /api/state still reported alpha-model, and the running agent kept using the old one.
+        self.model_override: str | None = None
         self.base_url = ""
         self.language = "zh"
         self.last_error = ""
@@ -254,6 +265,7 @@ class Workbench:
             if env_dir:
                 self._add_root(env_dir)
         self._add_root(HERE.parent / "benchmark")
+        self.model_override = model_override
         self._configure(model_override)
 
     # -- configuration and honest state ------------------------------------------------
@@ -274,9 +286,22 @@ class Workbench:
         if model_override:
             config.model = model_override
         self.config_ready = bool(config.ready)
+        # Which of the three readiness conditions is actually missing, by name only -- never a value,
+        # and never a guess. `api_config.APIConfig.ready` is a conjunction (api_config.py:23), so a
+        # bare `false` cannot tell the operator whether to type a key or pick a model, and the UI
+        # had one fixed sentence covering all three cases. Absent when the file could not be read:
+        # then nothing is known, which is a different claim from nothing being configured.
+        self.missing_fields = [name for name, value in (("base_url", config.base_url),
+                                                         ("model", config.model),
+                                                         ("api_key", config.api_key))
+                               if not str(value or "").strip()]
         self.model = config.model or None
         self.base_url = config.base_url
         self.language = getattr(config, "language", "zh")
+        # The settings form needs to show the truth about the checkbox it is about to submit.
+        # `remember_key` is a persisted preference, not a secret; the key itself stays out of
+        # every payload this server emits.
+        self.remember_key = bool(getattr(config, "remember_key", False))
         if self.config_ready:
             try:
                 self.agent = Agent(build_client(config), verbose=False, model=config.model)
@@ -306,7 +331,12 @@ class Workbench:
             try:
                 target = normalize_url(new_base)
             except Exception as exc:
-                return {"ok": False, "error": f"base_url rejected: {exc}"}
+                # api_config authors its refusals in Chinese, and those exact sentences are already
+                # in the label table -- so the reason can be shown in either language instead of
+                # leaking one Chinese sentence into an English screen. The English wrapper stays: it
+                # names which field was rejected, which is not something the table holds.
+                reason = ui_i18n.tr(self.language, str(exc)) if ui_i18n else str(exc)
+                return {"ok": False, "error": f"base_url rejected: {reason}"}
             if target != config.base_url:
                 # A different provider must not inherit the previous provider's key, and a model
                 # id from the old provider is meaningless at the new one.
@@ -350,13 +380,16 @@ class Workbench:
             # save_config validates the language and refuses anything but zh/en.
             return {"ok": False, "error": f"settings not saved: {type(exc).__name__}: {exc}"}
 
-        self._configure(self.model)
+        self._configure(self.model_override)
         response = {
             "ok": True,
             "base_url": config.base_url,
             "model": config.model or None,
             "language": config.language,
             "config_ready": self.config_ready,
+            # The settings form's closing line is now derived from this, not from a fixed sentence
+            # that claimed all three fields were missing when only one was.
+            "missing_fields": list(self.missing_fields),
             # A key can be live in memory without being on disk -- that is the documented default.
             # `save_config` writes the field only when remember_key is true, so disk truth is that
             # flag plus a non-empty key, not merely a non-empty key.
@@ -410,11 +443,13 @@ class Workbench:
             "agent_available": Agent is not None,
             "agent_import_error": AGENT_IMPORT_ERROR,
             "config_ready": self.config_ready,
+            "missing_fields": list(self.missing_fields),
             "model": self.model,
             # The address is not a secret and the settings form needs to show what is configured;
             # the key itself is never part of this payload.
             "base_url": self.base_url,
             "language": self.language,
+            "remember_key": self.remember_key,
             "i18n": chrome(self.language),
             "model_error": self.last_error,
             "busy": self.busy,
@@ -465,7 +500,21 @@ class Workbench:
             self.busy = True
             job = Job(kind, label)
             self.jobs[job.id] = job
+            self._prune_jobs()
             return job
+
+    def _prune_jobs(self) -> None:
+        """Trim the replay cache to the newest JOB_HISTORY entries. Caller holds self.lock.
+
+        Only finished runs are eligible: dropping the live one would hand a reconnecting viewer a
+        404 for the run it is watching, which is the exact failure this buffer exists to prevent.
+        Insertion order is kept, so "oldest finished" is a plain scan from the front.
+        """
+        overflow = len(self.jobs) - JOB_HISTORY
+        if overflow <= 0:
+            return
+        for job_id in [jid for jid, job in self.jobs.items() if job.done][:overflow]:
+            del self.jobs[job_id]
 
     def release(self, timeout: float = WORKER_TIMEOUT_SECONDS) -> dict:
         """Close sessions AND drop warm frames, off-thread, with our own deadline.
@@ -634,14 +683,50 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, json.dumps(payload, ensure_ascii=False).encode("utf-8"),
                    "application/json; charset=utf-8")
 
-    def _body(self) -> dict:
+    def _body(self) -> dict | None:
+        """Return the parsed JSON object, or answer the client and return None.
+
+        This used to be one `except: return {}`, which made four different situations look alike:
+        a chunked body this HTTP/1.0 handler cannot read at all, a garbage Content-Length, JSON that
+        is not an object, and JSON that does not parse. All four arrived as an empty patch, and an
+        empty PATCH is a *legal* no-op -- so the server answered `ok: true` about a body it had
+        never seen. Observed from the jsdom harness: a chunked PATCH {"language":"en"} came back
+        successful with the language unchanged. Nothing was written; nothing was wrong on screen.
+        """
+        transfer = (self.headers.get("Transfer-Encoding") or "").strip().lower()
+        if "chunked" in transfer:
+            # Reading it would need real chunk framing; pretending the body was empty is worse,
+            # because the client is handed a success it did not earn.
+            self._json(400, {"error": "chunked request bodies are not accepted: this server reads "
+                                      "the body by Content-Length (HTTP/1.0). Resend the JSON with "
+                                      "a Content-Length header."})
+            return None
         try:
             length = int(self.headers.get("Content-Length") or 0)
-            raw = self.rfile.read(length) if length else b"{}"
-            parsed = json.loads(raw.decode("utf-8") or "{}")
-            return parsed if isinstance(parsed, dict) else {}
-        except Exception:
-            return {}
+        except ValueError:
+            self._json(400, {"error": f"unreadable Content-Length: "
+                                      f"{self.headers.get('Content-Length')!r}"})
+            return None
+        if length < 0:
+            self._json(400, {"error": f"negative Content-Length: {length}"})
+            return None
+        if length == 0:
+            return {}                      # a genuinely absent body stays the legal empty patch
+        try:
+            raw = self.rfile.read(length).decode("utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            self._json(400, {"error": f"could not read the request body: {exc}"})
+            return None
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            self._json(400, {"error": f"request body is not valid JSON: {exc}"})
+            return None
+        if not isinstance(parsed, dict):
+            self._json(400, {"error": f"request body must be a JSON object, not "
+                                      f"{type(parsed).__name__}"})
+            return None
+        return parsed
 
     # -- routes ------------------------------------------------------------------------
 
@@ -684,6 +769,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if url.path == "/api/ask":
             body = self._body()
+            if body is None:
+                return                      # the reason is already on the wire
             text = str(body.get("text") or "").strip()
             if not text:
                 return self._json(400, {"error": "text is required"})
@@ -694,6 +781,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(202, {"job_id": job.id})
         if url.path == "/api/run":
             body = self._body()
+            if body is None:
+                return
             job, problem = wb.start_direct_run(str(body.get("tool") or ""),
                                                body.get("args") or {})
             if job is None:
@@ -712,7 +801,10 @@ class Handler(BaseHTTPRequestHandler):
         if "api_key" in parse_qs(url.query):
             return self._json(400, {"error": "api_key must be sent in the request body, "
                                              "never in the query string"})
-        return self._json(200, self.workbench.apply_settings(self._body()))
+        patch = self._body()
+        if patch is None:
+            return
+        return self._json(200, self.workbench.apply_settings(patch))
 
     def _static(self, name: str, content: str) -> None:
         root = GUI_DIR.resolve()

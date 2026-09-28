@@ -234,3 +234,28 @@ footer {
   main { grid-template-columns: 1fr; }
   aside { max-height: none; }
 }
+
+/* --- 标签页、单图查看器、脉冲与键位行 --------------------------------------------------
+   颜色只复用 :root 里从 tui_app.py 抄来的变量（--panel / --panel-2 / --line / --muted /
+   --accent），不引入第二套调色板；图表底板仍沿用上面 .chartbox 的白底，因为 SVG 里的文字是深色。 */
+.keys { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center;
+        margin: 0; padding: 6px 18px; font-size: 11px; color: var(--muted);
+        border-top: 1px solid var(--line); background: var(--panel); }
+.keys b { color: var(--ink); font-weight: 600; }
+#pulse { color: var(--muted); font-weight: 700; }
+#pulse[data-busy="1"] { color: var(--accent); animation: pulse .9s steps(2, end) infinite; }
+@keyframes pulse { 50% { opacity: .15; } }
+
+.tabs { display: flex; gap: 4px; margin: 8px 0 0; flex-wrap: wrap; }
+.tab { background: var(--panel-2); color: var(--muted); border: 1px solid var(--line);
+       border-radius: 6px 6px 0 0; padding: 2px 10px; font: inherit; font-size: 11px; cursor: pointer; }
+.tab[aria-selected="true"] { background: var(--panel); color: var(--ink); border-bottom-color: var(--panel); }
+.tab:hover { color: var(--ink); }
+#chart { display: flex; flex-direction: column; gap: 8px; }
+#chart-cap { color: var(--muted); font-size: 11px; margin: 4px 0 0; }
+
+.tool-drawer { border: 1px solid var(--line); border-radius: 6px; background: var(--panel);
+               margin: 0 0 12px; }
+.tool-drawer > summary { cursor: pointer; padding: 6px 10px; color: var(--muted); font-size: 12px; }
+.tool-drawer[open] > summary { color: var(--ink); border-bottom: 1px solid var(--line); }
+.tool-drawer form, .tool-drawer > p { padding: 0 10px 10px; }

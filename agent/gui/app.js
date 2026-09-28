@@ -27,6 +27,7 @@ const els = {
   by: $("by"), agg: $("agg"), goal: $("goal"),
   forceCpu: $("force-cpu"), forceGpu: $("force-gpu"),
   prompt: $("prompt"), ask: $("ask"), askHint: $("ask-hint"),
+  pulse: $("pulse"), tabs: $("tabs"), chart: $("chart"), chartCap: $("chart-cap"),
 };
 
 let selected = null;      // absolute path of the chosen dataset
@@ -63,6 +64,10 @@ function cell(row, value, numeric) {
 
 let I18N = {};
 let LANG = "zh";
+// The title is the one piece of chrome that lives outside the DOM tree, so the sweep below can
+// never reach it. Capture the authored value once and re-localise from that, not from whatever
+// the title currently says, or a zh↔en round trip would compound.
+const ORIGINAL_TITLE = document.title;
 
 /* Labels only. Model prose and engine values never pass through this table -- translating a
    model's answer in the frontend would be fabricating a translation it did not produce. */
@@ -71,7 +76,10 @@ function t(key) {
 }
 
 function applyChrome() {
-  document.querySelectorAll(".lt, h1, h2, button, .row .k, .kpi .l").forEach((node) => {
+  // `#phase` and `<option>` joined the sweep: the footer state and the tool picker were the last
+  // two places where an English setting still produced Chinese text (and vice versa). Both are
+  // leaf nodes, and `<option>` carries its behaviour in `value`, never in its label.
+  document.querySelectorAll(".lt, h1, h2, button, .row .k, .kpi .l, #phase, option").forEach((node) => {
     // Guard, not paranoia: assigning textContent destroys child elements. A label that wraps a
     // select used to be rewritten here and the control vanished with it, which silently broke
     // the tool form. Only leaf nodes are ever translated.
@@ -81,16 +89,41 @@ function applyChrome() {
     if (translated !== node.textContent) node.textContent = translated;
   });
   document.documentElement.lang = LANG === "en" ? "en" : "zh";
+  document.title = t(ORIGINAL_TITLE);
   $("lang").textContent = LANG === "zh" ? "中文" : "English";
   $("prompt").placeholder = LANG === "en"
     ? "e.g. Compare total and average revenue by region" : "例如：按地区统计 revenue 的总和与均值";
   $("goal").placeholder = t("例如：找出 revenue 离群点的成因");
   $("drawer-toggle").textContent = t("执行详情") + " · "
     + (logVisible ? t("收起") : t("展开"));
+  // Attributes are outside the text sweep, so the tablist's accessible name is localised here --
+  // leaving it in the HTML would strand a Chinese label under language=en.
+  els.tabs.setAttribute("aria-label", t("图表类型"));
+  // The caption is a label plus a count, so the sweep above cannot rebuild it from textContent.
+  if (chartCap.label) els.chartCap.textContent = `${t(chartCap.label)} (${chartCap.count})`;
   // Plan rows are built once per reply, so the chrome sweep above never reaches them; redraw
   // them from the cached list rather than replaying the reply, which would double the off-plan
   // rows.
   renderPlanRows();
+}
+
+/* The engine sends one of a closed set of state tokens. They go through the same table as every
+   other label, and `dataset.label` is written together with the text so the chrome sweep and this
+   assignment can never disagree about what the footer currently means. The two raw tokens used to
+   surface as untranslated English in a Chinese interface. */
+const PHASE_TOKENS = { tool: "执行工具", thinking: "正在思考" };
+
+function setPhase(token) {
+  const label = PHASE_TOKENS[token] || token;
+  els.phase.dataset.label = label;
+  els.phase.textContent = t(label);
+}
+
+/* The one live-work indicator. It follows the same edges as the submit buttons -- set when a job is
+   accepted, cleared when the stream says it is over (including a dropped tunnel) -- so it can never
+   pulse on a run that already ended. */
+function setBusy(on) {
+  els.pulse.dataset.busy = on ? "1" : "0";
 }
 
 /* ------------------------------------------------------------- markdown (escape first) */
@@ -181,6 +214,27 @@ function setChip(chip) {
   els.chip.title = chip && chip.note ? chip.note : "";
 }
 
+/* Which piece of the credential is missing is a fact the server knows. `APIConfig.ready` is a
+   three-way conjunction (api_config.py:23), so `config_ready: false` alone cannot tell the operator
+   whether to type a key or pick a model -- and the browser covered all three cases with one fixed
+   sentence, in two nearly identical copies. Field names only, never values. */
+const FIELD_LABELS = { base_url: "API 地址", model: "模型", api_key: "API 密钥" };
+
+function missingFieldNames(state) {
+  const fields = Array.isArray(state.missing_fields) ? state.missing_fields : [];
+  return fields.map((field) => t(FIELD_LABELS[field] || field)).join(" / ");
+}
+
+function notReadyText(state) {
+  const names = missingFieldNames(state);
+  if (!names) {
+    // No names to work with: the file could not be read, which is a different claim from nothing
+    // being configured, so the general sentence stands and `model_error` carries the real reason.
+    return t("模型客户端已安装，但没有配置 API 地址 / 密钥 / 模型。");
+  }
+  return t("模型客户端已安装，但还缺少：{fields}").replace("{fields}", names);
+}
+
 function renderState(state) {
   I18N = state.i18n || {};
   LANG = state.language === "en" ? "en" : "zh";
@@ -191,15 +245,14 @@ function renderState(state) {
 
   const notes = [];
   if (!state.agent_available) {
-    notes.push("模型客户端不可用：" + (state.agent_import_error || "未知原因") +
-               "\n安装：pip install -r requirements.txt\n" +
-               "在此之前，下方“直接工具调用”仍然真实可用，提问区不可用。");
+    notes.push(t("模型客户端不可用：") + (state.agent_import_error || t("未知原因")) +
+               "\n" + t("安装：pip install -r requirements.txt\n" +
+                 "在此之前，下方“直接工具调用”仍然真实可用，提问区不可用。"));
   } else if (!state.config_ready) {
-    notes.push("模型客户端已安装，但没有配置 API 地址 / 密钥 / 模型。" +
-               (state.model_error ? "\n" + state.model_error : ""));
+    notes.push(notReadyText(state) + (state.model_error ? "\n" + state.model_error : ""));
   }
   if (!state.engine_ready) {
-    notes.unshift("分析引擎未响应：" + state.engine_error);
+    notes.unshift(t("分析引擎未响应：") + state.engine_error);
   }
 
   // The question box is the model-driven path, so it opens exactly when a configured client
@@ -209,10 +262,10 @@ function renderState(state) {
   els.prompt.disabled = !canAskNow;
   els.ask.disabled = !canAskNow;
   els.askHint.textContent = canAsk
-    ? "提问会把选中的文件路径作为一行上下文附在问题后面，日志里会显示模型实际收到的原文。"
+    ? t("提问会把选中的文件路径作为一行上下文附在问题后面，日志里会显示模型实际收到的原文。")
     : (!state.agent_available
-      ? "提问需要模型客户端（pip install -r requirements.txt）。下面「直接工具调用」不需要它。"
-      : "已安装 openai，但还没有配置 API 地址 / 密钥 / 模型。");
+      ? t("提问需要模型客户端（pip install -r requirements.txt）。下面「直接工具调用」不需要它。")
+      : notReadyText(state));
 
   if (notes.length) {
     els.banner.hidden = false;
@@ -221,7 +274,7 @@ function renderState(state) {
   } else {
     els.banner.hidden = false;
     els.banner.dataset.kind = "ok";
-    els.banner.textContent = "引擎与模型客户端均就绪。";
+    els.banner.textContent = t("引擎与模型客户端均就绪。");
   }
   renderSession(state.session);
 }
@@ -422,28 +475,107 @@ function renderToolResult(payload) {
   renderTables(result);
 }
 
+/* Chart tabs are derived, never declared. The five kinds below are what the report generator can
+   actually emit (make_deliverables.py writes groupby_bar/groupby_line/corr_heatmap/outliers_bar/
+   summary_*); a kind with no artifact on disk gets no tab, so the row can't advertise a chart that
+   isn't there. Anything whose name doesn't prove a kind stays in the flat #charts list rather than
+   being guessed into a tab. */
+const CHART_KINDS = [
+  ["line", "折线"], ["bar", "柱状"], ["heat", "热力"], ["hist", "直方"], ["scatter", "散点"],
+];
+// The second column is the label that goes into the i18n table; the first is only a filename token.
+// Handing the token to t() would look a machine name up in a vocabulary of interface labels and,
+// finding nothing, show the token itself.
+const kindLabel = (kind) => (CHART_KINDS.find(([token]) => token === kind) || [])[1] || kind;
+
+function chartKind(path) {
+  const name = String(path).split(/[\\/]/).pop().toLowerCase();
+  if (!/\.svg$/i.test(name)) return "";
+  const hit = CHART_KINDS.find(([token]) => name.includes(token));
+  return hit ? hit[0] : "";
+}
+
+function svgBox(path) {
+  const box = document.createElement("div");
+  box.className = "chartbox";
+  const img = document.createElement("img");
+  img.alt = path.split(/[\\/]/).pop();
+  img.src = "/artifact?path=" + encodeURIComponent(path);
+  img.addEventListener("error", () => {
+    text(box);
+    line(box, "bad", `图表无法载入：${img.alt}（不在允许目录内，或文件不存在）`);
+  });
+  const cap = document.createElement("div");
+  cap.className = "cap";
+  cap.textContent = img.alt;
+  box.appendChild(img);
+  box.appendChild(cap);
+  return box;
+}
+
+let chartByKind = {};   // kind -> [artifact path], rebuilt from result.charts on every render
+let chartCap = { label: "", count: 0 };   // what the caption is made of, so a language flip can rebuild it
+
+function showKind(kind) {
+  const items = chartByKind[kind] || [];
+  text(els.chart);
+  items.forEach((path) => els.chart.appendChild(svgBox(path)));
+  els.chart.hidden = false;
+  // Kind plus a count, and only that: each chart below already carries its own filename caption, so
+  // repeating the path here would be a second place for the two to disagree.
+  chartCap = { label: kindLabel(kind), count: items.length };
+  els.chartCap.textContent = `${t(chartCap.label)} (${chartCap.count})`;
+  els.tabs.querySelectorAll(".tab").forEach((btn) => {
+    btn.setAttribute("aria-selected", String(btn.dataset.kind === kind));
+  });
+}
+
+/* Returns the artifacts that no kind claimed, so the caller can render them as before and nothing
+   is dropped between the two views. */
+function renderChartTabs(charts) {
+  chartByKind = {};
+  charts.forEach((path) => {
+    const kind = chartKind(path);
+    if (kind) (chartByKind[kind] = chartByKind[kind] || []).push(path);
+  });
+  const order = CHART_KINDS.map(([kind]) => kind).filter((kind) => chartByKind[kind]);
+  text(els.tabs);
+  text(els.chart);
+  els.chartCap.textContent = "";
+  if (!order.length) {
+    els.tabs.hidden = true;
+    els.chart.hidden = true;
+    chartCap = { label: "", count: 0 };
+    els.chartCap.textContent = "";
+    return charts;
+  }
+  order.forEach((kind) => {
+    const btn = document.createElement("button");
+    btn.className = "tab";
+    btn.type = "button";
+    btn.setAttribute("role", "tab");
+    btn.setAttribute("aria-controls", "chart");
+    // dataset.label holds the untranslated key so a language flip relabels a tab built under the
+    // other language; writing only textContent would strand it in whichever language it was born in.
+    btn.dataset.label = kindLabel(kind);
+    btn.dataset.kind = kind;
+    btn.textContent = t(kindLabel(kind));
+    btn.addEventListener("click", () => showKind(kind));
+    els.tabs.appendChild(btn);
+  });
+  els.tabs.hidden = false;
+  showKind(order[0]);
+  return charts.filter((path) => !chartKind(path));
+}
+
 function renderArtifacts(result) {
   const charts = Array.isArray(result.charts) ? result.charts : [];
-  if (!charts.length && !result.report) return;
+  const loose = renderChartTabs(charts);
+  // Cleared before the early return, not after: a second result whose charts all found a tab used
+  // to leave the first result's artifacts parked down here, so the same SVG showed twice.
   text(els.charts);
-  charts.forEach((path) => {
-    if (!/\.svg$/i.test(path)) return;
-    const box = document.createElement("div");
-    box.className = "chartbox";
-    const img = document.createElement("img");
-    img.alt = path.split(/[\\/]/).pop();
-    img.src = "/artifact?path=" + encodeURIComponent(path);
-    img.addEventListener("error", () => {
-      text(box);
-      line(box, "bad", `图表无法载入：${img.alt}（不在允许目录内，或文件不存在）`);
-    });
-    const cap = document.createElement("div");
-    cap.className = "cap";
-    cap.textContent = img.alt;
-    box.appendChild(img);
-    box.appendChild(cap);
-    els.charts.appendChild(box);
-  });
+  if (!loose.length && !result.report) return;
+  loose.forEach((path) => els.charts.appendChild(svgBox(path)));
   if (result.report) {
     const a = document.createElement("a");
     a.textContent = "打开报告 report.md";
@@ -543,13 +675,17 @@ function trackSession(payload) {
 function attach(jobId) {
   if (stream) stream.close();
   stream = new EventSource("/api/events?job=" + encodeURIComponent(jobId));
+  // Handlers must act on the stream they were registered for, not on the global. A late event on
+  // an already-finished stream would otherwise close the *next* run's connection, or -- once the
+  // global had been nulled -- throw inside the handler and leave the buttons locked.
+  const me = stream;
   stream.addEventListener("prompt", (e) => {
     // Echo exactly what the model received, including the appended file line, so the context
     // added on the operator's behalf is visible rather than implied.
     const body = JSON.parse(e.data);
     line(els.log, "dim", `   发给模型的原文：${body.text}`);
   });
-  stream.addEventListener("phase", (e) => { els.phase.textContent = JSON.parse(e.data).phase; });
+  stream.addEventListener("phase", (e) => { setPhase(JSON.parse(e.data).phase); });
   stream.addEventListener("trace", (e) => {
     const body = JSON.parse(e.data);
     line(els.log, body.line.includes("FAILED") ? "bad" : "dim", body.line);
@@ -572,16 +708,28 @@ function attach(jobId) {
   });
   stream.addEventListener("session", (e) => renderSession(JSON.parse(e.data)));
   stream.addEventListener("error", (e) => {
-    let message = "连接中断";
-    try { message = JSON.parse(e.data).message; } catch (ignored) {}
-    line(els.log, "bad", `!! ${message}`);
-  });
-  stream.addEventListener("done", () => {
-    els.phase.textContent = "完成";
+    // A transport failure carries no `data`, so the parse below only ever yields the server's own
+    // error event; collapsing the two into one line hid which half broke. Either way the run is
+    // over as far as this viewer can tell, and `done` may never arrive -- without the unlock and
+    // the close here, one dropped tunnel locked both submit buttons until a page reload, and the
+    // browser kept re-attaching to a job that had finished.
+    let reason = null;
+    try { reason = JSON.parse(e.data).message; } catch (ignored) {}
+    line(els.log, "bad", reason ? `!! ${reason}` : "!! 连接中断（服务端未给出原因）");
+    setPhase("连接中断");
+    me.close();
+    if (stream === me) stream = null;
+    setBusy(false);
     els.run.disabled = false;
     els.ask.disabled = !canAsk;
-    stream.close();
-    stream = null;
+  });
+  stream.addEventListener("done", () => {
+    setPhase("完成");
+    setBusy(false);
+    els.run.disabled = false;
+    els.ask.disabled = !canAsk;
+    me.close();
+    if (stream === me) stream = null;
   });
 }
 
@@ -600,11 +748,12 @@ async function run() {
     return;
   }
   els.run.disabled = true;
-  els.phase.textContent = "提交中";
+  setPhase("提交中");
   const { status, data } = await post("/api/run", { tool: els.tool.value, args: buildArgs() });
   if (status === 409) { els.run.disabled = false; return line(els.log, "bad", "!! 已有一次运行在进行中"); }
   if (status >= 400) { els.run.disabled = false; return line(els.log, "bad", `!! ${data.error || status}`); }
   line(els.log, "dim", `\n— ${data.note || "direct tool call"}: ${els.tool.value}`);
+  setBusy(true);
   attach(data.job_id);
 }
 
@@ -615,7 +764,7 @@ async function ask() {
   if (!question) return;
   els.prompt.value = "";
   els.ask.disabled = true;
-  els.phase.textContent = "提交中";
+  setPhase("提交中");
   const body = { text: question };
   if (selected) body.file = selected;
   const { status, data } = await post("/api/ask", body);
@@ -625,6 +774,7 @@ async function ask() {
     return line(els.log, "bad", `!! ${data.error || status}`);
   }
   line(els.log, "dim", `\n— 提问：${question}`);
+  setBusy(true);
   attach(data.job_id);
 }
 
@@ -657,8 +807,20 @@ async function loadFiles() {
     });
     els.files.appendChild(button);
   });
+  // The listing is a bounded walk with a capped payload, so "these are the files on the machine"
+  // has to say how much of it it is. Before this the panel showed 40 buttons while the server
+  // reported 196 and the difference was invisible -- the one thing a bounded view must never imply.
+  const total = Number(payload.count || 0);
+  const shown = (payload.files || []).length;
+  if (shown) {
+    line(els.files, "dim", (total > shown
+      ? t("共 {total} 个可分析文件，这里按大小列出前 {shown} 个")
+          .replace("{total}", total).replace("{shown}", shown)
+      : t("共 {total} 个可分析文件，按大小排序").replace("{total}", total))
+      + (payload.note ? " · " + payload.note : ""));
+  }
   if (!(payload.files || []).length) {
-    line(els.files, "dim", payload.note || "没有可分析的数据文件");
+    line(els.files, "dim", payload.note || t("没有可分析的数据文件"));
   }
 }
 
@@ -689,11 +851,26 @@ $("lang").addEventListener("click", async () => {
   // inside refreshState() relabels tiles that were rendered before the flip as well.
 });
 
+/* Keyboard: the terminal's bindings, not the browser's. Ctrl+Q and Ctrl+, never reach the page --
+   Chrome and Firefox handle them first -- so advertising a chord that cannot fire would be a
+   shortcut that silently does nothing. F5 is the browser's own reload, hence the preventDefault.
+   Each binding dispatches the button's click rather than duplicating its body: one code path per
+   action, so the key and the button can never disagree about what they do. */
+const KEY_BINDINGS = {
+  F2: () => $("drawer-toggle").click(),
+  F3: () => { const first = els.files.querySelector("button"); if (first) first.focus(); },
+  F4: () => els.prompt.focus(),
+  F5: () => $("open-settings").click(),
+  F6: () => $("lang").click(),
+  F8: () => els.release.click(),
+};
+
 addEventListener("keydown", (event) => {
-  if (event.ctrlKey && event.key.toLowerCase() === "l") {
-    event.preventDefault();
-    $("drawer-toggle").click();
-  }
+  if (event.ctrlKey || event.metaKey || event.altKey) return;
+  const action = KEY_BINDINGS[event.key];
+  if (!action) return;
+  event.preventDefault();
+  action();
 });
 
 /* Settings. The key field starts empty and stays empty after saving: the server never returns
@@ -703,6 +880,10 @@ const veil = $("veil");
 $("open-settings").addEventListener("click", () => {
   $("set-msg").textContent = "";
   $("set-key").value = "";
+  // Re-read from the server on every open, so the form cannot show a stale address or a stale
+  // `记住密钥 / Remember key` box: the checkbox's value is submitted back verbatim, and a stale
+  // unchecked box is what used to delete an already-stored key during an unrelated edit.
+  refreshState();
   veil.classList.add("open");
 });
 $("cancel").addEventListener("click", () => veil.classList.remove("open"));
@@ -719,12 +900,16 @@ $("settings").addEventListener("submit", async (event) => {
   if (key) patch.api_key = key;
   const { status, data } = await post("/api/settings", patch, "PATCH");
   if (status >= 400 || data.ok === false) {
-    $("set-msg").textContent = "未保存：" + (data.error || data.message || status);
+    // The three endings of this one submit are now translated as a set; leaving this line as raw
+    // Chinese while its neighbours go through the table would be the same residue, one line apart.
+    $("set-msg").textContent = t("未保存：") + (data.error || data.message || status);
     return;
   }
+  const names = missingFieldNames(data);
   $("set-msg").textContent = data.warning
-    ? "已保存。" + data.warning
-    : (data.config_ready ? "已保存，提问框已可用。" : "已保存，但还不足以启用提问框。");
+    ? t("已保存。") + data.warning
+    : (data.config_ready ? t("已保存，提问框已可用。")
+       : t("已保存，但提问框还不可用，缺少：{fields}").replace("{fields}", names || t("未知项")));
   $("set-key").value = "";
   await refreshState();
 });
@@ -735,6 +920,10 @@ async function refreshState() {
     renderState(state);
     $("set-url").value = state.base_url || "";
     $("set-model").value = state.model || "";
+    // The checkbox used to open unchecked no matter what was on disk, while the submit below
+    // always sends `remember_key` -- so editing only the model silently deleted a stored key.
+    // Prefill it, and let an explicit uncheck be the only thing that can remove one.
+    $("set-remember").checked = Boolean(state.remember_key);
   }
   return state;
 }
