@@ -1,6 +1,6 @@
 # 对话热工作进程与计划批量执行
 
-整合分支：`codex/hybrid-unified`。两个原实验分支的提交历史已合并。当前文档描述整合后的入口；[修复与实测记录](PUBLIC_DATA_REPAIR.md)仍保留原实验口径。2026-09-28 已将整合版同步到 GB10 的独立 `Data-Analysis-unified` 目录并验收，旧 `Data-Analysis` 检出目录及其用户文件保留不变；没有推送 GitHub。部署、打开方式及协调边界见[部署验收记录](GB10_UNIFIED_DEPLOYMENT.md)。
+统一发布分支：`main` / `codex/hybrid-unified`。两个原实验分支的提交历史已合并，原分支保留作历史对照。当前文档描述整合后的入口；[修复与实测记录](PUBLIC_DATA_REPAIR.md)仍保留原实验口径。2026-09-28 已将整合版同步到 GB10 的独立 `Data-Analysis-unified` 目录并验收，旧 `Data-Analysis` 检出目录及其用户文件保留不变。部署、打开方式及协调边界见[部署验收记录](GB10_UNIFIED_DEPLOYMENT.md)。部署记录中的“未推送 GitHub”描述当时的验收状态，后续统一发布不改变那次运行结果。
 
 ## 选择入口
 
