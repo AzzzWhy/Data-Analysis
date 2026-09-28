@@ -84,7 +84,7 @@ DEFAULT_PORT = 8765
 EVENT_BUFFER = 200          # a reload re-attaches and replays; it is not a run log
 # The one build stamp every page shows ({{BUILD}} in the html files). Bump it per release; a
 # tag that says which page you are looking at is worth nothing if it lags the code it names.
-BUILD_TAG = "guiv2 · b7"
+BUILD_TAG = "guiv2 · b8"
 # How many finished runs stay replayable. Each one holds its whole transcript and result payload,
 # and the dict was never trimmed: a workbench left open for a day accumulated one per question.
 JOB_HISTORY = 20
