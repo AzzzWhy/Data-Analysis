@@ -21,12 +21,15 @@ The original `load_csv_dataset` is kept for compatibility with the earlier agent
 """
 
 import atexit
+from collections import deque
 import json
 import os
 import subprocess
+import queue
 import sys
 import tempfile
 import threading
+import time
 
 import pandas as pd
 
@@ -194,6 +197,8 @@ skill_definitions = [
         "function": {
             "name": "analyze_dataset",
             "description": (
+                "Single independent analysis. For two or more independent analyses with "
+                "known columns on the same file, use analyze_batch instead of repeated calls. "
                 "Run real GPU-accelerated statistics over a local tabular data file and return "
                 "exact results. Covers: a profile (rows, columns, types, missing values), summary "
                 "statistics (count/mean/std/min/Q1/median/Q3/max), grouped aggregation, a "
@@ -221,7 +226,7 @@ skill_definitions = [
                         "enum": ["auto", "profile", "summary", "groupby", "corr", "outliers"],
                         "description": (
                             "analysis to run. auto=profile, summary and outliers in one call "
-                            "(start with it); "
+                            "(when a general overview is requested); "
                             "profile=rows/columns/types/missing/preview; summary=per-column "
                             "statistics; "
                             "groupby=aggregate grouped by a column (needs by and agg); "
@@ -400,6 +405,11 @@ def _cache_load() -> dict:
     try:
         with open(_COMPARISON_CACHE_PATH, "r", encoding="utf-8") as fh:
             raw = json.load(fh)
+        # Version 2 includes automatic column projection. Old whole-table CPU
+        # timings must not be paired with a new projected GPU query.
+        if raw.get("schema_version") != 2:
+            return {}
+        raw = raw.get("measurements", {})
         restored = {}
         for key_str, value in raw.items():
             parts = json.loads(key_str)
@@ -417,7 +427,9 @@ def _cache_load() -> dict:
 def _cache_save(cache: dict) -> None:
     try:
         with open(_COMPARISON_CACHE_PATH, "w", encoding="utf-8") as fh:
-            json.dump({json.dumps(list(k)): v for k, v in cache.items()}, fh, indent=1)
+            json.dump({"schema_version": 2,
+                       "measurements": {json.dumps(list(k)): v for k, v in cache.items()}},
+                      fh, indent=1)
     except Exception:
         # A cache write failure must never break the analysis.
         pass
@@ -430,14 +442,14 @@ _COMPARISON_CACHE: dict[tuple, dict] = _cache_load()
 def _file_identity(path: str) -> tuple:
     try:
         st = os.stat(path)
-        return (os.path.abspath(path), st.st_size, int(st.st_mtime))
+        return (os.path.abspath(path), st.st_size, st.st_mtime_ns)
     except OSError:
         return (os.path.abspath(path), None, None)
 
 
 def _speedup_enabled() -> bool:
-    """Enabled by default; set SKILL_SHOW_SPEEDUP=0 to turn the extra CPU run off."""
-    return os.environ.get("SKILL_SHOW_SPEEDUP", "1").strip().lower() not in {"0", "false", "no"}
+    """Benchmarking is opt-in: two extra CPU passes must not delay normal answers."""
+    return os.environ.get("SKILL_SHOW_SPEEDUP", "0").strip().lower() not in {"0", "false", "no"}
 
 
 def _rows_of(payload: dict) -> int | None:
@@ -505,8 +517,7 @@ def _cpu_twin(path: str, operation: str, by, agg, columns, top_k) -> dict | None
 def warm_comparison(path: str, operation: str, by=None, agg=None, columns=None,
                     top_k=None) -> dict | None:
     """
-    Measure the CPU baseline for one query and cache it, including a per-operation default
-    entry so a later run with slightly different optional arguments still resolves.
+    Measure and cache the CPU baseline for an exact query signature.
 
     Returns the cached comparison, or None if it could not be measured.
     """
@@ -517,7 +528,6 @@ def warm_comparison(path: str, operation: str, by=None, agg=None, columns=None,
             return None
         _COMPARISON_CACHE[(identity, str(operation), str(by), str(agg), str(columns),
                            str(top_k))] = exact
-        _COMPARISON_CACHE[(identity, str(operation), "default", "", "", "")] = exact
         _cache_save(_COMPARISON_CACHE)
         return exact
     except Exception:
@@ -533,21 +543,21 @@ def _attach_speedup(out: dict, path: str, operation: str, by, agg, columns, top_
     """
     if not _speedup_enabled() or gpu_payload.get("engine") != "cudf":
         return
+    trace = (gpu_payload.get("execution_decision") or {}).get("observed") or {}
+    if (trace.get("parquet_cache") or {}).get("status") in {"built", "hit"}:
+        out["gpu_vs_cpu_warning"] = (
+            "No speedup quoted: this request built or used a Parquet cache, and the "
+            "uncached CPU baseline would not be a like-for-like comparison.")
+        return
     gpu_secs = gpu_payload.get("total_seconds")
     if not isinstance(gpu_secs, (int, float)) or gpu_secs <= 0:
         return
 
     key = (_file_identity(path), str(operation), str(by), str(agg), str(columns),
            str(top_k))
-    # Fallback key: the same operation with default arguments.
-    #
-    # The comparison cost is driven mostly by the operation and the file, while optional
-    # arguments (top_k, a column filter) barely change it. The model does not produce byte
-    # identical arguments every run, so an exact-match-only cache missed often and the demo
-    # paused for a fresh CPU run. A warmed per-operation entry covers those variations; the
-    # precise ratio is still stored on a genuine miss.
-    fallback_key = (_file_identity(path), str(operation), "default", "", "", "")
-    cached = _COMPARISON_CACHE.get(key) or _COMPARISON_CACHE.get(fallback_key)
+    # Different requested columns can materially change parsing cost. Never
+    # borrow a different query's baseline simply to avoid a cache miss.
+    cached = _COMPARISON_CACHE.get(key)
     if cached is None:
         cached = _cpu_twin(path, str(operation), by, agg, columns, top_k)
         if cached is None:
@@ -658,9 +668,24 @@ def _worker_start():
         # analysis goal comes back as raw multi-byte text; on a Chinese Windows host the default
         # pipe encoding is gbk and readline() raised UnicodeDecodeError, which killed every
         # goal-bearing session. `errors="replace"` degrades one character instead of the call.
+        # `origin/main` independently added the same `encoding="utf-8"` for the same reason; this
+        # side is the superset, so it also keeps `errors` and the child's PYTHONIOENCODING.
         encoding="utf-8", errors="replace",
         env={**os.environ, "PYTHONIOENCODING": "utf-8"},
     )
+    proc.responses = queue.Queue()
+    proc.stderr_tail = deque(maxlen=20)
+    def read_responses():
+        try:
+            for line in proc.stdout:
+                proc.responses.put(line)
+        finally:
+            proc.responses.put(None)
+    def drain_errors():
+        for line in proc.stderr:
+            proc.stderr_tail.append(line[-500:])
+    threading.Thread(target=read_responses, daemon=True).start()
+    threading.Thread(target=drain_errors, daemon=True).start()
     # Kill the worker when this process exits, so a crashed agent does not leave a process
     # holding gigabytes of device memory.
     atexit.register(lambda: _worker_stop(proc))
@@ -676,6 +701,11 @@ def _worker_stop(proc) -> None:
             except Exception:
                 pass
             proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=3)
     except Exception:
         pass
 
@@ -703,15 +733,20 @@ def _worker_call(payload: dict, timeout: float = 1800.0):
         try:
             _worker.stdin.write(json.dumps(payload) + "\n")
             _worker.stdin.flush()
-            line = _worker.stdout.readline()
+            line = _worker.responses.get(timeout=timeout)
+        except queue.Empty:
+            _worker_stop(_worker)
+            _worker = None
+            return {"ok": False, "error": "analysis worker timed out; process stopped"}
         except (BrokenPipeError, OSError) as exc:
+            _worker_stop(_worker)
             _worker = None
             return {"ok": False, "error": f"session process communication failed: {exc}. "
                                            f"Use analyze_dataset instead."}
         if not line:
             err = ""
             try:
-                err = (_worker.stderr.read() or "")[-400:]
+                err = "".join(_worker.stderr_tail)[-400:]
             except Exception:
                 pass
             _worker = None
@@ -723,6 +758,47 @@ def _worker_call(payload: dict, timeout: float = 1800.0):
         except json.JSONDecodeError:
             return {"ok": False, "error": f"the session process returned unparseable output: "
                                           f"{line[:200]}"}
+
+
+def _run_analysis(cmd):
+    """Same CLI payload, warm interpreter; transport failures retain CLI fallback."""
+    started = time.perf_counter()
+    if not _speedup_enabled() and os.environ.get("GPU_ANALYSIS_PERSISTENT_WORKER", "1").lower() not in {"0", "false", "no"}:
+        reply = _worker_call({"cmd": "oneshot", "argv": cmd[2:]})
+        if reply.get("ok") and isinstance(reply.get("payload"), dict):
+            proc = subprocess.CompletedProcess(cmd, reply["exit_code"],
+                        json.dumps(reply["payload"], ensure_ascii=False), "")
+            proc.transport_timings = {"mode": "persistent_worker",
+                "wall_seconds": round(time.perf_counter() - started, 6),
+                "note": "Includes worker startup on first call; frame reloaded on each oneshot."}
+            return proc
+    proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=1800)
+    proc.transport_timings = {"mode": "subprocess",
+                             "wall_seconds": round(time.perf_counter() - started, 6)}
+    return proc
+
+
+def analyze_batch(file_path: str, steps: list, force_cpu: bool = False) -> str:
+    """Independent known analyses in one tool turn, with deterministic cleanup."""
+    try:
+        reply = _worker_call({"cmd": "batch", "path": _resolve_data_path(file_path),
+                              "steps": steps, "force_cpu": force_cpu})
+        reply["success"] = bool(reply.pop("ok", False))
+        reply["comparison_measured"] = False
+        reply["performance_note"] = (
+            "No CPU/GPU baseline was measured. Report actual engines and time only; "
+            "do not invent a baseline, speedup factor or GPU-faster claim.")
+        for result in reply.get("results", []):
+            for op in ("auto", "profile", "summary", "groupby", "corr", "outliers"):
+                if op in result:
+                    if op == "corr" and "matrix" in result[op]:
+                        result[op]["matrix"] = _trim_matrix(result[op]["matrix"])
+                    result[op] = _compact(result[op])
+        if reply["success"]:
+            _remember_last_file(_resolve_data_path(file_path))
+        return json.dumps(reply, ensure_ascii=False, default=str)
+    except Exception as exc:
+        return _err(f"batch failed: {type(exc).__name__}: {exc}")
 
 
 def _resolve_data_path(file_path: str) -> str:
@@ -774,6 +850,8 @@ def close_all_sessions() -> dict:
     to clean up are unreliable (observed: a real run left a 1.7 GB session open), and a
     leaked active session degrades later tasks on the box. Returns what it closed.
     """
+    if _worker is None or _worker.poll() is not None:
+        return {"closed": 0}
     try:
         resp = _worker_call({"cmd": "list"})
         opened = resp.get("count") or 0
@@ -818,6 +896,84 @@ def release_all_sessions_and_cache() -> dict:
         return {"closed": 0, "error": f"{type(exc).__name__}: {exc}"}
 
 
+def _resident_single_analysis(path: str, operation: str, by: str | None,
+                              agg: str | None, columns: str | None,
+                              top_k: int | None) -> str | None:
+    """Reuse a bounded full frame for interactive one-step questions.
+
+    Return None only when the worker cannot open a suitable GPU frame, so the
+    established stateless path remains the safety fallback.  A failed analysis
+    returns its real error rather than silently computing the request twice.
+    """
+    state = _worker_call({"cmd": "list"})
+    if not state.get("ok") or state.get("count"):
+        return None  # never borrow or close a model-managed multi-step session
+    started = time.perf_counter()
+    opened = _worker_call({"cmd": "open", "path": path, "measure_cpu": False})
+    if not opened.get("ok") or opened.get("engine") != "cudf":
+        if opened.get("session_id"):
+            _worker_call({"cmd": "close", "sid": opened["session_id"]})
+        return None
+    sid = opened.get("session_id")
+    if not sid:
+        return None
+    try:
+        request = {"cmd": "analyze", "sid": sid, "op": operation,
+                   "by": by, "agg": agg, "columns": columns, "top_k": top_k}
+        step = _worker_call(request)
+        if not step.get("ok"):
+            return _err(step.get("error") or "resident analysis failed",
+                        hint="check the column names; use profile to inspect the file")
+        group = step.get("groupby") or {}
+        groups = group.get("groups", 0)
+        if operation == "groupby" and top_k is None and 0 < groups <= 30 \
+                and len(group.get("top_k", [])) < groups:
+            request["top_k"] = groups
+            complete = _worker_call(request)
+            if complete.get("ok"):
+                step = complete
+                group = step.get("groupby") or {}
+
+        payload = step.get(operation, {})
+        if operation == "corr" and isinstance(payload, dict) and "matrix" in payload:
+            payload = dict(payload)
+            payload["matrix"] = _trim_matrix(payload["matrix"])
+        rows = step.get("rows_scanned")
+        elapsed = round(time.perf_counter() - started, 6)
+        decision = dict(step.get("execution_decision") or {})
+        if not opened.get("cache_hit"):
+            decision["policy"] = "resident_load_and_compute"
+            decision["reason"] = "loaded a full frame for this request, then computed on it"
+        observed = dict(decision.get("observed") or {})
+        observed.update({"phase": "resident_request_total", "elapsed_seconds": elapsed,
+                         "load_seconds": opened.get("load_seconds"),
+                         "warm_cache_hit": bool(opened.get("cache_hit"))})
+        decision["observed"] = observed
+        result = {"op": operation, operation: _compact(payload),
+                  "rows_scanned": rows, "total_seconds": elapsed}
+        if group and len(group.get("top_k", [])) < group.get("groups", 0):
+            result["group_coverage_warning"] = (
+                "This is a truncated top-K result, not all groups. Do not infer a global "
+                "minimum or invent omitted rows.")
+        out = {"success": True, "file": os.path.basename(path),
+               "engine": step.get("engine"), "accelerated": step.get("accelerated"),
+               "rows_scanned": rows, "seconds": elapsed,
+               "execution_decision": decision, "result": result,
+               "resident_reuse": bool(opened.get("cache_hit")),
+               "performance_note": (
+                   "The full file was analyzed from a reusable resident frame. No same-query "
+                   "CPU baseline was run; do not quote a GPU-vs-CPU speedup for this answer.")}
+        if step.get("fallback_reason"):
+            out["fallback_reason"] = step["fallback_reason"]
+        if step.get("engine") != "cudf":
+            out["engine_note"] = (
+                f"the resident operation ran on {step.get('engine')}; do not claim GPU acceleration")
+        _remember_last_file(path)
+        return json.dumps(out, ensure_ascii=False, default=str)
+    finally:
+        _worker_call({"cmd": "close", "sid": sid, "retain": True})
+
+
 def dataset_session(operation: str, file_path: str = None, session_id: str = None,
                     op: str = None, by: str = None, agg: str = None,
                     columns: str = None, top_k: int = None,
@@ -840,7 +996,8 @@ def dataset_session(operation: str, file_path: str = None, session_id: str = Non
 
         if operation == "open":
             req = {"cmd": "open", "path": _resolve_data_path(file_path),
-                   "force_cpu": bool(force_cpu), "force_gpu": bool(force_gpu)}
+                   "force_cpu": bool(force_cpu), "force_gpu": bool(force_gpu),
+                   "measure_cpu": _speedup_enabled()}
             if goal and str(goal).strip():
                 req["goal"] = str(goal).strip()
         elif operation == "analyze":
@@ -905,7 +1062,7 @@ def dataset_session(operation: str, file_path: str = None, session_id: str = Non
 
 def analyze_dataset(file_path: str, operation: str, by: str = None, agg: str = None,
                     columns: str = None, top_k: int = None,
-                    force_cpu: bool = False) -> str:
+                    force_cpu: bool = False, _prefer_resident: bool = False) -> str:
     """
     Run the GPU analytics engine and return a compact JSON result.
 
@@ -927,6 +1084,14 @@ def analyze_dataset(file_path: str, operation: str, by: str = None, agg: str = N
         if os.path.isdir(path):
             return _err(f"this is a directory, not a file: {path}")
 
+        if _prefer_resident and not force_cpu and os.environ.get(
+                "GPU_ANALYSIS_RESIDENT_INTERACTIVE", "1").strip().lower() not in {
+                    "0", "false", "no"}:
+            cached = _resident_single_analysis(path, str(operation or "auto"),
+                                               by, agg, columns, top_k)
+            if cached is not None:
+                return cached
+
         engine = _find_engine()
         cmd = [_python_bin(), engine, "--input", path, "--op", str(operation or "auto")]
         if by:
@@ -940,7 +1105,7 @@ def analyze_dataset(file_path: str, operation: str, by: str = None, agg: str = N
         if force_cpu:
             cmd += ["--force-cpu"]
 
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        proc = _run_analysis(cmd)
 
         # Diagnostics go to stderr; the note about a CPU fallback is worth keeping.
         note = ""
@@ -968,8 +1133,7 @@ def analyze_dataset(file_path: str, operation: str, by: str = None, agg: str = N
         group = payload.get("groupby", {})
         groups = group.get("groups", 0)
         if top_k is None and 0 < groups <= 30 and len(group.get("top_k", [])) < groups:
-            proc = subprocess.run(cmd + ["--top-k", str(groups)], capture_output=True,
-                                  text=True, timeout=1800)
+            proc = _run_analysis(cmd + ["--top-k", str(groups)])
             payload = json.loads(proc.stdout)
             if not payload.get("ok"):
                 return _err(payload.get("error") or "complete group analysis failed")
@@ -1007,6 +1171,8 @@ def analyze_dataset(file_path: str, operation: str, by: str = None, agg: str = N
             "accelerated": payload.get("accelerated"),
             "rows_scanned": rows_scanned,
             "seconds": payload.get("total_seconds"),
+            "phase_timings": payload.get("phase_timings"),
+            "transport_timings": getattr(proc, "transport_timings", None),
             "execution_decision": payload.get("execution_decision"),
             "result": _compact(result),
         }
@@ -1360,7 +1526,28 @@ def _err(message: str, hint: str = None, detail: str = None, exit_code: int = No
 # Tool map
 # --------------------------------------------------------------------------------------
 
+skill_definitions.append({"type": "function", "function": {
+    "name": "analyze_batch",
+    "description": "Run 1-8 independent, already specified analyses on one file in one call. "
+        "Loads required columns once, shares exact statistics, closes its session automatically. "
+        "Prefer this over multiple analyze_dataset calls when the columns and operations are "
+        "already known. Do not use for adaptive drill-down that depends on earlier results; "
+        "use dataset_session for that. No sampling. Check each result's engine/fallback. "
+        "Groupby defaults to top 30; do not infer omitted groups or a global minimum.",
+    "parameters": {"type": "object", "properties": {
+        "file_path": {"type": "string"},
+        "force_cpu": {"type": "boolean"},
+        "steps": {"type": "array", "minItems": 1, "maxItems": 8, "items": {
+            "type": "object", "additionalProperties": False,
+            "properties": {"op": {"type": "string", "enum":
+                ["auto", "profile", "summary", "groupby", "corr", "outliers"]},
+                "by": {"type": "string"}, "agg": {"type": "string"},
+                "columns": {"type": "string"},
+                "top_k": {"type": "integer", "minimum": 1, "maximum": 100}},
+            "required": ["op"]}}}, "required": ["file_path", "steps"]}}})
+
 skill_func_map = {
+    "analyze_batch": analyze_batch,
     "analyze_dataset": analyze_dataset,
     "dataset_session": dataset_session,
     "export_deliverables": export_deliverables,

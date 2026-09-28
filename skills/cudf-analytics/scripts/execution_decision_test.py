@@ -120,7 +120,7 @@ def main():
         )
         real_execute = ga.execute
 
-        def fallback_execute(_engine, load, _op, _args):
+        def fallback_execute(_engine, load, _op, _args, **_kwargs):
             cpu = ga.detect_engine(force_cpu=True)
             fresh = load(cpu)
             assert isinstance(fresh, pd.DataFrame) and fresh is not frame

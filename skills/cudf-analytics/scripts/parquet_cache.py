@@ -17,7 +17,7 @@ def _identity(path: str) -> tuple:
 def read(engine: Any, path: str, cache_dir: Optional[str], *, usecols=None, nrows=None
          ) -> Tuple[Any, dict]:
     """Return frame and trace. The first conversion is charged to this request."""
-    if not cache_dir or os.path.splitext(path)[1].lower() != ".csv" or usecols or nrows:
+    if not cache_dir or os.path.splitext(path)[1].lower() != ".csv" or nrows:
         return engine.read(path, usecols=usecols, nrows=nrows), {"status": "disabled"}
     started = time.perf_counter()
     before = _identity(path)
@@ -28,19 +28,22 @@ def read(engine: Any, path: str, cache_dir: Optional[str], *, usecols=None, nrow
     try:
         os.makedirs(cache_dir, exist_ok=True)
     except OSError as exc:
-        return engine.read(path), {"status": "unavailable",
+        return engine.read(path, usecols=usecols), {"status": "unavailable",
                                    "reason": f"cache directory: {type(exc).__name__}: {exc}"}
     cached = os.path.join(cache_dir, f"gda-{key}.parquet")
     if os.path.isfile(cached):
         try:
-            frame = engine.read(cached)
+            frame = engine.read(cached, usecols=usecols)
             if _identity(path) == before:
                 return frame, {"status": "hit", "elapsed_seconds": round(
-                    time.perf_counter() - started, 6), "cache_bytes": os.path.getsize(cached)}
+                    time.perf_counter() - started, 6), "cache_bytes": os.path.getsize(cached),
+                    "projected_columns": list(usecols) if usecols else None}
         except Exception:
             # A partial/corrupt cache must never make the source unreadable.
             pass
 
+    # Conversion must contain the full source schema.  Project only the returned
+    # frame; subsequent requests can select *different* columns from one cache.
     frame = engine.read(path)
     if _identity(path) != before:
         raise RuntimeError("CSV changed during cache conversion; retry against the current file")
@@ -53,10 +56,13 @@ def read(engine: Any, path: str, cache_dir: Optional[str], *, usecols=None, nrow
     except RuntimeError:
         raise
     except Exception as exc:
-        return frame, {"status": "unavailable", "reason": f"{type(exc).__name__}: {exc}",
+        return (frame[list(usecols)] if usecols else frame), {
+                      "status": "unavailable", "reason": f"{type(exc).__name__}: {exc}",
                        "elapsed_seconds": round(time.perf_counter() - started, 6)}
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
-    return frame, {"status": "built", "elapsed_seconds": round(
-        time.perf_counter() - started, 6), "cache_bytes": os.path.getsize(cached)}
+    return (frame[list(usecols)] if usecols else frame), {
+        "status": "built", "elapsed_seconds": round(time.perf_counter() - started, 6),
+        "cache_bytes": os.path.getsize(cached),
+        "projected_columns": list(usecols) if usecols else None}

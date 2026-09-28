@@ -16,6 +16,57 @@ import parquet_cache
 
 
 class OptimizationTests(unittest.TestCase):
+    def test_json_projection_does_not_pass_csv_only_arguments(self):
+        with tempfile.TemporaryDirectory() as root:
+            source = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
+            for ext, lines in ((".json", False), (".jsonl", True)):
+                path = os.path.join(root, "data" + ext)
+                source.to_json(path, orient="records", lines=lines)
+                frame = ga._read_table(pd, path, usecols=["a"], nrows=1)
+                self.assertEqual(frame.to_dict("records"), [{"a": 1}])
+
+    def test_operation_column_projection_is_conservative(self):
+        parser = ga.build_parser()
+        group = parser.parse_args(["--input", "unused.csv", "--op", "groupby",
+                                   "--by", "region", "--agg", "revenue:sum,mean|units:max"])
+        self.assertEqual(ga.required_read_columns("groupby", group),
+                         ["region", "revenue", "units"])
+        group.no_auto_usecols = True
+        self.assertIsNone(ga.required_read_columns("groupby", group))
+        group.usecols = "region,revenue"
+        self.assertEqual(ga.required_read_columns("groupby", group),
+                         ["region", "revenue"])
+        for operation in ("summary", "corr", "outliers"):
+            args = parser.parse_args(["--input", "unused.csv", "--op", operation,
+                                      "--columns", "revenue,cost"])
+            self.assertEqual(ga.required_read_columns(operation, args),
+                             ["revenue", "cost"])
+        for operation in ("profile", "auto"):
+            args = parser.parse_args(["--input", "unused.csv", "--op", operation,
+                                      "--columns", "revenue"])
+            self.assertIsNone(ga.required_read_columns(operation, args))
+
+    def test_summary_values_and_null_count(self):
+        result = ga._describe_stats(pd.Series([1.0, 2.0, 3.0, None, 20.0]), False)
+        self.assertEqual(result["count"], 4)
+        self.assertEqual(result["mean"], 6.5)
+        self.assertEqual(result["min"], 1.0)
+        self.assertEqual(result["max"], 20.0)
+        self.assertEqual(result["median"], 2.5)
+        frame = pd.DataFrame({"value": [1.0, 2.0, 3.0, None, 20.0]})
+        args = ga.build_parser().parse_args(["--input", "unused.csv", "--op", "summary"])
+        self.assertEqual(ga.op_summary(frame, ga.Engine("pandas", pd), args)
+                         ["stats"]["value"]["nulls"], 1)
+
+    def test_outlier_examples_only_materialize_requested_columns(self):
+        frame = pd.DataFrame({"value": [1.0, 1.0, 1.0, 1.0, 100.0],
+                              "unused": ["a", "b", "c", "d", "e"]})
+        args = ga.build_parser().parse_args(["--input", "unused.csv", "--op", "outliers",
+                                             "--columns", "value"])
+        result = ga.op_outliers(frame, ga.Engine("pandas", pd), args)
+        self.assertEqual(result["results"]["value"]["count"], 1)
+        self.assertEqual(result["results"]["value"]["examples"], [{"value": 100.0}])
+
     def test_auto_reuses_summary_quartiles(self):
         frame = pd.DataFrame({"a": [1, 2, 3, 20], "b": [4, 5, 6, 7]})
         args = ga.build_parser().parse_args(["--input", "unused.csv", "--op", "auto"])
@@ -80,6 +131,44 @@ class OptimizationTests(unittest.TestCase):
                 fh.write("2\n")
             _, third = parquet_cache.read(engine, source, cache)
             self.assertEqual(third["status"], "built")
+
+    def test_parquet_cache_projects_different_columns_after_one_conversion(self):
+        with tempfile.TemporaryDirectory() as root:
+            source = os.path.join(root, "data.csv")
+            cache = os.path.join(root, "cache")
+            with open(source, "w", encoding="utf-8") as fh:
+                fh.write("x,y\n1,2\n")
+
+            class Frame:
+                def __init__(self, columns):
+                    self.columns = columns
+
+                def __getitem__(self, names):
+                    return Frame(names)
+
+                def to_parquet(self, target, index=False):
+                    with open(target, "w", encoding="utf-8") as fh:
+                        fh.write("cached")
+
+            class Engine:
+                name = "pandas"
+                version = "test"
+
+                def __init__(self):
+                    self.reads = []
+
+                def read(self, path, usecols=None, **_kwargs):
+                    self.reads.append((path, usecols))
+                    return Frame(list(usecols or ["x", "y"]))
+
+            engine = Engine()
+            first, built = parquet_cache.read(engine, source, cache, usecols=["x"])
+            second, hit = parquet_cache.read(engine, source, cache, usecols=["y"])
+            self.assertEqual((built["status"], hit["status"]), ("built", "hit"))
+            self.assertEqual((first.columns, second.columns), (["x"], ["y"]))
+            self.assertEqual(engine.reads[0], (source, None))
+            self.assertTrue(engine.reads[1][0].endswith(".parquet"))
+            self.assertEqual(engine.reads[1][1], ["y"])
 
     def test_cross_question_warm_cache_and_stale_source(self):
         with tempfile.TemporaryDirectory() as root:

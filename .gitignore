@@ -39,6 +39,8 @@ agent/deliverables/
 connection.json
 .connection-*
 .env
+external_tools.json
+.external-tools-*
 
 # Private project summaries: risk assessment and self-critique aimed at the author only.
 # Kept on the PC outside the repository, never published.

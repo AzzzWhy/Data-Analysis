@@ -183,6 +183,8 @@ def prewarm(data_path: str) -> None:
 
 
 def main() -> int:
+    # This script explicitly demonstrates measured ratios, unlike normal fast mode.
+    os.environ.setdefault("SKILL_SHOW_SPEEDUP", "1")
     ap = argparse.ArgumentParser(description="scripted live demo")
     ap.add_argument("--only", type=int, help="run a single step by number")
     ap.add_argument("--list", action="store_true", help="list steps and exit")

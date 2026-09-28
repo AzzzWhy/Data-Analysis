@@ -49,6 +49,8 @@ Run standalone for a manual check:
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import sys
@@ -77,6 +79,7 @@ def _import_plans():
 
 GA = _import_engine()
 PLANS_MODULE = _import_plans()
+from statistics_cache import ExactStatisticsCache
 
 # Sessions hold a full dataset in GPU memory, so they are capped. Each open session on a
 # 20M-row file costs roughly 1-2 GB of device memory; refusing the 5th is better than
@@ -84,6 +87,7 @@ PLANS_MODULE = _import_plans()
 MAX_SESSIONS = int(os.environ.get("SESSION_MAX", "4"))
 WARM_CACHE_MB = max(0, int(os.environ.get("SESSION_WARM_CACHE_MB", "4096")))
 WARM_TTL_SECONDS = max(0, int(os.environ.get("SESSION_WARM_TTL_SECONDS", "900")))
+STATISTICS_CACHE_COLUMNS = max(0, int(os.environ.get("SESSION_STATISTICS_CACHE_COLUMNS", "128")))
 
 # Refuse an open when the device would be left too tight to finish the work.
 # The multiplier covers the parsed frame plus transient intermediates and result copies.
@@ -136,6 +140,9 @@ class Session:
     # The strategy this session is following, if a goal was supplied at open time. Held on
     # the session so progress survives across analyze calls without the model tracking it.
     plan: Any = None
+    # Only scalar quartiles, bounded per session; never retain masks or result frames.
+    # Engine is part of the key so a pandas fallback cannot inherit cuDF quartiles.
+    statistics: ExactStatisticsCache = field(default_factory=ExactStatisticsCache)
 
 
 SESSIONS: Dict[str, Session] = {}
@@ -155,6 +162,8 @@ def _frame_bytes(sess: Session) -> int:
 
 
 def _release_unused_gpu_blocks() -> None:
+    if GA._ENGINE is None or not GA._ENGINE.is_gpu:
+        return  # a CPU-only request must not initialize CUDA just for cleanup
     try:
         import cupy  # type: ignore
         cupy.get_default_memory_pool().free_all_blocks()
@@ -359,7 +368,7 @@ def do_open(req: dict) -> dict:
     # Refuse before loading rather than after: once the parse starts, a failure surfaces as
     # an opaque OOM in the middle of the read.
     size_gb = os.path.getsize(path) / (1024 ** 3)
-    free_gb = _free_gpu_gb()
+    free_gb = None if req.get("force_cpu") else _free_gpu_gb()
     need_gb = size_gb * MEM_HEADROOM + MEM_FLOOR_GB
     while free_gb is not None and free_gb < need_gb and WARM_CACHE:
         oldest = min(WARM_CACHE, key=lambda k: WARM_CACHE[k].opened_at)
@@ -408,15 +417,23 @@ def do_open(req: dict) -> dict:
 
     started = time.perf_counter()
     read_fallback = None
+    cache_trace = {"status": "disabled"}
+
+    def read_frame(engine):
+        nonlocal cache_trace
+        frame, cache_trace = GA.parquet_cache.read(
+            engine, path, os.environ.get("GPU_ANALYSIS_PARQUET_CACHE_DIR"), usecols=cols)
+        return frame
+
     try:
-        frame = eng.read(path, usecols=cols)
+        frame = read_frame(eng)
     except Exception as exc:
         read_fallback = ("read failed: " + str(exc)) if eng.is_gpu else None
         if eng.is_gpu:
             # Same fallback rule as the stateless path: if cuDF cannot read it, retry pandas.
             try:
                 eng = GA.detect_engine(force_cpu=True)
-                frame = eng.read(path, usecols=cols)
+                frame = read_frame(eng)
             except Exception as exc2:
                 return _err(f"read failed: {type(exc2).__name__}: {exc2}")
         else:
@@ -433,15 +450,17 @@ def do_open(req: dict) -> dict:
         identity=_file_identity(path), load_seconds=load_seconds,
         reason=route_reason if selected_backend == "pandas" else None, usecols=cols,
     )
-    # A CPU-resident frame is the honest baseline for this same file, and it is measured
-    # without touching the GPU. Failures here must not fail the open.
-    try:
-        cpu_eng = GA.detect_engine(force_cpu=True)
-        t0 = time.perf_counter()
-        cpu_eng.read(path, usecols=cols)
-        sess.cpu_load_seconds = time.perf_counter() - t0
-    except Exception:
-        sess.cpu_load_seconds = None
+    # Explicit multi-step demonstrations still measure the CPU read baseline.
+    # Interactive one-shot reuse does not: an unseen extra full CPU pass would
+    # dominate the first answer while contributing nothing to its result.
+    if req.get("measure_cpu", True):
+        try:
+            cpu_eng = GA.detect_engine(force_cpu=True)
+            t0 = time.perf_counter()
+            cpu_eng.read(path, usecols=cols)
+            sess.cpu_load_seconds = time.perf_counter() - t0
+        except Exception:
+            sess.cpu_load_seconds = None
 
     SESSIONS[sid] = sess
 
@@ -484,6 +503,7 @@ def do_open(req: dict) -> dict:
             observed={"phase": "session_open", "elapsed_seconds": round(
                 time.perf_counter() - request_started, 6),
                 "load_seconds": round(load_seconds, 6), "resident_mb": resident_mb,
+                "parquet_cache": cache_trace,
                 "rows_scanned": sess.rows},
             fallback_reason=read_fallback or (
                 eng.reason if selected_backend == "cudf" and not eng.is_gpu else None
@@ -597,12 +617,17 @@ def do_analyze(req: dict) -> dict:
 
     try:
         payload, used, _elapsed, fallback, rows = GA.execute(
-            sess.engine, load_for, op, args
+            sess.engine, load_for, op, args,
+            statistics_for=(sess.statistics.for_engine if STATISTICS_CACHE_COLUMNS else
+                            lambda _engine: {}),
         )
     except Exception as exc:
         return _err(f"{op} failed: {type(exc).__name__}: {exc}")
 
     step_seconds = time.perf_counter() - started
+    # Commit statistics only after a successful operation. The file identity guard
+    # above protects both the frame and these exact statistics on every request.
+    sess.statistics.record(op, payload, used, STATISTICS_CACHE_COLUMNS)
     sess.steps += 1
     sess.analysis_seconds += step_seconds
 
@@ -629,6 +654,9 @@ def do_analyze(req: dict) -> dict:
             observed={"phase": "session_step", "elapsed_seconds": round(step_seconds, 6),
                       "compute_seconds": payload.get("compute_seconds"),
                       "rows_scanned": rows,
+                      "statistics_reused_columns": payload.get("statistics_reused_columns", []),
+                      "valid_count_reused_columns": payload.get("valid_count_reused_columns", []),
+                      "statistics_cache_entries": len(sess.statistics),
                       "reread_for_fallback": reread_for_fallback},
             fallback_reason=fallback,
         ),
@@ -808,7 +836,95 @@ def do_close(req: dict) -> dict:
     return out
 
 
+def do_oneshot(req: dict) -> dict:
+    """Keep imports/CUDA context warm, but release this request's frame."""
+    argv = req.get("argv")
+    if not isinstance(argv, list) or not all(isinstance(v, str) for v in argv):
+        return _err("argv must be a list of strings")
+    output = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(output):
+            code = GA.main(argv)
+        payload = json.loads(output.getvalue())
+        return {"ok": True, "payload": payload, "exit_code": code}
+    except SystemExit as exc:
+        return _err(f"invalid analysis arguments (exit {exc.code})")
+    finally:
+        _release_unused_gpu_blocks()
+
+
+def do_batch(req: dict) -> dict:
+    """Execute an independent bounded plan on one projected resident frame."""
+    steps = req.get("steps")
+    allowed = {"op", "by", "agg", "columns", "top_k"}
+    if not isinstance(steps, list) or not 1 <= len(steps) <= 8:
+        return _err("steps must contain 1 to 8 analyses")
+    for step in steps:
+        if (not isinstance(step, dict) or set(step) - allowed
+                or step.get("op") not in GA.VALID_OPS):
+            return _err("invalid batch step; use op/by/agg/columns/top_k only")
+        if step.get("op") == "groupby" and not step.get("by"):
+            return _err("groupby step requires by")
+        if any(step.get(key) is not None and not isinstance(step[key], str)
+               for key in ("by", "agg", "columns")):
+            return _err("batch by/agg/columns must be strings")
+        if step.get("top_k") is not None and (isinstance(step["top_k"], bool)
+                or not isinstance(step["top_k"], int) or not 1 <= step["top_k"] <= 100):
+            return _err("batch top_k must be an integer from 1 to 100")
+    path = req.get("path")
+    if not isinstance(path, str) or not os.path.isfile(path):
+        return _err("batch path must be an existing file")
+    path = os.path.abspath(path)
+    # Never borrow/close a model-managed session, including a same-path handle.
+    if any(s.path == path for s in SESSIONS.values()):
+        return _err("file already has an active session; analyze on that session instead")
+    columns = set()
+    for step in steps:
+        required = GA.required_read_columns(step["op"], _build_args(step))
+        if required is None:
+            columns = None
+            break
+        columns.update(required)
+    force_cpu = bool(req.get("force_cpu"))
+    force_gpu = bool(req.get("force_gpu"))
+    if force_cpu and force_gpu:
+        return _err("force_cpu and force_gpu are mutually exclusive")
+    if not force_cpu and not force_gpu:
+        use_gpu, _reason = GA.pick_engine_for(path, "session")
+        force_cpu = not use_gpu
+    started = time.perf_counter()
+    opened = do_open({"path": path, "usecols": ",".join(sorted(columns)) if columns else None,
+                      "force_cpu": force_cpu, "force_gpu": force_gpu,
+                      "measure_cpu": False})
+    if not opened.get("ok"):
+        return opened
+    sid = opened["session_id"]
+    results = []
+    try:
+        for index, step in enumerate(steps):
+            defaults = {"top_k": 30} if step["op"] == "groupby" else {}
+            reply = do_analyze({**defaults, **step, "sid": sid})
+            group = reply.get("groupby") or {}
+            if len(group.get("top_k", [])) < group.get("groups", 0):
+                reply["group_coverage_warning"] = (
+                    "Truncated top-K, not all groups; do not infer a global minimum.")
+            results.append(reply)
+            if not reply.get("ok"):
+                return _err(reply.get("error", "batch step failed"), failed_step=index,
+                            results=results, completed_steps=index)
+        return {"ok": True, "results": results, "rows": opened["rows"],
+                "engine": opened["engine"], "load_seconds": opened["load_seconds"],
+                "total_seconds": round(time.perf_counter() - started, 6),
+                "projected_columns": sorted(columns) if columns else None,
+                "note": "One load, exact full-data operations; no CPU baseline or sampling. "
+                        "Any per-step fallback is reported in that step."}
+    finally:
+        do_close({"sid": sid})
+
+
 HANDLERS = {
+    "oneshot": do_oneshot,
+    "batch": do_batch,
     "open": do_open,
     "analyze": do_analyze,
     "list": do_list,

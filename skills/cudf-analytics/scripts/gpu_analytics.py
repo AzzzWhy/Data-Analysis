@@ -125,10 +125,14 @@ def _read_table(mod: Any, path: str, usecols: Optional[Sequence[str]] = None,
     if ext in (".jsonl", ".ndjson"):
         # cuDF has no read_json; JSONL/JSON loading always goes through pandas.
         import pandas as _pd
-        return _pd.read_json(path, lines=True, **kwargs)
+        frame = _pd.read_json(path, lines=True, **({"nrows": nrows} if nrows else {}))
+        return frame[list(usecols)] if usecols else frame
     if ext == ".json":
         import pandas as _pd
-        return _pd.read_json(path, **kwargs)
+        frame = _pd.read_json(path)
+        if nrows:
+            frame = frame.head(nrows)
+        return frame[list(usecols)] if usecols else frame
     if ext in (".xlsx", ".xls"):
         import pandas as _pd
         return _pd.read_excel(path, **kwargs)
@@ -139,6 +143,30 @@ def _read_table(mod: Any, path: str, usecols: Optional[Sequence[str]] = None,
         return mod.read_csv(path, **kwargs)
     except UnicodeDecodeError:
         return mod.read_csv(path, encoding="latin-1", **kwargs)
+
+
+def required_read_columns(op: str, args: argparse.Namespace) -> Optional[List[str]]:
+    """Project only columns that can be proven sufficient for this operation.
+
+    A profile or an unspecified numeric-column request needs the full schema.  In
+    particular, ``--columns`` selects numeric *analysis* columns, whereas a
+    groupby also needs its key.  Keep the caller's explicit --usecols authoritative.
+    """
+    if getattr(args, "usecols", None):
+        names = str(args.usecols).split(",")
+    elif getattr(args, "no_auto_usecols", False):
+        return None
+    elif op == "groupby" and args.by and args.agg and "," not in str(args.by):
+        names = [args.by]
+        names.extend(chunk.partition(":")[0] for chunk in str(args.agg).split("|")
+                     if ":" in chunk)
+        if len(names) == 1:
+            return None
+    elif op in ("summary", "corr", "outliers") and args.select:
+        names = str(args.select).split(",")
+    else:
+        return None
+    return list(dict.fromkeys(name.strip() for name in names if name.strip())) or None
 
 
 def _probe_gpu_name() -> Optional[str]:
@@ -607,7 +635,9 @@ def op_summary(df: Any, eng: Engine, args: argparse.Namespace) -> Dict[str, Any]
     out: Dict[str, Any] = {}
     for name in wanted:
         out[name] = _describe_stats(_col(df, name), eng.is_gpu)
-        out[name]["nulls"] = int(df[name].isnull().sum())
+        # _describe_stats already counted non-null values; avoid another full
+        # column scan just to derive the complement.
+        out[name]["nulls"] = int(len(df) - out[name]["count"])
     return {"columns": wanted, "stats": out}
 
 
@@ -829,6 +859,7 @@ def op_outliers(df: Any, eng: Engine, args: argparse.Namespace,
         return {"columns": [], "results": {}, "note": "no numeric columns to scan"}
 
     results: Dict[str, Any] = {}
+    count_reused = []
     for name in wanted:
         s = df[name]
         prior = (summary_stats or {}).get(name)
@@ -862,22 +893,31 @@ def op_outliers(df: Any, eng: Engine, args: argparse.Namespace,
             below = (val < low) & (delta_low > tol)
             above = (val > high) & (delta_high > tol)
             mask = below | above
-            sub = df[mask]
-            count = int(len(sub))
-            top = sub[list(wanted)].head(int(args.top_k)) if len(wanted) > 1 \
-                else sub[[name]].head(int(args.top_k))
+            count = int(mask.sum())
+            # Filtering the full (potentially very wide) frame would materialize
+            # columns that are discarded immediately. Filter only the columns
+            # returned as examples; the mask still scans every source row.
+            example_cols = list(wanted) if len(wanted) > 1 else [name]
+            top = df[example_cols][mask].head(int(args.top_k))
             records = _frame_records(top, int(args.top_k))
         except Exception as exc:
             if eng.is_gpu:
                 raise OpNotSupported(f"cuDF outlier filtering failed: {exc}") from exc
             raise
-        try:
-            n_valid = int(val.notnull().sum())
-        except Exception:
-            n_valid = int(len(s)) - count
+        prior_count = (prior or {}).get("valid_count", (prior or {}).get("count"))
+        if isinstance(prior_count, int) and not isinstance(prior_count, bool) and 0 <= prior_count <= len(s):
+            n_valid = prior_count
+            count_reused.append(name)
+        else:
+            try:
+                n_valid = int(val.notnull().sum())
+            except Exception:
+                n_valid = int(len(s)) - count
         # Report how many values landed on a fence, so a boundary-heavy column is visible.
         try:
-            n_ties = int((val.sub(low).abs().le(tol) | val.sub(high).abs().le(tol)).sum())
+            # Distances were already computed for the anomaly mask above. Reuse
+            # them instead of allocating two more full-column differences.
+            n_ties = int((delta_low.abs().le(tol) | delta_high.abs().le(tol)).sum())
         except Exception:
             n_ties = 0
         results[name] = {
@@ -888,6 +928,7 @@ def op_outliers(df: Any, eng: Engine, args: argparse.Namespace,
             "lower_bound": low,
             "upper_bound": high,
             "count": count,
+            "valid_count": n_valid,
             "pct": round(100.0 * count / max(n_valid, 1), 4),
             "examples": records,
         }
@@ -899,7 +940,8 @@ def op_outliers(df: Any, eng: Engine, args: argparse.Namespace,
                 f"{tol:.3g} and are not counted as outliers, so the count does not depend "
                 f"on engine rounding."
             )
-    return {"columns": wanted, "results": results}
+    return {"columns": wanted, "results": results,
+            "valid_count_reused_columns": count_reused}
 
 
 def _resolve_columns(args: argparse.Namespace, numeric: Sequence[str],
@@ -933,16 +975,24 @@ OPS: Ops = {
 
 
 def execute(eng: Engine, load: Callable[[Engine], Any], op: str,
-            args: argparse.Namespace) -> Tuple[Dict[str, Any], Engine, float, Optional[str], int]:
+            args: argparse.Namespace,
+            statistics_for: Optional[Callable[[Engine], Dict[str, Any]]] = None,
+            ) -> Tuple[Dict[str, Any], Engine, float, Optional[str], int]:
     """
     Load the table and run `op`, retrying on pandas if cuDF cannot do it.
 
     Returns (payload, engine_used, elapsed_s, fallback_reason, rows).
     """
     started = time.perf_counter()
+    attempts = []
 
     def attempt(engine: Engine) -> Dict[str, Any]:
+        load_started = time.perf_counter()
         df = load(engine)
+        sync_device(engine)
+        phases = {"engine": engine.name, "load_seconds": round(
+            time.perf_counter() - load_started, 6)}
+        attempts.append(phases)
         t_elapsed = _make_timer(engine)
         if op == "auto":
             summary = op_summary(df, engine, args)
@@ -952,11 +1002,21 @@ def execute(eng: Engine, load: Callable[[Engine], Any], op: str,
                 "outliers": op_outliers(df, engine, args, max_columns=args.auto_columns,
                                          summary_stats=summary["stats"]),
             }
+        elif op == "outliers" and statistics_for is not None:
+            prior = statistics_for(engine)
+            payload = op_outliers(df, engine, args, summary_stats=prior)
+            payload["statistics_reused_columns"] = [
+                name for name in payload.get("columns", []) if name in prior
+            ]
         else:
             payload = OPS[op](df, engine, args)
         dt = t_elapsed()
         payload["rows_scanned"] = int(len(df))
         payload["compute_seconds"] = round(dt, 6)
+        phases["compute_seconds"] = round(dt, 6)
+        payload["phase_timings"] = {"attempts": attempts,
+            "load_seconds": round(sum(a["load_seconds"] for a in attempts), 6),
+            "compute_seconds": round(dt, 6)}
         return payload
 
     try:
@@ -1003,6 +1063,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=None,
                    help="read at most N rows (use only when the user asked for a sample)")
     p.add_argument("--usecols", default=None, help="comma-separated columns to read from the file")
+    p.add_argument("--no-auto-usecols", action="store_true",
+                   help="read the full schema even when this operation names all required columns")
     p.add_argument("--force-cpu", action="store_true", help="ignore the GPU (for A/B comparison)")
     p.add_argument("--force-gpu", action="store_true",
                    help="use the GPU even below the measured crossover (for A/B comparison)")
@@ -1031,7 +1093,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if ext and ext not in SUPPORTED_EXTS:
         _log(f"unrecognized extension {ext!r}; attempting to read as CSV")
 
-    usecols = [c.strip() for c in args.usecols.split(",") if c.strip()] if args.usecols else None
+    usecols = required_read_columns(args.op, args)
     nrows = int(args.limit) if args.limit else None
 
     cache_trace: Dict[str, Any] = {"status": "disabled"}
@@ -1053,7 +1115,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if not force_cpu and not force_gpu:
             use_gpu, route_reason = pick_engine_for(
                 path, args.op, verbose=args.verbose, details=route_details,
-                calibration_file="" if args.parquet_cache_dir else args.calibration_file,
+                calibration_file="" if args.parquet_cache_dir or usecols else args.calibration_file,
             )
             force_cpu = not use_gpu
             if args.verbose and route_reason:
@@ -1061,7 +1123,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         elif force_cpu:
             route_reason = "CPU forced by the caller"
         selected_backend = "pandas" if force_cpu else "cudf"
+        init_started = time.perf_counter()
         eng = detect_engine(force_cpu=force_cpu, verbose=args.verbose)
+        init_seconds = time.perf_counter() - init_started
         payload, used, elapsed, fallback, rows = execute(eng, load, args.op, args)
         # A deliberate CPU choice is not a fallback. Keeping them separate matters: a fallback
         # means the GPU failed, and reporting a routing decision as a failure would both
@@ -1111,6 +1175,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         actual_backend=used.name,
         reason=decision_reason,
         signals={"operation": args.op, "file_size_bytes": os.path.getsize(path),
+                 "read_columns": usecols,
                  **route_details},
         observed={"phase": "request_total", "elapsed_seconds": total_seconds,
                   "compute_seconds": payload.get("compute_seconds"), "rows_scanned": rows,
@@ -1134,6 +1199,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "rows_scanned": rows,
         "op_seconds": round(elapsed, 6),
         "total_seconds": total_seconds,
+        "phase_timings": {**payload.get("phase_timings", {}),
+                          "engine_init_seconds": round(init_seconds, 6),
+                          "request_seconds": total_seconds},
     }
     result.update(payload)
 
@@ -1141,6 +1209,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # read result[op] without caring which op ran ("auto" already nests that way).
     if args.op != "auto":
         result = {**{k: v for k, v in result.items() if k not in payload}, args.op: payload}
+    result["phase_timings"] = {**payload.get("phase_timings", {}),
+                              "engine_init_seconds": round(init_seconds, 6),
+                              "request_seconds": total_seconds}
 
     print(json.dumps(result, indent=2 if args.pretty else None, default=str, ensure_ascii=False), flush=True)
     return 0
