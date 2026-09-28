@@ -1053,8 +1053,8 @@ def handle(req: dict) -> dict:
         needs_slot = (any(sess.engine.is_gpu for sess in SESSIONS.values()) if sid == "all"
                       else bool(SESSIONS.get(sid) and SESSIONS[sid].engine.is_gpu))
     else:
-        needs_slot = cmd == "oneshot" or (cmd in {"open", "batch"} and
-                                            not bool(req.get("force_cpu")))
+        # oneshot delegates to GA.main, which coordinates CLI and fallback too.
+        needs_slot = cmd in {"open", "batch"} and not bool(req.get("force_cpu"))
     if not needs_slot:
         return fn(req)
     try:

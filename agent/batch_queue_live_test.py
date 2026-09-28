@@ -11,6 +11,9 @@ from uuid import uuid4
 import batch_queue
 import skills
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "benchmark"))
+from fast_execution_benchmark import equal, values
+
 
 STEPS = [
     {"op": "summary", "columns": "revenue"},
@@ -58,6 +61,8 @@ def main(argv: list[str] | None = None) -> int:
     if not cpu_overlap or not gpu_serial:
         raise AssertionError("bounded CPU parallelism or GPU exclusivity failed")
     paths = []
+    expected_values = None
+    expected_rows = None
     for index, job in enumerate(summary["jobs"]):
         result = json.loads((Path(job["report_dir"]) / "result.json").read_text())["result"]
         expected = "cpu" if index < 2 else "cpu_gpu"
@@ -65,6 +70,12 @@ def main(argv: list[str] | None = None) -> int:
         if result["loading"]["actual"] != expected or any(
                 step["engine"] != engine for step in result["results"]):
             raise AssertionError(f"wrong execution path for {job['name']}")
+        outputs = [values(step) for step in result["results"]]
+        if expected_values is None:
+            expected_values = outputs
+            expected_rows = result["rows"]
+        if not equal(outputs, expected_values) or result["rows"] != expected_rows:
+            raise AssertionError(f"CPU/GPU result mismatch for {job['name']}")
         paths.append(result["loading"]["actual"])
     ping = skills._worker_call({"cmd": "ping"})
     if not ping.get("ok"):
@@ -106,6 +117,8 @@ def main(argv: list[str] | None = None) -> int:
                    for step in STEPS]
         if any(not item.get("ok") or item.get("engine") != "cudf" for item in replies):
             raise AssertionError(f"warm session step failed: {replies}")
+        if not equal([values(step) for step in replies], expected_values):
+            raise AssertionError("warm session and batch results disagree")
     finally:
         closed = skills._worker_call({"cmd": "close", "sid": sid, "retain": False})
         if not closed.get("ok"):
@@ -116,16 +129,22 @@ def main(argv: list[str] | None = None) -> int:
     skills._worker_stop(skills._worker)
     if (source.stat().st_size, source.stat().st_mtime_ns) != before:
         raise AssertionError("input changed")
-    print(json.dumps({"ok": True, "queue_dir": str(run_dir),
+    evidence = {"ok": True, "rows": expected_rows,
                       "queue_seconds": summary["seconds"],
                       "cpu_processes_overlap": cpu_overlap, "gpu_jobs_serial": gpu_serial,
                       "job_pids": [job["pid"] for job in summary["jobs"]],
                       "load_paths": paths, "warm_session_backend": "cpu_gpu",
                       "warm_gpu_slot_wait_seconds": slot_wait,
                       "warm_session_steps": len(replies), "active_sessions": 0,
-                      "source_unchanged": True}), flush=True)
+                      "results_agree": True, "source_unchanged": True}
+    (fixture / "live-evidence.json").write_text(json.dumps(evidence) + "\n", encoding="utf-8")
+    print(json.dumps({**evidence, "queue_dir": str(run_dir),
+                      "evidence_file": str(fixture / "live-evidence.json")}), flush=True)
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    finally:
+        skills._worker_stop(skills._worker)

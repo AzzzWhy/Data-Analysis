@@ -98,6 +98,23 @@ class BatchQueueTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "max_cpu_workers"):
             batch_queue.run(self.manifest(["same"]), self.root / "out", 5)
 
+    def test_timeout_stops_job_process(self):
+        slow = self.root / "slow.py"
+        slow.write_text("import time\ntime.sleep(30)\n", encoding="utf-8")
+        self.plan("slow")
+        job = batch_queue.load_manifest(self.manifest(["slow"]))[0]
+        with patch.object(batch_queue.batch_job, "__file__", str(slow)):
+            try:
+                result = batch_queue._run_job(job, self.root / "out", timeout_seconds=0.1)
+            except RuntimeError as exc:
+                # A sandbox may deny the OS process-tree terminator. It must
+                # report that limitation instead of falsely claiming cleanup.
+                self.assertIn("could not verify termination", str(exc))
+                return
+        self.assertFalse(result["ok"])
+        self.assertIn("process group was stopped", result["error"])
+        self.assertLess(result["seconds"], 5)
+
 
 if __name__ == "__main__":
     unittest.main()

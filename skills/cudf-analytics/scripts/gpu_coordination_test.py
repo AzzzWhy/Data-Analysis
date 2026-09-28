@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import gpu_coordination as coordination
 import gpu_session as session
+import gpu_analytics as analytics
 
 
 class GpuCoordinationTests(unittest.TestCase):
@@ -53,6 +54,28 @@ class GpuCoordinationTests(unittest.TestCase):
                 raise RuntimeError("boom")
         with coordination.gpu_slot(timeout_seconds=0.1):
             pass
+
+    def test_nested_worker_cli_acquisition_does_not_deadlock(self):
+        with coordination.gpu_slot():
+            with coordination.gpu_slot(timeout_seconds=0.1) as waited:
+                self.assertEqual(waited, 0)
+
+    def test_cli_and_cpu_forced_paths(self):
+        calls = []
+
+        @contextmanager
+        def fake_slot():
+            calls.append("slot")
+            yield 0
+
+        with patch.object(coordination, "gpu_slot", fake_slot), patch.object(
+                analytics, "_uncoordinated_main", return_value=0):
+            self.assertEqual(analytics.main(["--force-cpu"]), 0)
+            self.assertEqual(calls, [])
+            self.assertEqual(analytics.main(["--engine", "cpu"]), 0)
+            self.assertEqual(calls, [])
+            self.assertEqual(analytics.main(["--engine", "gpu"]), 0)
+            self.assertEqual(calls, ["slot"])
 
     def test_worker_skips_cpu_and_locks_gpu_batch(self):
         calls = []

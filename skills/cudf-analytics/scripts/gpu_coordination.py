@@ -7,11 +7,15 @@ its questions. Existing memory-admission checks still govern each frame.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from contextvars import ContextVar
 import getpass
 import os
 from pathlib import Path
 import tempfile
 import time
+
+
+_HELD_PATHS = ContextVar("gpu_compute_slots", default=frozenset())
 
 
 def _lock_path() -> Path:
@@ -33,6 +37,11 @@ def gpu_slot(timeout_seconds: float | None = None):
     if not 0 < timeout_seconds <= 1800:
         raise ValueError("GPU slot timeout must be in (0, 1800] seconds")
     path = _lock_path()
+    key = str(path.resolve())
+    held = _HELD_PATHS.get()
+    if key in held:
+        yield 0.0
+        return
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if os.name != "nt" and not os.environ.get("GPU_ANALYSIS_GPU_SLOT_FILE"):
         parent_stat = path.parent.stat()
@@ -62,7 +71,11 @@ def gpu_slot(timeout_seconds: float | None = None):
                     if time.monotonic() - started >= timeout_seconds:
                         raise TimeoutError(f"GPU compute slot busy for {timeout_seconds:g} seconds")
                     time.sleep(0.05)
-            yield time.monotonic() - started
+            token = _HELD_PATHS.set(held | {key})
+            try:
+                yield time.monotonic() - started
+            finally:
+                _HELD_PATHS.reset(token)
         finally:
             if acquired:
                 if os.name == "nt":

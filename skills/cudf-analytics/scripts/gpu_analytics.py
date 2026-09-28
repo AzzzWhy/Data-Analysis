@@ -1169,7 +1169,7 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv: Optional[Sequence[str]] = None, *, execution_context: str = "cold") -> int:
+def _uncoordinated_main(argv: Optional[Sequence[str]] = None, *, execution_context: str = "cold") -> int:
     args = build_parser().parse_args(argv)
     t_start = time.perf_counter()
 
@@ -1361,6 +1361,26 @@ def main(argv: Optional[Sequence[str]] = None, *, execution_context: str = "cold
 
     print(json.dumps(result, indent=2 if args.pretty else None, default=str, ensure_ascii=False), flush=True)
     return 0
+
+
+def main(argv: Optional[Sequence[str]] = None, *, execution_context: str = "cold") -> int:
+    # Stateless CLI calls (including transport fallback from the Agent) must
+    # obey the same slot as resident/batch workers. CPU-forced CLI stays parallel.
+    from gpu_coordination import gpu_slot
+
+    tokens = list(sys.argv[1:] if argv is None else argv)
+    cpu_forced = "--force-cpu" in tokens or "--engine=cpu" in tokens or any(
+        token == "--engine" and index + 1 < len(tokens) and tokens[index + 1] == "cpu"
+        for index, token in enumerate(tokens))
+    if cpu_forced:
+        return _uncoordinated_main(tokens, execution_context=execution_context)
+    try:
+        with gpu_slot():
+            return _uncoordinated_main(tokens, execution_context=execution_context)
+    except (TimeoutError, PermissionError, ValueError) as exc:
+        print(json.dumps({"ok": False, "error": str(exc),
+                          "error_code": "GPU_COORDINATION_REFUSED"}), flush=True)
+        return 1
 
 
 if __name__ == "__main__":

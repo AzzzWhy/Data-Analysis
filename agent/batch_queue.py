@@ -65,15 +65,26 @@ def load_manifest(path: Path) -> list[Job]:
 
 
 def _stop_tree(proc: subprocess.Popen) -> None:
+    failed = None
     if os.name == "nt":
-        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                       capture_output=True, check=False)
+        killed = subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                                capture_output=True, check=False, timeout=5)
+        if killed.returncode and proc.poll() is None:
+            proc.kill()
+            failed = "could not verify termination of the Windows job process tree"
     else:
         try:
             os.killpg(proc.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-    proc.communicate()
+    try:
+        proc.communicate(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=3)
+        raise RuntimeError("job stopped but its output pipes remain held by a descendant")
+    if failed:
+        raise RuntimeError(failed)
 
 
 def _run_job(job: Job, report_root: Path, timeout_seconds: int) -> dict:
