@@ -112,6 +112,11 @@ def gate_file() -> Path:
     return root / "gpu-data-analysis" / "gate.json"
 
 
+def diag_file() -> Path:
+    """diag.json: the page's own layout report, beside the config it does not touch."""
+    return gate_file().parent / "diag.json"
+
+
 def load_gate_credential() -> tuple[bytes, int, bytes] | None:
     """(salt, iterations, digest) for the browser-set password, or None when unset.
 
@@ -1106,6 +1111,23 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(code, {"error": problem})
             return self._json(202, {"job_id": job.id,
                                     "note": "direct tool call, no model involved"})
+        if url.path == "/api/diag":
+            # The page measures its own layout once per load and reports here; the report is
+            # geometry only, lands in diag.json beside connection.json, and exists so that
+            # "the composer is not pinned" can be answered with numbers from the browser that
+            # actually rendered it, instead of with theories about browsers nobody measured.
+            body = self._body()
+            if body is None:
+                return
+            if not isinstance(body, dict) or len(json.dumps(body)) > 4000:
+                return self._json(400, {"error": "the layout report must be a small JSON object"})
+            body["reported_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            try:
+                diag_file().write_text(json.dumps(body, ensure_ascii=False, indent=2),
+                                       encoding="utf-8")
+            except OSError as exc:
+                return self._json(500, {"error": f"could not write the layout report: {exc}"})
+            return self._json(200, {"ok": True})
         return self._json(404, {"error": f"no such route: {url.path}"})
 
     def do_PATCH(self):                    # noqa: N802

@@ -156,6 +156,14 @@ STRINGS = {
     '浏览器扩展改写了页面根样式（transform/filter），底部输入栏将不固定：请用无痕窗口（Ctrl+Shift+N）打开本页验证。':
         'A browser extension rewrote this page\'s root styling (transform/filter), so the '
         'bottom composer will not stay pinned. Verify in an incognito window (Ctrl+Shift+N).',
+    '布局自检：输入栏固定在视口底部（滚动位移 {m}px）。':
+        'Layout self-test: the composer is pinned to the viewport bottom (scroll displacement {m}px).',
+    '布局自检：输入栏未固定！滚动位移 {m}px，报告已写入服务器。':
+        'Layout self-test: the composer is NOT pinned! Scroll displacement {m}px; the report '
+        'has been written to the server.',
+    '底部输入栏未固定：当前浏览器的布局自检已检出，详情在执行记录与 diag.json。':
+        'The bottom composer is not pinned: this browser\'s layout self-test caught it; details '
+        'are in the activity log and in diag.json.',
     '擦除本机的会话、缓存、连接设置与访问密码，恢复初始状态。数据文件与已生成的报告不会被删除。':
         'Erases this machine\'s sessions, cache, connection settings and access password, '
         'returning the workbench to its initial state. Dataset files and generated '

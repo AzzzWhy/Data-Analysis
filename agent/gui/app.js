@@ -1021,4 +1021,74 @@ els.release.addEventListener("click", async () => {
 });
 
 loadFiles();
-fetch("/api/state").then((r) => r.json()).then(renderState).catch(() => {});
+fetch("/api/state").then((r) => r.json()).then(renderState)
+  .then(() => setTimeout(layoutSelfTest, 900))
+  .catch(() => {});
+
+/* The page measures its own composer once per load and posts the numbers to /api/diag:
+   geometry only -- position, scroll displacement, viewport, pixel ratio, ancestors -- stored
+   beside the config as diag.json. "The input bar is not pinned" then gets answered with a
+   measurement from the very browser that rendered the page, not with theories about browsers
+   nobody measured. The verdict is also spoken out loud, right here in the log. */
+let layoutSelfTestRan = false;
+function layoutSelfTest() {
+  if (layoutSelfTestRan) return;
+  layoutSelfTestRan = true;
+  const dock = document.querySelector(".composer-dock");
+  const build = document.getElementById("build");
+  if (!dock) {
+    reportLayout({ build: build ? build.textContent : "", dock: "absent", pinned: false });
+    return;
+  }
+  const cs = getComputedStyle(dock);
+  const chain = [];
+  for (let node = dock.parentElement; node; node = node.parentElement) {
+    const s = getComputedStyle(node);
+    const poison = (s.transform !== "none" ? "transform" : "") +
+                   (s.filter !== "none" ? " filter" : "") +
+                   (s.perspective !== "none" ? " perspective" : "") +
+                   (String(s.willChange || "").includes("transform") ? " will-change" : "") +
+                   (((s.backdropFilter || "none") !== "none" && s.backdropFilter) ? " backdrop" : "");
+    chain.push(node.tagName.toLowerCase() + (poison ? ":" + poison.trim().replace(/ /g, "+") : ""));
+  }
+  const from = window.scrollY;
+  const before = dock.getBoundingClientRect().top;
+  window.scrollTo(0, from + 250);
+  const reached = window.scrollY;
+  const after = dock.getBoundingClientRect().top;
+  window.scrollTo(0, from);
+  const moved = Math.abs(after - before);
+  const payload = {
+    build: build ? build.textContent : "",
+    position: cs.position,
+    pinned: moved < 1,
+    moved_px: Math.round(moved),
+    scroll_from_px: Math.round(from),
+    scroll_to_px: Math.round(reached),
+    page_height_px: document.documentElement.scrollHeight,
+    viewport: `${innerWidth}x${innerHeight}`,
+    screen: `${screen.width}x${screen.height}`,
+    outer: `${outerWidth}x${outerHeight}`,
+    device_pixel_ratio: window.devicePixelRatio,
+    ancestors: chain.join(" "),
+    agent: navigator.userAgent.slice(0, 160),
+  };
+  reportLayout(payload);
+  line(els.log, payload.pinned ? "dim" : "bad",
+       (payload.pinned ? t("布局自检：输入栏固定在视口底部（滚动位移 {m}px）。")
+                      : t("布局自检：输入栏未固定！滚动位移 {m}px，报告已写入服务器。"))
+         .replace("{m}", payload.moved_px));
+  if (!payload.pinned) {
+    els.banner.hidden = false;
+    els.banner.dataset.kind = "bad";
+    els.banner.textContent = t("底部输入栏未固定：当前浏览器的布局自检已检出，详情在执行记录与 diag.json。");
+  }
+}
+
+function reportLayout(payload) {
+  fetch("/api/diag", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).catch(() => { /* a report that cannot be delivered still told the operator on screen */ });
+}
