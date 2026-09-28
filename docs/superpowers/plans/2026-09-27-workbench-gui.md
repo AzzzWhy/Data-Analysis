@@ -1575,11 +1575,27 @@ cd ~/Data-Analysis && python agent/agent_main.py --gui
 # Ctrl+b 松手按 d 脱离，服务继续活着
 ```
 
+> **起服务前先看这两个变量（`995bda6` 之后新增的前置）：**
+> - `SKILL_SHOW_SPEEDUP` 被 `origin/main` 改成**默认关**（"两次额外 CPU 遍历不该拖慢正常回答"）。
+>   这个默认是对的，但意味着**录制里任何"对比/加速比"数字都必须显式开**：
+>   `SKILL_SHOW_SPEEDUP=1 ~/miniforge3/envs/rapids-cudf/bin/python agent/agent_main.py --gui`。
+>   不带它就是空面板——**空不是 bug，别当 bug 修**，也别在空面板上口头补一个数字。
+> - 若中途停顿可能超过 15 分钟，`SESSION_WARM_TTL_SECONDS=7200` 可以保住要拍的保留帧（默认
+>   900 s；见复核意见 `hks-node-review-995bda6.md` A 项——失败兜底的 close 也会清池，那是更
+>   短的坑）。**录完必须用不带这个变量的命令重起一次**，把 15 分钟保护在默认值下再走一遍，否
+>   则这道保护在真实使用里形同不存在。
+
 - [ ] **Step 6: 本地开隧道**
 
 ```bash
-ssh -N -L 8765:127.0.0.1:8765 Developer@<jump-host> -p <node-port>
+ssh -N -o ClearAllForwardings=yes -o ServerAliveInterval=30 -L 8899:127.0.0.1:8765 Developer@<jump-host> -p <node-port>
 ```
+
+> 本机 `8765` **不要直接用**：Qoder 的 Remote-SSH 已经绑了 `127.0.0.1:8765` 和 `[::1]:8765`，而
+> Windows 允许两个监听共存，于是请求会随机落到其中一个——表现是"有时是旧界面"。`8805` 实测也被
+> 占了，用 `8899`（或先 `netstat -ano | findstr :8765` 确认）。`ClearAllForwardings` 是为了压掉
+> `~/.ssh/config` 里那条 `LocalForward 8765 …`，否则它会和上面这条抢同一个本地端口。
+> 浏览器开 `http://127.0.0.1:8899/`。
 
 - [ ] **Step 7: 浏览器验收清单（逐条对着 spec §3）**
 
@@ -1592,7 +1608,7 @@ ssh -N -L 8765:127.0.0.1:8765 Developer@<jump-host> -p <node-port>
 > （更正记录：本块 01:40 那版写的"任何显存回落判据都不能用 nvidia-smi"过严 —— 错在把设备级字段的
 > N/A 推广到了整张表。这句是我本会话写进 plan 的，按节点实测改回。）
 
-- [ ] `http://127.0.0.1:8765/` 打开，工作台渲染完整，无控制台报错
+- [ ] `http://127.0.0.1:8899/` 打开（本地转发端口，见 Step 6 关于 `8765` 被占的说明），工作台渲染完整，无控制台报错
 - [ ] 选数据集 → 问一句 → 看到 `phase / tool_call / tool_result / answer / done` 依次出现
 - [ ] **验收 #2**：对同一数据集连问 5 轮，第 2 轮起 chip 显示 `GPU · cuDF (reuse)`，单步耗时接近 `references/engine-contract.md` 的 ~0.06 s（这是"文件没被重读"的证据，spec §3.2 的原始意图）。**判据用 `execution_decision.observed.phase == "warm_cache_hit"`（或 `policy == "warm_cache"`）**：`resident_reuse` 只说明复用了打开中的会话，pandas 路径也会出现，不能当作 GPU 证据
 - [ ] **验收 #5**：按「释放会话」→ 卡片显示会话 0 **且保留帧 0**，显存确实下降（另开 tmux 窗口跑 `gpu_session.py` 的 `ping`，对拍 `free_gpu_gb` 前后差；`/api/session/release` 的响应里 `warm_frames_dropped` / `sessions_after` / `warm_frames_after` 是同一事实的服务端说法）
