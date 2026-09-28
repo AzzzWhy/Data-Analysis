@@ -685,6 +685,7 @@ def _worker_start():
         [_python_bin(), script],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, encoding="utf-8", bufsize=1,
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
     )
     proc.responses = queue.Queue()
     proc.stderr_tail = deque(maxlen=20)

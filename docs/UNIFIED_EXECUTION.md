@@ -45,7 +45,9 @@ python agent/batch_queue.py --manifest examples/batch-queue.json --output-root r
 
 队列按清单顺序调度：连续的 `force_cpu=true` 任务最多并行 2 份（可调 1～4）；其余任务包括 `auto` 都按“可能使用 GPU”对待，**一次只运行一份，且与该队列的 CPU 任务不重叠**。这是统一内存机器上的保守上限，不能把多个进程同时启动误称为数据分块并行、CPU/GPU 流水线重叠或多 GPU 加速。每份任务内部的 CPU 读取＋GPU 计算仍是读取、转换、计算的顺序流水，不并发叠加算力。
 
-队列只协调**同一次清单运行内**的任务。它不管理另一个队列进程或正在运行的 Agent 热会话；部署时应避免让多个大 GPU 队列和大热会话互相争抢共享内存。Agent 对话继续使用原有常驻工作进程，不会为每次提问新建队列；已经规划好的跨报告任务才使用这里的队列。当前尚无跨 Agent/队列的全局 GPU 资源管理器、跨批次帧共享或多 GPU 分布式调度。
+队列的任务顺序只协调**同一次清单运行内**的任务。采用本版本 worker 的 Agent 热会话、单次分析和不同队列进程，还会共用当前用户临时目录下的跨进程 GPU **计算许可**：打开 GPU 帧、执行 GPU 步骤和批量 GPU 分析时持有许可，步骤完成即释放；热会话的帧可继续驻留，不会阻塞其他任务整段对话。CPU 强制任务不占用许可，因此队列中的两个 CPU 子进程仍可并行。默认等待上限 300 秒，可用 `GPU_ANALYSIS_GPU_SLOT_TIMEOUT` 调整到不超过 1800 秒；超时明确报错。需要跨用户共享许可时，所有进程须把 `GPU_ANALYSIS_GPU_SLOT_FILE` 设置为同一个可写的绝对路径。
+
+这个许可只串行化 GPU 计算，**不是全局显存/统一内存预留器**：热会话驻留帧仍占内存，每个进程依靠已有的内存准入检查。旧版 worker 或未使用本版本的外部程序也不会遵守该许可。Agent 对话继续使用常驻工作进程，不会为每次提问新建队列；已经规划好的跨报告任务才使用队列。尚无跨批次帧共享、多 GPU 分布式调度或 CPU 读取与 GPU 计算的异步重叠。
 
 ## 性能与限制
 
@@ -59,11 +61,15 @@ python agent/batch_queue.py --manifest examples/batch-queue.json --output-root r
 
 ```bash
 python agent/batch_job_test.py
+python agent/batch_queue_test.py
 python agent/fast_execution_test.py
 python agent/interactive_reuse_test.py
 python skills/cudf-analytics/scripts/hybrid_batch_test.py
 python skills/cudf-analytics/scripts/hybrid_execution_test.py
+python skills/cudf-analytics/scripts/gpu_coordination_test.py
 ```
+
+真实设备的多进程、混合路径和热会话联测：`python agent/batch_queue_live_test.py --input /absolute/path/to/numeric.parquet --output-root /tmp/gda-queue-live`。输入须包含数值 `region`、`revenue` 列；测试产出在指定临时目录，原始数据只读。该测试还让另一个进程短暂持有 GPU 计算许可，验证 Agent 热会话确实等待共享许可后继续。
 
 2026-09-28 的 GB10 隔离目录冒烟测试：真实家庭用电 Parquet 的 2,075,259 行上，显式 `cpu_gpu` 批量执行摘要、异常值和相关性，`loading.actual=cpu_gpu`，三步的实际引擎均为 `cudf`，结束后活动会话数为 0。对话会话用 `usecols=Global_active_power,Voltage` 显式混合加载，连续两步均为 `cudf`；关闭后再次打开命中受限帧缓存，实际加载方式仍报告为 `cpu_gpu`，活动会话数仍为 0。固定报表命令在示例 CSV 上生成 `report.md`、`result.json`，实际路径为 CPU。以上是功能冒烟，不是五轮性能对照，不据此声明新版本的加速倍数。
 

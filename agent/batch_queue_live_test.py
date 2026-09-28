@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import subprocess
 import sys
 from uuid import uuid4
 
@@ -65,11 +66,40 @@ def main(argv: list[str] | None = None) -> int:
                 step["engine"] != engine for step in result["results"]):
             raise AssertionError(f"wrong execution path for {job['name']}")
         paths.append(result["loading"]["actual"])
-    opened = skills._worker_call({"cmd": "open", "path": str(source),
-                                  "usecols": "region,revenue", "load_backend": "cpu_gpu",
-                                  "force_gpu": True, "measure_cpu": False})
+    ping = skills._worker_call({"cmd": "ping"})
+    if not ping.get("ok"):
+        raise AssertionError(f"warm worker startup failed: {ping}")
+    # A separate process holds the same host-wide GPU slot. The Agent worker's
+    # real open must wait for it, proving queue/Agent arbitration is not merely
+    # a local thread lock.
+    holder_code = ("from gpu_coordination import gpu_slot\n"
+                   "import time\n"
+                   "with gpu_slot():\n"
+                   " print('locked', flush=True)\n"
+                   " time.sleep(1.2)\n")
+    holder = subprocess.Popen([sys.executable, "-c", holder_code],
+                              cwd=Path(skills._session_script()).parent,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              text=True, encoding="utf-8")
+    try:
+        if holder.stdout.readline().strip() != "locked":
+            raise AssertionError("GPU slot holder did not start")
+        opened = skills._worker_call({"cmd": "open", "path": str(source),
+                                      "usecols": "region,revenue", "load_backend": "cpu_gpu",
+                                      "force_gpu": True, "measure_cpu": False})
+        if holder.wait(timeout=5):
+            raise AssertionError("GPU slot holder failed")
+    finally:
+        if holder.poll() is None:
+            holder.kill()
+            holder.wait(timeout=3)
+        holder.stdout.close()
+        holder.stderr.close()
     if not opened.get("ok") or opened.get("loading", {}).get("actual") != "cpu_gpu":
         raise AssertionError(f"warm Agent session failed: {opened}")
+    slot_wait = opened.get("coordination", {}).get("gpu_slot_wait_seconds", 0)
+    if slot_wait < 0.4:
+        raise AssertionError(f"warm Agent did not wait for the shared GPU slot: {slot_wait}")
     sid = opened["session_id"]
     try:
         replies = [skills._worker_call({"cmd": "analyze", "sid": sid, **step})
@@ -91,6 +121,7 @@ def main(argv: list[str] | None = None) -> int:
                       "cpu_processes_overlap": cpu_overlap, "gpu_jobs_serial": gpu_serial,
                       "job_pids": [job["pid"] for job in summary["jobs"]],
                       "load_paths": paths, "warm_session_backend": "cpu_gpu",
+                      "warm_gpu_slot_wait_seconds": slot_wait,
                       "warm_session_steps": len(replies), "active_sessions": 0,
                       "source_unchanged": True}), flush=True)
     return 0

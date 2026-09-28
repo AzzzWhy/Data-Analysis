@@ -80,6 +80,7 @@ def _import_plans():
 GA = _import_engine()
 PLANS_MODULE = _import_plans()
 from statistics_cache import ExactStatisticsCache
+from gpu_coordination import gpu_slot
 
 # Sessions hold a full dataset in GPU memory, so they are capped. Each open session on a
 # 20M-row file costs roughly 1-2 GB of device memory; refusing the 5th is better than
@@ -1041,7 +1042,29 @@ def handle(req: dict) -> dict:
     fn = HANDLERS.get(cmd)
     if fn is None:
         return _err(f"unknown command: {cmd}. Available: ping, {', '.join(HANDLERS)}")
-    return fn(req)
+    # One host-wide slot covers actual GPU work across separate Agent and batch
+    # processes. CPU-only batch jobs remain parallel. A resident frame does not
+    # hold the slot between questions, so planned jobs can make progress.
+    if cmd == "analyze":
+        sess = SESSIONS.get(_sid_from(req))
+        needs_slot = bool(sess and sess.engine.is_gpu)
+    elif cmd == "close":
+        sid = _sid_from(req)
+        needs_slot = (any(sess.engine.is_gpu for sess in SESSIONS.values()) if sid == "all"
+                      else bool(SESSIONS.get(sid) and SESSIONS[sid].engine.is_gpu))
+    else:
+        needs_slot = cmd == "oneshot" or (cmd in {"open", "batch"} and
+                                            not bool(req.get("force_cpu")))
+    if not needs_slot:
+        return fn(req)
+    try:
+        with gpu_slot() as waited:
+            reply = fn(req)
+        if isinstance(reply, dict):
+            reply.setdefault("coordination", {"gpu_slot_wait_seconds": round(waited, 6)})
+        return reply
+    except TimeoutError as exc:
+        return _err(str(exc))
 
 
 def main() -> int:
