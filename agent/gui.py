@@ -23,6 +23,9 @@ this is an interface layer, and it must not be a reason an analysis cannot run.
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
+import hmac
 import inspect
 import json
 import mimetypes
@@ -664,6 +667,39 @@ class Handler(BaseHTTPRequestHandler):
         if os.environ.get("GPU_GUI_VERBOSE"):
             super().log_message(fmt, *args)
 
+    def _authorized(self) -> bool:
+        """Gate every route behind the access token when one is configured.
+
+        HTTP Basic is used because the browser supplies the login prompt, remembers the
+        credential for the session and attaches it to fetch() and EventSource() alike, which
+        keeps gui/app.js untouched. The token is the password half; the user half is ignored.
+        Comparison is over sha256 digests with hmac.compare_digest, so neither the length nor
+        the bytes of the token leak through timing, and a digest never appears on the wire.
+        The digest lives on the server instance, not the class: unlike `workbench`, a second
+        server in the same process (the headless tests run two) must not inherit the first
+        one's token.
+        """
+        digest = getattr(self.server, "token_digest", None)
+        if digest is None:
+            return True
+        header = self.headers.get("Authorization") or ""
+        scheme, _, value = header.partition(" ")
+        offered = ""
+        if scheme.lower() == "basic":
+            try:
+                decoded = base64.b64decode(value, validate=True).decode("utf-8")
+            except (ValueError, UnicodeDecodeError):
+                decoded = ""
+            offered = decoded.partition(":")[2]
+        if hmac.compare_digest(hashlib.sha256(offered.encode("utf-8")).digest(), digest):
+            return True
+        self._send(401,
+                   b'{"error": "an access token is configured; the browser asks for it as the '
+                   b'password of HTTP Basic auth, and it is never accepted in the URL"}',
+                   "application/json; charset=utf-8",
+                   {"WWW-Authenticate": 'Basic realm="data-workbench", charset="UTF-8"'})
+        return False
+
     def _send(self, code: int, body: bytes, content: str, extra=None) -> None:
         self.send_response(code)
         self.send_header("Content-Type", content)
@@ -731,6 +767,8 @@ class Handler(BaseHTTPRequestHandler):
     # -- routes ------------------------------------------------------------------------
 
     def do_GET(self):                      # noqa: N802
+        if not self._authorized():
+            return
         url = urlparse(self.path)
         wb = self.workbench
         if url.path in ("/", "/index.html"):
@@ -759,6 +797,8 @@ class Handler(BaseHTTPRequestHandler):
         return self._json(404, {"error": f"no such route: {url.path}"})
 
     def do_POST(self):                     # noqa: N802
+        if not self._authorized():
+            return
         wb = self.workbench
         url = urlparse(self.path)
         if url.path == "/api/session/release":
@@ -793,6 +833,8 @@ class Handler(BaseHTTPRequestHandler):
         return self._json(404, {"error": f"no such route: {url.path}"})
 
     def do_PATCH(self):                    # noqa: N802
+        if not self._authorized():
+            return
         url = urlparse(self.path)
         if url.path != "/api/settings":
             return self._json(404, {"error": f"no such route: {url.path}"})
@@ -855,31 +897,37 @@ def _shutdown(wb: Workbench) -> None:
 
 
 def make_server(port: int = DEFAULT_PORT, host: str = "127.0.0.1",
-                model: str | None = None):
+                model: str | None = None, token: str | None = None):
     """Build the server and its workbench without entering the loop.
 
     Split out so the headless tests can bind port 0, drive real HTTP against a real Workbench
     and real skills, and shut it down -- rather than testing a mock of the thing under test.
+    A token, when given, is stored only as its sha256 digest, on the server instance.
     """
     workbench = Workbench(model_override=model)
     Handler.workbench = workbench
     httpd = ThreadingHTTPServer((host, port), Handler)
     httpd.daemon_threads = True
+    httpd.token_digest = hashlib.sha256(token.encode("utf-8")).digest() if token else None
     workbench.httpd = httpd
     return httpd, workbench
 
 
 def serve(port: int = DEFAULT_PORT, host: str = "127.0.0.1",
-          model: str | None = None) -> int:
-    if host != "127.0.0.1" and os.environ.get("GPU_GUI_ALLOW_REMOTE") != "1":
+          model: str | None = None, token: str | None = None) -> int:
+    remote = host != "127.0.0.1"
+    if remote and not token and os.environ.get("GPU_GUI_ALLOW_REMOTE") != "1":
         print(f"refusing to bind {host}: the workbench has no authentication, and 8888/9000 on "
               f"the Spark node are public ports reachable by anyone who knows the address.\n"
-              f"Tunnel instead, which keeps the service on loopback:  "
-              f"ssh -p <port> -L {port}:127.0.0.1:{port} Developer@<jump-host>\n"
-              f"If you genuinely want an open interface, set GPU_GUI_ALLOW_REMOTE=1.")
+              f"Two supported ways out:  ssh -p <port> -L {port}:127.0.0.1:{port} "
+              f"Developer@<jump-host>\n"
+              f"or run it authenticated:  --token <secret>  (then any machine that knows the\n"
+              f"secret can open http://{host}:{port} directly).\n"
+              f"To bind without a token anyway, set GPU_GUI_ALLOW_REMOTE=1 -- that is an "
+              f"unauthenticated file reader, and it stays a deliberate opt-in.")
         return 2
     try:
-        httpd, state = make_server(port, host, model)
+        httpd, state = make_server(port, host, model, token)
     except OSError as exc:
         print(f"cannot bind {host}:{port}: {exc}\n"
               f"The workbench is optional; nothing else was affected. "
@@ -893,6 +941,13 @@ def serve(port: int = DEFAULT_PORT, host: str = "127.0.0.1",
     else:
         model_state = "installed but no base URL / key / model configured"
     print(f"GPU加速与数据分析 · workbench on http://{host}:{port}")
+    if token:
+        print("  access: token required -- the browser will ask for it once per session "
+              "(HTTP Basic, any user name, the token as password)")
+    elif remote:
+        print("  access: NO token set and GPU_GUI_ALLOW_REMOTE=1 is on -- anyone who can "
+              "reach this address can read files through /artifact. Bind a token before "
+              "leaving a trusted network.")
     print(f"  engine: {'ready' if status['engine_ready'] else 'not reachable: ' + status['engine_error']}")
     print(f"  model client: {model_state}")
     print("  Ctrl+C to stop; any resident session is released on the way out.")
@@ -910,10 +965,15 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Localhost workbench for the analysis agent")
     ap.add_argument("--port", type=int, default=int(os.environ.get("GPU_GUI_PORT", DEFAULT_PORT)))
     ap.add_argument("--host", default="127.0.0.1",
-                    help="loopback only unless GPU_GUI_ALLOW_REMOTE=1")
+                    help="loopback only, unless a token or GPU_GUI_ALLOW_REMOTE=1 is set")
+    ap.add_argument("--token", default=os.environ.get("GPU_GUI_TOKEN"),
+                    help="access token for non-loopback use; the browser asks for it once "
+                         "(HTTP Basic, any user name, this token as the password). "
+                         "GPU_GUI_TOKEN is the same thing as an environment variable, and "
+                         "keeps the secret off the process command line.")
     ap.add_argument("--model", default=None, help="override the configured model ID for this run")
     args = ap.parse_args()
-    return serve(args.port, args.host, args.model)
+    return serve(args.port, args.host, args.model, args.token)
 
 
 if __name__ == "__main__":

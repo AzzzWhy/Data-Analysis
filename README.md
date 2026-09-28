@@ -523,6 +523,23 @@ Ports panel, which is the shorter path when you are already editing on the node.
 There is no address to visit without one of those two. `8765` is not among the gateway's public
 mappings, and adding it would expose an unauthenticated file reader to the internet.
 
+To let a browser on another machine open the workbench directly, run it with an access token and
+bind a real interface:
+
+```bash
+GPU_GUI_TOKEN=<secret> python agent/gui.py --host 0.0.0.0 --port 8765
+# or: python agent/gui.py --host 0.0.0.0 --token <secret>
+```
+
+The browser asks for the token once per session — any user name, the token as the password —
+and every route, including the static page, stays closed without it. The token is compared as a
+sha256 digest, is never accepted in the URL, and the flag or the environment variable are the
+only ways to set it; `GPU_GUI_TOKEN` keeps the secret off the process command line. This is a
+gate, not encryption: Basic auth travels as plain text like the rest of the page, so treat it as
+"trusted network plus a door code", not as a public endpoint. Binding a non-loopback host without
+a token still refuses to start unless `GPU_GUI_ALLOW_REMOTE=1` is set, which remains the loud
+opt-in for exactly what it sounds like.
+
 `python agent/agent_main.py --gui` starts the same server from the agent's own entry point. It is
 chosen before the "configure me first" check, so the workbench comes up with no key and says which
 half is unavailable; it refuses to combine with `--ask` or piped input, because those are scripted

@@ -743,6 +743,81 @@ def main() -> int:
         wb.jobs.clear()
         wb.jobs.update(saved_jobs)
 
+    print("=== the access token gates every route when one is set ===")
+    # A token server and a tokenless server, driven over real HTTP. This runs as a subprocess
+    # because `Handler.workbench` is class state set by make_server(): a second server in this
+    # process would hand the first one a different workbench mid-suite. The probe keeps the two
+    # worlds apart, and pins the same scratch config the suite above runs under.
+    probe_src = r'''
+import base64, sys, threading, urllib.error, urllib.parse, urllib.request
+from pathlib import Path
+sys.path.insert(0, str(Path.cwd()))
+import gui
+
+TOKEN = "correct horse battery staple"
+plain, plain_wb = gui.make_server(port=0, host="127.0.0.1")
+guard, guard_wb = gui.make_server(port=0, host="127.0.0.1", token=TOKEN)
+for srv in (plain, guard):
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+def hit(httpd, path, password=None, user="workbench"):
+    req = urllib.request.Request(f"http://127.0.0.1:{httpd.server_address[1]}{path}")
+    if password is not None:
+        blob = base64.b64encode(f"{user}:{password}".encode("utf-8")).decode("ascii")
+        req.add_header("Authorization", "Basic " + blob)
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return r.status, dict(r.headers), r.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, dict(exc.headers), exc.read()
+
+failures = []
+def expect(label, ok, detail=""):
+    print(f"  [{'PASS' if ok else 'FAIL'}] {label}{'  ' + detail if detail else ''}")
+    if not ok:
+        failures.append(label)
+
+# The tokenless server is only ever asked for a static file: after the second make_server(),
+# `Handler.workbench` points at the guard's workbench, so an /api/state there would exercise
+# the wrong object and prove nothing about token isolation.
+code, headers, _ = hit(guard, "/api/state")
+expect("no credential is a 401 that carries the Basic challenge",
+       code == 401 and headers.get("WWW-Authenticate", "").startswith("Basic"), f"code {code}")
+code, _, _ = hit(guard, "/", password="wrong")
+expect("a wrong token is a 401 on the page itself, not only on the API", code == 401, f"code {code}")
+code, _, _ = hit(guard, "/?token=" + urllib.parse.quote(TOKEN))
+expect("the token in a query string does not authenticate", code == 401, f"code {code}")
+code, _, body = hit(guard, "/api/state", password=TOKEN, user="anything")
+expect("the right token opens the API for any user name",
+       code == 200 and b"engine_ready" in body, f"code {code}")
+code, _, body = hit(guard, "/", password=TOKEN)
+expect("the right token boots the page a browser needs",
+       code == 200 and b"Data Workbench" in body, f"code {code}")
+code, _, _ = hit(plain, "/")
+expect("a server started without a token keeps serving without one", code == 200, f"code {code}")
+plain.shutdown(); plain.server_close()
+guard.shutdown(); guard.server_close()
+sys.exit(1 if failures else 0)
+'''
+    env = dict(os.environ)
+    env["GPU_ANALYSIS_CONFIG"] = fixture_cfg
+    env.pop("GPU_API_KEY", None)
+    probe = None
+    try:
+        probe = subprocess.run([sys.executable, "-c", probe_src], capture_output=True,
+                               text=True, timeout=300, encoding="utf-8", errors="replace",
+                               cwd=str(HERE))
+        prc, pout = probe.returncode, (probe.stdout or "")
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        prc, pout = 2, f"probe could not run: {type(exc).__name__}: {exc}"
+    for line in pout.splitlines():
+        print(line)
+    if probe is not None and probe.stderr:
+        print(probe.stderr.strip()[:400])
+    last = next((ln for ln in pout.splitlines()[::-1] if ln.strip()), "")
+    check("the token gate holds on a real server, and never leaks to a tokenless one",
+          prc == 0, f"exit {prc}; {last[:120]}")
+
     print("=== spec #11: the key row and the referenced ids are checked against the shipped sources ===")
     # Two ways this screen can lie while every HTTP route still passes: the footer advertises a key
     # that no handler binds, and app.js reaches for an id that markup no longer has. Both are
