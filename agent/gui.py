@@ -82,6 +82,9 @@ def chrome(language: str) -> dict:
 GUI_DIR = HERE / "gui"
 DEFAULT_PORT = 8765
 EVENT_BUFFER = 200          # a reload re-attaches and replays; it is not a run log
+# The one build stamp every page shows ({{BUILD}} in the html files). Bump it per release; a
+# tag that says which page you are looking at is worth nothing if it lags the code it names.
+BUILD_TAG = "guiv2 · b7"
 # How many finished runs stay replayable. Each one holds its whole transcript and result payload,
 # and the dict was never trimmed: a workbench left open for a day accumulated one per question.
 JOB_HISTORY = 20
@@ -1126,7 +1129,12 @@ class Handler(BaseHTTPRequestHandler):
         path = (GUI_DIR / name).resolve()
         if not path.is_relative_to(root) or not path.is_file():
             return self._json(404, {"error": f"missing frontend file: {name}"})
-        self._send(200, path.read_bytes(), content)
+        body = path.read_bytes()
+        if b"{{BUILD}}" in body:
+            # The pages carry one build stamp, filled from one constant, so a page can never
+            # claim to be a release it is not -- and a stale tab is identifiable at a glance.
+            body = body.replace(b"{{BUILD}}", BUILD_TAG.encode("utf-8"))
+        self._send(200, body, content)
 
     def _events(self, job_id: str) -> None:
         job = self.workbench.jobs.get(job_id)
