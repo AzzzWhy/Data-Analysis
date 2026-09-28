@@ -52,10 +52,12 @@ import skills  # noqa: E402
 AGENT_IMPORT_ERROR = ""
 try:
     from agent_main import Agent, build_client  # noqa: E402
-    from api_config import load_config, normalize_url, save_config  # noqa: E402
+    from api_config import (APIConfig, load_config,  # noqa: E402
+                            normalize_url, save_config)
 except Exception as _exc:  # pragma: no cover - depends on the operator's environment
     Agent = None
     build_client = None
+    APIConfig = None
     load_config = None
     normalize_url = None
     save_config = None
@@ -88,8 +90,65 @@ JOB_HISTORY = 20
 # lock. Every call the workbench makes therefore needs a deadline it owns itself.
 WORKER_TIMEOUT_SECONDS = 20.0
 SESSION_TTL_SECONDS = 7 * 24 * 3600
+GATE_KDF_ITERATIONS = 200_000
 CSP = ("default-src 'self'; style-src 'self'; script-src 'self'; "
        "connect-src 'self'; img-src 'self' data:")
+
+
+def gate_file() -> Path:
+    """gate.json sits beside connection.json, resolved by the same rules.
+
+    Mirrored from api_config.config_path() rather than imported, because importing
+    api_config pulls in the openai SDK: a machine that has not installed
+    requirements.txt still gets a gate that works.
+    """
+    override = os.environ.get("GPU_ANALYSIS_CONFIG")
+    if override:
+        return Path(override).expanduser().parent / "gate.json"
+    root = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    return root / "gpu-data-analysis" / "gate.json"
+
+
+def load_gate_credential() -> tuple[bytes, int, bytes] | None:
+    """(salt, iterations, digest) for the browser-set password, or None when unset.
+
+    The file holds a PBKDF2 digest, never the password. Its shape is checked rather
+    than trusted, so a corrupt or hand-edited file reads as "no password set" and the
+    gate reopens for first-run setup, instead of crashing or accepting nonsense.
+    """
+    try:
+        data = json.loads(gate_file().read_text(encoding="utf-8"))
+        salt = bytes.fromhex(data["salt"])
+        digest = bytes.fromhex(data["digest"])
+        iterations = int(data.get("iterations", GATE_KDF_ITERATIONS))
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        return None
+    if len(salt) < 8 or len(digest) != 32 or iterations < 1:
+        return None
+    return salt, iterations, digest
+
+
+def _is_loopback(ip: str) -> bool:
+    return ip in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
+
+
+def _gate_mode(server) -> str:
+    """One of 'signin', 'setup' or 'open', computed from live server state.
+
+    A launch-time --token or a stored password makes the gate 'signin'. Without either,
+    a loopback binding stays 'open' (the workbench you started for yourself), while a
+    remote binding becomes 'setup': nothing unauthenticated is served, the first visit
+    from the server's own machine claims the password, and everyone else waits.
+    """
+    if getattr(server, "token_digest", None) is not None:
+        return "signin"
+    if getattr(server, "gate_credential", None) is not None:
+        return "signin"
+    if server.server_address[0] in ("127.0.0.1", "::1"):
+        return "open"
+    if os.environ.get("GPU_GUI_ALLOW_REMOTE") == "1":
+        return "open"
+    return "setup"
 
 # Tools the workbench may invoke directly. Kept explicit: an HTTP body must never become a
 # call to something chosen by the caller.
@@ -534,6 +593,44 @@ class Workbench:
             result["state"] = self.session_doc(self.session_status())
         return result
 
+    def reset_all(self) -> dict:
+        """Return this machine's workbench state to out-of-the-box, and say exactly what
+        that means.
+
+        Reset here: resident sessions and the warm cache, the job history, tracked
+        artifact roots, and the saved connection settings (address, key, model,
+        language) -- plus, from the HTTP layer that calls this, the gate password and
+        every sign-in session id. Deliberately NOT reset: dataset files and generated
+        reports. They are inputs and outputs the operator chose; a button that deletes
+        files a request can name is a footgun wearing a feature's name, and the UI
+        copy says so rather than implying a wiped disk.
+        """
+        result = call_with_timeout(skills.release_all_sessions_and_cache, WORKER_TIMEOUT_SECONDS)
+        if result.get("error"):
+            return {"ok": False, "error": result["error"]}
+        done = ["resident sessions and warm cache released"]
+        self.busy = False
+        self.jobs.clear()
+        self.artifact_roots = set()
+        for env_dir in (os.environ.get("DEMO_DATA_DIR"),):
+            if env_dir:
+                self._add_root(env_dir)
+        self._add_root(HERE.parent / "benchmark")
+        done.append("job history and artifact tracking cleared")
+        if save_config is not None and APIConfig is not None:
+            try:
+                save_config(APIConfig())
+                self.agent = None
+                self.last_error = ""
+                self._configure(self.model_override)
+                done.append("connection settings restored to defaults "
+                            "(address, key, model, language)")
+            except OSError as exc:
+                return {"ok": False, "error": f"could not rewrite the config file: {exc}"}
+        else:
+            done.append("connection settings left alone: api_config is unavailable")
+        return {"ok": True, "reset": done}
+
     def start_direct_run(self, tool: str, args: dict):
         if tool not in RUNNABLE_TOOLS:
             return None, f"tool is not runnable from the workbench: {tool}"
@@ -670,18 +767,18 @@ class Handler(BaseHTTPRequestHandler):
             super().log_message(fmt, *args)
 
     def _authorized(self) -> bool:
-        """True when this request carries a live session, or no token is configured.
+        """True when this request carries a live session, or the gate is open.
 
-        The token itself is sent exactly once: POST /api/login trades it for a random
-        session id in an HttpOnly, SameSite=Strict cookie, which the browser then
-        attaches to fetch() and EventSource() alike. That is why the gate moved off
-        HTTP Basic -- its credentials are something EventSource is not required to
-        send, and the browser's own dialog is not this workbench's design. The
-        session table lives on the server instance, not the Handler class, so a
-        second server in one process (the headless tests run two) never inherits the
-        first one's gate.
+        The password itself is sent exactly once: POST /api/login (or /api/setup on
+        first run) trades it for a random session id in an HttpOnly, SameSite=Strict
+        cookie, which the browser then attaches to fetch() and EventSource() alike.
+        That is why the gate moved off HTTP Basic -- its credentials are something
+        EventSource is not required to send, and the browser's own dialog is not this
+        workbench's design. The session table lives on the server instance, not the
+        Handler class, so a second server in one process (the headless tests run
+        several) never inherits the first one's gate.
         """
-        if getattr(self.server, "token_digest", None) is None:
+        if _gate_mode(self.server) == "open":
             return True
         try:
             jar = SimpleCookie(self.headers.get("Cookie") or "")
@@ -699,27 +796,8 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return True
 
-    def _login(self, url) -> None:
-        """Trade the access token for a session cookie.
-
-        The token is accepted only in the request body -- the same rule the API key
-        follows -- because a query string lands in access logs, proxies and history.
-        """
-        if "token" in parse_qs(url.query):
-            return self._json(400, {"error": "token must be sent in the request body, "
-                                             "never in the query string"})
-        digest = getattr(self.server, "token_digest", None)
-        if digest is None:
-            return self._json(404, {"error": "this server has no token; "
-                                             "there is nothing to sign in with"})
-        body = self._body()
-        if body is None:
-            return
-        offered = str(body.get("token") or "")
-        if not hmac.compare_digest(hashlib.sha256(offered.encode("utf-8")).digest(), digest):
-            # A wrong guess costs the caller a delay, not the server an outage.
-            time.sleep(0.8)
-            return self._json(401, {"error": "wrong token"})
+    def _issue_session(self) -> None:
+        """Answer 200 with a fresh session cookie. The caller has verified the password."""
         now = time.time()
         for stale, expiry in list(self.server.sessions.items()):
             if expiry < now:
@@ -729,6 +807,105 @@ class Handler(BaseHTTPRequestHandler):
         self._json(200, {"ok": True, "expires_in": SESSION_TTL_SECONDS},
                    {"Set-Cookie": f"dws={sid}; Path=/; Max-Age={SESSION_TTL_SECONDS}; "
                                   f"HttpOnly; SameSite=Strict"})
+
+    def _gate_check(self, offered: str) -> bool:
+        """Constant-time check against whichever credential is active."""
+        runtime = getattr(self.server, "token_digest", None)
+        if runtime is not None:
+            return hmac.compare_digest(hashlib.sha256(offered.encode("utf-8")).digest(),
+                                       runtime)
+        cred = getattr(self.server, "gate_credential", None)
+        if cred is None:
+            return False
+        salt, iterations, digest = cred
+        return hmac.compare_digest(
+            hashlib.pbkdf2_hmac("sha256", offered.encode("utf-8"), salt, iterations), digest)
+
+    def _login(self, url) -> None:
+        """Trade the access password for a session cookie.
+
+        The password is accepted only in the request body -- the same rule the API key
+        follows -- because a query string lands in access logs, proxies and history.
+        """
+        if "password" in parse_qs(url.query) or "token" in parse_qs(url.query):
+            return self._json(400, {"error": "the password must be sent in the request body, "
+                                             "never in the query string"})
+        mode = _gate_mode(self.server)
+        if mode == "setup":
+            return self._json(409, {"error": "no password is set yet; "
+                                             "the page will offer to create one"})
+        if mode == "open":
+            return self._json(404, {"error": "this server has no gate; "
+                                             "there is nothing to sign in to"})
+        body = self._body()
+        if body is None:
+            return
+        offered = str(body.get("password") or "")
+        if not self._gate_check(offered):
+            # A wrong guess costs the caller a delay, not the server an outage.
+            time.sleep(0.8)
+            return self._json(401, {"error": "wrong password"})
+        self._issue_session()
+
+    def _setup(self, url) -> None:
+        """First-run password creation: loopback only, one shot, then the gate is live.
+
+        The browser-set password is stored as a salted PBKDF2 digest in gate.json
+        beside connection.json. Only a loopback client may claim an uninitialized gate,
+        so binding 0.0.0.0 before the password exists never hands the gate to whoever
+        happens to click first on the network.
+        """
+        if "password" in parse_qs(url.query):
+            return self._json(400, {"error": "the password must be sent in the request body, "
+                                             "never in the query string"})
+        if _gate_mode(self.server) != "setup":
+            return self._json(409, {"error": "the gate already has a password. Clear it with "
+                                             "--reset-token at the server, or 数据初始化 in "
+                                             "the settings panel."})
+        if not _is_loopback(self.client_address[0]):
+            return self._json(403, {"error": "the first password may only be set from the "
+                                             "machine running this server"})
+        body = self._body()
+        if body is None:
+            return
+        password = str(body.get("password") or "")
+        if not (8 <= len(password) <= 128) or not password.strip():
+            return self._json(400, {"error": "the password must be 8-128 characters, "
+                                             "and not only whitespace"})
+        salt = secrets.token_bytes(16)
+        digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt,
+                                     GATE_KDF_ITERATIONS)
+        payload = {"scheme": "pbkdf2-sha256", "iterations": GATE_KDF_ITERATIONS,
+                   "salt": salt.hex(), "digest": digest.hex(),
+                   "created": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        try:
+            gate_file().parent.mkdir(parents=True, exist_ok=True)
+            gate_file().write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        except OSError as exc:
+            return self._json(500, {"error": f"could not store the password digest: {exc}"})
+        self.server.gate_credential = (salt, GATE_KDF_ITERATIONS, digest)
+        self._issue_session()
+
+    def _reset(self) -> None:
+        """Erase this machine's workbench state; Workbench.reset_all states the boundary."""
+        result = self.workbench.reset_all()
+        if not result.get("ok"):
+            return self._json(500, result)
+        cleared = list(result.get("reset", []))
+        if getattr(self.server, "gate_credential", None) is not None:
+            try:
+                gate_file().unlink(missing_ok=True)
+            except OSError as exc:
+                return self._json(500, {"ok": False,
+                                        "error": f"could not remove the gate file: {exc}"})
+            self.server.gate_credential = None
+            cleared.append("gate password cleared; the next loopback visit sets a new one")
+        elif getattr(self.server, "token_digest", None) is not None:
+            cleared.append("gate stays on: its password was given at launch (--token), "
+                           "not in the browser")
+        self.server.sessions = {}
+        cleared.append("sign-in sessions invalidated")
+        self._json(200, {"ok": True, "reset": cleared})
 
     def _logout(self) -> None:
         """Retire the session named by the caller's cookie and expire the cookie.
@@ -820,10 +997,14 @@ class Handler(BaseHTTPRequestHandler):
             kind = "text/css; charset=utf-8" if url.path.endswith(".css") else \
                 "application/javascript; charset=utf-8"
             return self._static(url.path.lstrip("/"), kind)
+        if url.path == "/api/gate":
+            return self._json(200, {"mode": _gate_mode(self.server),
+                                    "auth_required": _gate_mode(self.server) != "open",
+                                    "remote": not _is_loopback(self.client_address[0])})
         if not self._authorized():
             if url.path in ("/", "/index.html"):
                 return self._static("login.html", "text/html; charset=utf-8")
-            return self._json(401, {"error": "a token is configured; sign in at / first"})
+            return self._json(401, {"error": "a password is configured; sign in at / first"})
         wb = self.workbench
         if url.path in ("/", "/index.html"):
             return self._static("index.html", "text/html; charset=utf-8")
@@ -833,7 +1014,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._static(url.path.lstrip("/"), kind)
         if url.path == "/api/state":
             payload = wb.engine_state()
-            payload["auth_required"] = getattr(self.server, "token_digest", None) is not None
+            payload["auth_required"] = _gate_mode(self.server) != "open"
             return self._json(200, payload)
         if url.path == "/api/files":
             directory = (parse_qs(url.query).get("dir") or [None])[0]
@@ -855,13 +1036,22 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):                     # noqa: N802
         wb = self.workbench
         url = urlparse(self.path)
-        # The two door routes are the only ones reachable without a session.
+        # The door routes are the only ones reachable without a session: /api/gate says
+        # what state the door is in, /api/login opens it, /api/setup builds it.
+        if url.path == "/api/gate":
+            return self._json(200, {"mode": _gate_mode(self.server),
+                                    "auth_required": _gate_mode(self.server) != "open",
+                                    "remote": not _is_loopback(self.client_address[0])})
         if url.path == "/api/login":
             return self._login(url)
+        if url.path == "/api/setup":
+            return self._setup(url)
         if url.path == "/api/logout":
             return self._logout()
         if not self._authorized():
-            return self._json(401, {"error": "a token is configured; sign in at / first"})
+            return self._json(401, {"error": "a password is configured; sign in at / first"})
+        if url.path == "/api/reset":
+            return self._reset()
         if url.path == "/api/session/release":
             return self._json(200, wb.release())
         if url.path == "/api/shutdown":
@@ -896,7 +1086,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_PATCH(self):                    # noqa: N802
         url = urlparse(self.path)
         if not self._authorized():
-            return self._json(401, {"error": "a token is configured; sign in at / first"})
+            return self._json(401, {"error": "a password is configured; sign in at / first"})
         if url.path != "/api/settings":
             return self._json(404, {"error": f"no such route: {url.path}"})
         # A credential in a query string lands in access logs, proxy logs and browser history.
@@ -969,7 +1159,12 @@ def make_server(port: int = DEFAULT_PORT, host: str = "127.0.0.1",
     Handler.workbench = workbench
     httpd = ThreadingHTTPServer((host, port), Handler)
     httpd.daemon_threads = True
+    # Two credential sources: a launch-time --token (sha256, in memory only) and the
+    # browser-set gate.json password (salted PBKDF2, on disk). Either arms the gate;
+    # neither is ever stored in plaintext, and both live per-server-instance so the
+    # headless tests can run gated and ungated servers side by side.
     httpd.token_digest = hashlib.sha256(token.encode("utf-8")).digest() if token else None
+    httpd.gate_credential = load_gate_credential() if token is None else None
     httpd.sessions = {}                # sid -> expiry; survives exactly as long as the process
     workbench.httpd = httpd
     return httpd, workbench
@@ -978,16 +1173,16 @@ def make_server(port: int = DEFAULT_PORT, host: str = "127.0.0.1",
 def serve(port: int = DEFAULT_PORT, host: str = "127.0.0.1",
           model: str | None = None, token: str | None = None) -> int:
     remote = host != "127.0.0.1"
-    if remote and not token and os.environ.get("GPU_GUI_ALLOW_REMOTE") != "1":
-        print(f"refusing to bind {host}: the workbench has no authentication, and 8888/9000 on "
-              f"the Spark node are public ports reachable by anyone who knows the address.\n"
-              f"Two supported ways out:  ssh -p <port> -L {port}:127.0.0.1:{port} "
-              f"Developer@<jump-host>\n"
-              f"or run it authenticated:  --token <secret>  (then any machine that knows the\n"
-              f"secret can open http://{host}:{port} directly).\n"
-              f"To bind without a token anyway, set GPU_GUI_ALLOW_REMOTE=1 -- that is an "
-              f"unauthenticated file reader, and it stays a deliberate opt-in.")
-        return 2
+    if remote and os.environ.get("GPU_GUI_ALLOW_REMOTE") != "1" and token is None \
+            and load_gate_credential() is None:
+        # No refusal: with no password anywhere, a remote bind arms first-run setup
+        # instead of exposing anything. Unauthenticated visitors get a waiting page,
+        # and only a loopback client can claim the gate. GPU_GUI_ALLOW_REMOTE=1 plus
+        # no password remains the explicit opt-in to a genuinely open interface.
+        print(f"binding {host} with no password set: first-run setup mode. The first visit "
+              f"from the server's own machine sets the access password; every other "
+              f"visitor sees a waiting page until then. (Set --token, or "
+              f"GPU_GUI_ALLOW_REMOTE=1 for no gate at all.)")
     try:
         httpd, state = make_server(port, host, model, token)
     except OSError as exc:
@@ -1003,13 +1198,17 @@ def serve(port: int = DEFAULT_PORT, host: str = "127.0.0.1",
     else:
         model_state = "installed but no base URL / key / model configured"
     print(f"GPU加速与数据分析 · workbench on http://{host}:{port}")
-    if token:
-        print("  access: token required -- the sign-in page comes up once per browser; "
+    mode = _gate_mode(httpd)
+    if mode == "signin":
+        print("  access: password required -- the sign-in page comes up once per browser; "
               "the session cookie lasts 7 days or until this process restarts")
+    elif mode == "setup":
+        print("  access: first-run setup -- the first loopback visit sets the password; "
+              "remote visitors wait")
     elif remote:
-        print("  access: NO token set and GPU_GUI_ALLOW_REMOTE=1 is on -- anyone who can "
-              "reach this address can read files through /artifact. Bind a token before "
-              "leaving a trusted network.")
+        print("  access: NO password and GPU_GUI_ALLOW_REMOTE=1 is on -- anyone who can "
+              "reach this address can read files through /artifact. Bind a password "
+              "before leaving a trusted network.")
     print(f"  engine: {'ready' if status['engine_ready'] else 'not reachable: ' + status['engine_error']}")
     print(f"  model client: {model_state}")
     print("  Ctrl+C to stop; any resident session is released on the way out.")
@@ -1027,14 +1226,25 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Localhost workbench for the analysis agent")
     ap.add_argument("--port", type=int, default=int(os.environ.get("GPU_GUI_PORT", DEFAULT_PORT)))
     ap.add_argument("--host", default="127.0.0.1",
-                    help="loopback only, unless a token or GPU_GUI_ALLOW_REMOTE=1 is set")
+                    help="loopback by default; a non-loopback host arms first-run setup when "
+                         "no password is set, so nothing unauthenticated is ever served")
     ap.add_argument("--token", default=os.environ.get("GPU_GUI_TOKEN"),
-                    help="access token for non-loopback use; without a session the browser gets "
-                         "the sign-in page, and POSTing the token buys a 7-day session cookie. "
+                    help="set the gate password here instead of the browser's first-run "
+                         "setup (sha256, in memory only, never written to disk). "
                          "GPU_GUI_TOKEN is the same thing as an environment variable, and "
                          "keeps the secret off the process command line.")
+    ap.add_argument("--reset-token", action="store_true",
+                    help="clear the stored gate password before serving; the next loopback "
+                         "visit offers first-run setup again")
     ap.add_argument("--model", default=None, help="override the configured model ID for this run")
     args = ap.parse_args()
+    if args.reset_token:
+        try:
+            gate_file().unlink(missing_ok=True)
+            print("gate password cleared; the next loopback visit sets a new one")
+        except OSError as exc:
+            print(f"could not remove {gate_file()}: {exc}")
+            return 2
     return serve(args.port, args.host, args.model, args.token)
 
 

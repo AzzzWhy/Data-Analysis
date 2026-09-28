@@ -743,11 +743,11 @@ def main() -> int:
         wb.jobs.clear()
         wb.jobs.update(saved_jobs)
 
-    print("=== the access token gates every route when one is set ===")
-    # A token server and a tokenless server, driven over real HTTP. This runs as a subprocess
-    # because `Handler.workbench` is class state set by make_server(): a second server in this
-    # process would hand the first one a different workbench mid-suite. The probe keeps the two
-    # worlds apart, and pins the same scratch config the suite above runs under.
+    print("=== the gate: first-run setup, sign-in, and what reset actually does ===")
+    # Three servers, driven over real HTTP, run as a subprocess because `Handler.workbench`
+    # is class state set by make_server(): a second server in this process would hand the
+    # first one a different workbench mid-suite. The probe pins the same scratch config the
+    # suite above runs under, so its gate.json lands in the same throwaway directory.
     probe_src = r'''
 import json, sys, threading, urllib.error, urllib.parse, urllib.request
 from pathlib import Path
@@ -755,9 +755,25 @@ sys.path.insert(0, str(Path.cwd()))
 import gui
 
 TOKEN = "correct horse battery staple"
+PASSWORD = "first-run password 123"
+
+failures = []
+def expect(label, ok, detail=""):
+    if isinstance(detail, bytes):
+        detail = detail.decode("utf-8", "replace")
+    elif not isinstance(detail, str):
+        detail = json.dumps(detail, ensure_ascii=False)
+    print(f"  [{'PASS' if ok else 'FAIL'}] {label}{'  ' + detail if detail else ''}")
+    if not ok:
+        failures.append(label)
+
+expect("the loopback predicate classifies both ways",
+       gui._is_loopback("127.0.0.1") and not gui._is_loopback("192.168.2.4"))
+
 plain, plain_wb = gui.make_server(port=0, host="127.0.0.1")
 guard, guard_wb = gui.make_server(port=0, host="127.0.0.1", token=TOKEN)
-for srv in (plain, guard):
+fresh, fresh_wb = gui.make_server(port=0, host="0.0.0.0")
+for srv in (plain, guard, fresh):
     threading.Thread(target=srv.serve_forever, daemon=True).start()
 
 def hit(httpd, path, body=None, cookie=None):
@@ -774,42 +790,37 @@ def hit(httpd, path, body=None, cookie=None):
     except urllib.error.HTTPError as exc:
         return exc.code, dict(exc.headers), exc.read()
 
-failures = []
-def expect(label, ok, detail=""):
-    print(f"  [{'PASS' if ok else 'FAIL'}] {label}{'  ' + detail if detail else ''}")
-    if not ok:
-        failures.append(label)
+# The tokenless loopback server is only asked for static files: after the later
+# make_server() calls, `Handler.workbench` points at the newest workbench, so an
+# /api/state there would exercise the wrong object and prove nothing.
+code, _, body = hit(plain, "/")
+expect("a loopback server with no password stays open",
+       code == 200 and b"workspace" in body, f"code {code}")
+code, _, body = hit(plain, "/api/gate")
+expect("its gate status says open", json.loads(body).get("mode") == "open", body[:60])
 
-# The tokenless server is only ever asked for static files: after the second make_server(),
-# `Handler.workbench` points at the guard's workbench, so an /api/state there would exercise
-# the wrong object and prove nothing about token isolation.
+# The --token server: sign-in semantics.
 code, _, body = hit(guard, "/")
-expect("no session: / is the sign-in page, not the app",
+expect("the token server serves the sign-in page, not the app",
        code == 200 and b"gate-form" in body and b"workspace" not in body, f"code {code}")
-code, _, _ = hit(guard, "/login.css")
-expect("the sign-in page's own stylesheet loads without a session", code == 200, f"code {code}")
 code, _, _ = hit(guard, "/api/state")
-expect("no session: the API answers 401, not data", code == 401, f"code {code}")
+expect("unsigned, its API answers 401", code == 401, f"code {code}")
 code, _, _ = hit(guard, "/app.js")
-expect("no session: the app's own code stays behind the gate", code == 401, f"code {code}")
-code, _, _ = hit(guard, "/api/login", body={"token": "wrong"})
-expect("a wrong token is a 401", code == 401, f"code {code}")
-code, _, _ = hit(guard, "/api/login?" + urllib.parse.urlencode({"token": TOKEN}),
-                 body={"token": TOKEN})
-expect("the token in a query string is refused outright", code == 400, f"code {code}")
-code, headers, _ = hit(guard, "/api/login", body={"token": TOKEN})
+expect("unsigned, the app's own code stays behind the gate", code == 401, f"code {code}")
+code, _, _ = hit(guard, "/api/login", body={"password": "wrong"})
+expect("a wrong password is a 401", code == 401, f"code {code}")
+code, _, _ = hit(guard, "/api/login?" + urllib.parse.urlencode({"password": TOKEN}),
+                 body={"password": TOKEN})
+expect("the password in a query string is refused outright", code == 400, f"code {code}")
+code, headers, _ = hit(guard, "/api/login", body={"password": TOKEN})
 cookie = headers.get("Set-Cookie", "")
 sid = cookie.split("dws=", 1)[1].split(";", 1)[0] if "dws=" in cookie else ""
-expect("the right token trades for an HttpOnly, SameSite=Strict cookie",
+expect("the right password trades for an HttpOnly, SameSite=Strict cookie",
        code == 200 and sid and "HttpOnly" in cookie and "SameSite=Strict" in cookie,
        f"code {code}")
 code, _, body = hit(guard, "/api/state", cookie="dws=" + sid)
 expect("the session cookie opens the API",
        code == 200 and b"engine_ready" in body, f"code {code}")
-code, _, body = hit(guard, "/api/state", cookie="dws=" + sid)
-expect("the state says the gate is on for this server",
-       json.loads(body).get("auth_required") is True,
-       f"auth_required={json.loads(body).get('auth_required')}")
 code, _, body = hit(guard, "/", cookie="dws=" + sid)
 expect("the session cookie boots the app itself",
        code == 200 and b"workspace" in body and b"gate-form" not in body, f"code {code}")
@@ -819,11 +830,54 @@ code, _, _ = hit(guard, "/api/logout", body={}, cookie="dws=" + sid)
 expect("logout retires the session it names", code == 200, f"code {code}")
 code, _, _ = hit(guard, "/api/state", cookie="dws=" + sid)
 expect("a logged-out cookie no longer works", code == 401, f"code {code}")
-code, _, body = hit(plain, "/")
-expect("a server started without a token serves the app with no gate",
-       code == 200 and b"workspace" in body, f"code {code}")
-plain.shutdown(); plain.server_close()
-guard.shutdown(); guard.server_close()
+
+# The fresh remote-bound server: first-run setup, then sign-in, then reset.
+code, _, body = hit(fresh, "/")
+expect("an uninitialized remote-bound server serves the sign-in page, not the app",
+       code == 200 and b"gate-form" in body and b"workspace" not in body, f"code {code}")
+code, _, body = hit(fresh, "/api/gate")
+payload = json.loads(body)
+expect("its gate status says setup, seen from this loopback client",
+       payload.get("mode") == "setup" and payload.get("remote") is False, str(payload)[:80])
+code, _, _ = hit(fresh, "/api/state")
+expect("nothing on it answers unsigned", code == 401, f"code {code}")
+code, _, _ = hit(fresh, "/api/login", body={"password": PASSWORD})
+expect("signing in before any password exists is a 409, not a 401",
+       code == 409, f"code {code}")
+code, _, _ = hit(fresh, "/api/setup", body={"password": "short"})
+expect("a too-short first password is a 400", code == 400, f"code {code}")
+code, headers, _ = hit(fresh, "/api/setup", body={"password": PASSWORD})
+cookie = headers.get("Set-Cookie", "")
+sid = cookie.split("dws=", 1)[1].split(";", 1)[0] if "dws=" in cookie else ""
+expect("first-run setup stores the password and signs straight in",
+       code == 200 and sid and "HttpOnly" in cookie and "SameSite=Strict" in cookie,
+       f"code {code}")
+expect("the password landed on disk as a digest, never as text",
+       gui.gate_file().exists() and "digest" in gui.gate_file().read_text(encoding="utf-8")
+       and PASSWORD not in gui.gate_file().read_text(encoding="utf-8"))
+code, _, body = hit(fresh, "/api/gate")
+expect("the gate is now in sign-in mode", json.loads(body).get("mode") == "signin", body[:60])
+code, _, _ = hit(fresh, "/api/setup", body={"password": "another password 456"})
+expect("a second setup attempt is refused", code == 409, f"code {code}")
+code, headers, _ = hit(fresh, "/api/login", body={"password": PASSWORD})
+cookie2 = headers.get("Set-Cookie", "")
+sid2 = cookie2.split("dws=", 1)[1].split(";", 1)[0] if "dws=" in cookie2 else ""
+expect("the password set in the browser signs in like any other",
+       code == 200 and sid2, f"code {code}")
+code, _, body = hit(fresh, "/api/reset", body={}, cookie="dws=" + sid2)
+payload = json.loads(body)
+expect("reset reports what it actually did", code == 200 and payload.get("ok")
+       and payload.get("reset"), body[:120])
+code, _, body = hit(fresh, "/api/gate")
+expect("after reset the gate is back to first-run setup",
+       json.loads(body).get("mode") == "setup", body[:60])
+code, _, _ = hit(fresh, "/api/state", cookie="dws=" + sid2)
+expect("every session died with the reset", code == 401, f"code {code}")
+expect("the gate file left the disk with the credential", not gui.gate_file().exists())
+
+for srv in (plain, guard, fresh):
+    srv.shutdown()
+    srv.server_close()
 sys.exit(1 if failures else 0)
 '''
     env = dict(os.environ)

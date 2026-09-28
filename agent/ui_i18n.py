@@ -150,6 +150,13 @@ STRINGS = {
     'dataset_session（驻留会话）': 'dataset_session (resident session)',
     'export_deliverables（出报告与图表）': 'export_deliverables (report and charts)',
     'list_datasets（发现数据）': 'list_datasets (discover data)',
+    '数据初始化': 'Data reset',
+    '恢复初始状态': 'Restore initial state',
+    '再点一次确认擦除': 'Click again to confirm the wipe',
+    '擦除本机的会话、缓存、连接设置与访问密码，恢复初始状态。数据文件与已生成的报告不会被删除。':
+        'Erases this machine\'s sessions, cache, connection settings and access password, '
+        'returning the workbench to its initial state. Dataset files and generated '
+        'reports are not deleted.',
 }
 
 ZH_SPECIAL = {

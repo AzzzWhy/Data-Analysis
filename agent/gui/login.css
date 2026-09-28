@@ -1,15 +1,21 @@
-/* The sign-in page borrows the workbench's own tokens (colors, radii, control heights,
-   the product mark) so the door reads as part of the building. It is deliberately
-   self-contained: unauthenticated requests may load this file and login.js, nothing
-   else, and neither contains a secret. */
+/* The sign-in page: a dark antechamber to a light workbench.
+   It borrows the workbench's identity (the D mark, the overline, teal accents) and
+   nothing else -- the door should feel like the building, not like the room.
+   Everything animates with transform/opacity only, and everything stops when the
+   visitor asks the system to reduce motion. No secret ever reaches this file. */
 
 :root {
-  --bg: #f5f6f8; --surface: #fff; --surface-subtle: #f8f9fb;
-  --ink: #17212b; --muted: #6e7883; --faint: #98a1ab;
-  --line: #e2e6ea; --line-strong: #cfd5db;
-  --accent: #196b67; --accent-hover: #145a56; --accent-soft: #e8f2f1;
-  --bad: #b34646;
-  --shadow: 0 1px 2px rgba(24,33,43,.04), 0 8px 30px rgba(24,33,43,.06);
+  --ink-0: #0a0f16;        /* scene floor */
+  --ink-1: #0f1722;        /* raised */
+  --paper: #f2f4f7;        /* primary text on dark */
+  --slate-1: #9aa7b4;      /* secondary text */
+  --slate-2: #5d6b78;      /* faint text */
+  --line: rgba(255,255,255,.09);
+  --line-strong: rgba(255,255,255,.16);
+  --teal: #2ba583;         /* the workbench accent, lifted for dark */
+  --teal-bright: #37c79d;
+  --teal-deep: #196b67;
+  --bad: #ff8f8f;
   --sans: Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   --mono: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
 }
@@ -18,86 +24,199 @@
 html, body { min-height: 100%; }
 body {
   margin: 0;
-  color: var(--ink);
+  color: var(--paper);
   font: 14px/1.55 var(--sans);
-  background-color: var(--bg);
-  /* An analysis tool's doorstep: a nearly invisible sheet of graph paper. */
-  background-image: radial-gradient(rgba(23,33,43,.05) 1px, transparent 1.4px);
-  background-size: 22px 22px;
+  background: var(--ink-0);
+  overflow-x: hidden;
 }
 button, input { font: inherit; }
 button { cursor: pointer; }
 
-.gate { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+/* -- the scene ------------------------------------------------------------------ */
+
+.scene { position: fixed; inset: 0; overflow: hidden; pointer-events: none; }
+.scene-glow {
+  position: absolute; inset: 0;
+  background: radial-gradient(1100px 520px at 50% -12%, rgba(43,165,131,.16), transparent 62%);
+}
+.scene-grid {
+  position: absolute; inset: -60px;
+  background-image:
+    linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px);
+  background-size: 46px 46px;
+  -webkit-mask-image: radial-gradient(ellipse 90% 75% at 50% 38%, #000 25%, transparent 78%);
+  mask-image: radial-gradient(ellipse 90% 75% at 50% 38%, #000 25%, transparent 78%);
+  animation: grid-drift 26s linear infinite;
+}
+@keyframes grid-drift { to { transform: translateY(46px); } }
+
+.orb { position: absolute; border-radius: 50%; filter: blur(70px); opacity: .5; }
+.orb-a {
+  width: 340px; height: 340px; left: -80px; top: 12%;
+  background: rgba(30,110,96,.5);
+  animation: orb-a 19s ease-in-out infinite alternate;
+}
+.orb-b {
+  width: 420px; height: 420px; right: -120px; bottom: -6%;
+  background: rgba(36,70,110,.42);
+  animation: orb-b 23s ease-in-out infinite alternate;
+}
+@keyframes orb-a { to { transform: translate(70px, 50px) scale(1.12); } }
+@keyframes orb-b { to { transform: translate(-60px, -70px) scale(.94); } }
+
+/* -- the card ------------------------------------------------------------------- */
+
+.gate { min-height: 100vh; display: grid; place-items: center; padding: 24px; position: relative; }
 .gate-panel {
-  width: min(400px, 100%);
-  background: var(--surface);
+  width: min(412px, 100%);
+  background: rgba(15, 23, 34, .72);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
   border: 1px solid var(--line);
-  border-radius: 12px;
-  box-shadow: var(--shadow);
+  border-radius: 16px;
+  box-shadow: 0 24px 70px rgba(2, 6, 12, .55), 0 2px 8px rgba(2, 6, 12, .4);
   overflow: hidden;
+  animation: card-in .7s cubic-bezier(.16, 1, .3, 1) both;
 }
-.gate-panel[data-nudge="1"] { animation: nudge .22s ease; }
-@keyframes nudge { 25% { transform: translateX(-6px); } 75% { transform: translateX(6px); } }
-@media (prefers-reduced-motion: reduce) {
-  .gate-panel[data-nudge="1"] { animation: none; }
+@keyframes card-in {
+  from { opacity: 0; transform: translateY(18px) scale(.97); }
 }
+.gate-panel[data-nudge="1"] { animation: nudge .32s ease; }
+@keyframes nudge { 20% { transform: translateX(-8px); } 60% { transform: translateX(8px); } }
 
 .gate-head {
   display: flex; align-items: center; justify-content: space-between; gap: 16px;
   padding: 20px 22px 16px; border-bottom: 1px solid var(--line);
 }
-.product { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.product { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .product-mark {
-  width: 32px; height: 32px; flex: none;
+  width: 36px; height: 36px; flex: none;
   display: grid; place-items: center;
-  border-radius: 8px; background: #24313d; color: #fff;
-  font: 600 15px/1 var(--sans);
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--teal-deep), #2f9d7a);
+  color: #fff; font: 650 16px/1 var(--sans);
+  box-shadow: 0 0 0 0 rgba(55,199,157,.35);
+  animation: mark-pulse 3.2s ease-in-out infinite;
 }
-.product-copy { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
-.product-copy strong { font-size: 14px; letter-spacing: -.01em; }
-.product-copy span { color: var(--muted); font-size: 11px; margin-top: 2px; }
+@keyframes mark-pulse {
+  50% { box-shadow: 0 0 0 9px rgba(55,199,157,0); }
+}
+.product-copy { display: flex; flex-direction: column; line-height: 1.3; min-width: 0; }
+.product-copy strong { font-size: 14.5px; letter-spacing: -.01em; }
+.product-copy span { color: var(--slate-1); font-size: 11px; margin-top: 2px; }
 
 button.text-button {
-  border: 0; padding: 3px; background: transparent;
-  color: var(--muted); font-size: 11px;
+  border: 1px solid var(--line); padding: 5px 10px;
+  background: transparent; color: var(--slate-1); font-size: 11px;
+  border-radius: 999px; transition: color .18s ease, border-color .18s ease;
 }
-button.text-button:hover { color: var(--ink); }
+button.text-button:hover { color: var(--paper); border-color: var(--line-strong); }
 
-.gate-body { display: flex; flex-direction: column; padding: 22px 22px 20px; }
+/* -- the form ------------------------------------------------------------------- */
+
+.gate-body { display: flex; flex-direction: column; padding: 24px 24px 22px; }
 .overline {
-  display: block; color: var(--faint); font-size: 10px; font-weight: 700;
-  letter-spacing: .12em; text-transform: uppercase; margin-bottom: 4px;
+  display: block; color: var(--teal-bright); font-size: 10px; font-weight: 700;
+  letter-spacing: .14em; text-transform: uppercase; margin-bottom: 5px;
+  animation: field-in .5s .08s cubic-bezier(.16,1,.3,1) both;
 }
-h1 { margin: 0 0 6px; font-size: 22px; line-height: 1.25; letter-spacing: -.02em; font-weight: 650; }
-.gate-sub { margin: 0; color: var(--muted); font-size: 13px; }
-.lt { display: block; margin: 20px 0 6px; color: var(--muted); font-size: 11px; font-weight: 600; }
+h1 {
+  margin: 0 0 6px; font-size: 21px; line-height: 1.25;
+  letter-spacing: -.02em; font-weight: 650;
+  animation: field-in .5s .12s cubic-bezier(.16,1,.3,1) both;
+}
+.gate-sub {
+  margin: 0; color: var(--slate-1); font-size: 12.5px;
+  animation: field-in .5s .16s cubic-bezier(.16,1,.3,1) both;
+}
+@keyframes field-in { from { opacity: 0; transform: translateY(7px); } }
 
-#token {
-  width: 100%; height: 42px; padding: 0 13px;
-  color: var(--ink); font: 13px/1 var(--mono); letter-spacing: .04em;
-  background: var(--surface-subtle);
-  border: 1px solid var(--line-strong); border-radius: 7px; outline: none;
+.lt {
+  display: block; margin: 18px 0 7px; color: var(--slate-1); font-size: 11px; font-weight: 600;
+  animation: field-in .5s .2s cubic-bezier(.16,1,.3,1) both;
 }
-#token:focus {
-  border-color: #83aaa7; box-shadow: 0 0 0 3px var(--accent-soft); background: #fff;
-}
-#token::placeholder { color: var(--faint); font-family: var(--sans); letter-spacing: 0; }
 
-.gate-msg { margin: 10px 0 0; color: var(--bad); font-size: 12px; }
+#password, #confirm {
+  width: 100%; height: 44px; padding: 0 14px;
+  color: var(--paper); font: 13px/1 var(--mono); letter-spacing: .05em;
+  background: rgba(255,255,255,.045);
+  border: 1px solid var(--line-strong); border-radius: 9px; outline: none;
+  transition: border-color .18s ease, box-shadow .18s ease, background .18s ease;
+  animation: field-in .5s .22s cubic-bezier(.16,1,.3,1) both;
+}
+#confirm { animation-delay: .26s; }
+#password:focus, #confirm:focus {
+  border-color: rgba(55,199,157,.65);
+  box-shadow: 0 0 0 4px rgba(43,165,131,.16);
+  background: rgba(255,255,255,.06);
+}
+#password::placeholder, #confirm::placeholder { color: var(--slate-2); font-family: var(--sans); }
+
+.gate-panel[data-armed="1"] #password,
+.gate-panel[data-armed="1"] #confirm {
+  border-color: rgba(255,143,143,.55);
+  box-shadow: 0 0 0 4px rgba(255,120,120,.10);
+}
+
+.gate-msg {
+  margin: 11px 0 0; color: var(--bad); font-size: 12px;
+  animation: msg-in .25s ease both;
+}
+@keyframes msg-in { from { opacity: 0; transform: translateY(-3px); } }
 .gate-msg[hidden] { display: none; }
 
 button.primary {
-  margin-top: 14px; height: 40px; width: 100%;
-  border: 1px solid var(--accent); border-radius: 7px;
-  background: var(--accent); color: #fff; font-weight: 600; padding: 9px 16px;
-  transition: background .15s ease, border-color .15s ease;
+  margin-top: 16px; height: 44px; width: 100%;
+  border: 0; border-radius: 9px;
+  background: linear-gradient(135deg, var(--teal-deep) 0%, #2f9d7a 55%, var(--teal) 100%);
+  color: #fff; font-weight: 650; padding: 10px 16px;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 6px 20px rgba(30,110,90,.32), inset 0 1px 0 rgba(255,255,255,.14);
+  transition: filter .16s ease, transform .14s ease, box-shadow .16s ease;
+  animation: field-in .5s .28s cubic-bezier(.16,1,.3,1) both;
 }
-button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
-button.primary:disabled { opacity: .48; cursor: not-allowed; }
+button.primary:hover:not(:disabled) {
+  filter: brightness(1.11);
+  transform: translateY(-1px);
+  box-shadow: 0 10px 28px rgba(35,130,105,.42), inset 0 1px 0 rgba(255,255,255,.18);
+}
+button.primary:active:not(:disabled) { transform: translateY(0) scale(.985); }
+button.primary:disabled { opacity: .55; cursor: not-allowed; }
+button.primary[data-busy="1"]::before {
+  content: ""; width: 15px; height: 15px; margin-right: 9px; border-radius: 50%;
+  border: 2px solid rgba(255,255,255,.35); border-top-color: #fff;
+  animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+button.primary[data-ok="1"] {
+  background: linear-gradient(135deg, #1d7a4f, #34b374);
+}
+
+/* -- the waiting state ------------------------------------------------------------ */
+
+.waiting-note {
+  display: flex; align-items: center; gap: 10px;
+  margin-top: 22px; padding: 12px 14px;
+  border: 1px solid var(--line); border-radius: 9px;
+  background: rgba(255,255,255,.03);
+  color: var(--slate-1); font-size: 12px;
+}
+.waiting-note .spinner {
+  width: 13px; height: 13px; flex: none; border-radius: 50%;
+  border: 2px solid rgba(255,255,255,.18); border-top-color: var(--teal-bright);
+  animation: spin .8s linear infinite;
+}
 
 .gate-foot {
-  padding: 12px 22px 16px;
-  border-top: 1px solid var(--line); background: var(--surface-subtle);
-  color: var(--faint); font-size: 11px;
+  padding: 13px 24px 17px; border-top: 1px solid var(--line);
+  background: rgba(255,255,255,.02);
+  color: var(--slate-2); font-size: 11px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scene-grid, .orb, .product-mark,
+  .gate-panel, .overline, h1, .gate-sub, .lt, #password, #confirm,
+  button.primary, .gate-msg { animation: none !important; }
+  button.primary, #password, #confirm, button.text-button { transition: none; }
 }

@@ -523,25 +523,36 @@ Ports panel, which is the shorter path when you are already editing on the node.
 There is no address to visit without one of those two. `8765` is not among the gateway's public
 mappings, and adding it would expose an unauthenticated file reader to the internet.
 
-To let a browser on another machine open the workbench directly, run it with an access token and
-bind a real interface:
+To let a browser on another machine open the workbench directly, bind a real interface and let
+the first visit set the password:
 
 ```bash
-GPU_GUI_TOKEN=<secret> python agent/gui.py --host 0.0.0.0 --port 8765
-# or: python agent/gui.py --host 0.0.0.0 --token <secret>
+python agent/gui.py --host 0.0.0.0 --port 8765
 ```
 
+The first open — from the machine running the server — asks you to choose an access password;
+every visit after that asks for it. That claim can only be made from loopback, so binding
+`0.0.0.0` before any password exists never hands the gate to whoever clicks first on the
+network: other machines see a waiting page until the operator finishes setup. An operator who
+prefers scripting can still set the gate at launch with `--token` / `GPU_GUI_TOKEN` (kept in
+memory as a sha256 digest, never written to disk); a forgotten browser-set password is cleared
+with `--reset-token`.
+
 Without a session, `/` is a sign-in page wearing the workbench's own design, and every other
-route — including `/app.js` itself — answers 401. Signing in POSTs the token to `/api/login`
-once; what comes back is a random session id in an HttpOnly, SameSite=Strict cookie that lasts
-seven days or until the server restarts. The token itself is never sent again, is never accepted
-in a URL, and exists server-side only as a sha256 digest compared in constant time; a wrong
-guess costs the caller 0.8 seconds rather than the server anything. 退出 in the top bar retires
-the session. `GPU_GUI_TOKEN` keeps the secret off the process command line. This is a gate, not
-encryption: the page still travels as plain text, so treat it as "trusted network plus a door
-code", not as a public endpoint. Binding a non-loopback host without a token still refuses to
-start unless `GPU_GUI_ALLOW_REMOTE=1` is set, which remains the loud opt-in for exactly what it
-sounds like.
+route — including `/app.js` itself — answers 401. Signing in POSTs the password once; what
+comes back is a random session id in an HttpOnly, SameSite=Strict cookie that lasts seven days
+or until the server restarts. The browser-set password is stored as a salted PBKDF2 digest in
+`gate.json` beside `connection.json`; it is never accepted in a URL, and a wrong guess costs
+the caller 0.8 seconds rather than the server anything. 退出 in the top bar retires the
+session. This is a gate, not encryption: the page still travels as plain text, so treat it as
+"trusted network plus a door code", not as a public endpoint. `GPU_GUI_ALLOW_REMOTE=1` plus no
+password remains the loud opt-in to a genuinely open interface.
+
+设置 (F5) also carries 数据初始化: two deliberate clicks erase this machine's resident
+sessions, warm cache, job history, saved connection settings and the gate password, and kill
+every sign-in session — the next open lands on first-run setup. Dataset files and generated
+reports are deliberately not deleted: they are inputs and outputs the operator chose, and a
+button that deletes files a request can name would be a footgun wearing a feature's name.
 
 `python agent/agent_main.py --gui` starts the same server from the agent's own entry point. It is
 chosen before the "configure me first" check, so the workbench comes up with no key and says which

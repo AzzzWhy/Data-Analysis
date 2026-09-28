@@ -80,7 +80,7 @@ function applyChrome() {
   // `#phase` and `<option>` joined the sweep: the footer state and the tool picker were the last
   // two places where an English setting still produced Chinese text (and vice versa). Both are
   // leaf nodes, and `<option>` carries its behaviour in `value`, never in its label.
-  document.querySelectorAll(".lt, h1, h2, button, .row .k, .kpi .l, #phase, option").forEach((node) => {
+  document.querySelectorAll(".lt, h1, h2, button, .row .k, .kpi .l, .hint, #phase, option").forEach((node) => {
     // Guard, not paranoia: assigning textContent destroys child elements. A label that wraps a
     // select used to be rewritten here and the control vanished with it, which silently broke
     // the tool form. Only leaf nodes are ever translated.
@@ -863,6 +863,39 @@ $("logout").addEventListener("click", async () => {
   catch (err) { /* the cookie expiry is already set; the door is behind us either way */ }
   window.location.replace("/");
 });
+
+/* 数据初始化: back to out-of-box. One click arms it for four seconds and changes the
+   button into its armed state -- a second click inside that window is intent, anything
+   else is not. On success the gate password and this session are already gone, so the
+   redirect lands on first-run setup rather than on a stale screen. */
+(() => {
+  const button = $("reset-all");
+  let timer = null;
+  button.addEventListener("click", async () => {
+    if (timer === null) {
+      button.classList.add("armed");
+      button.textContent = t("再点一次确认擦除");
+      timer = setTimeout(() => {
+        timer = null;
+        button.classList.remove("armed");
+        button.textContent = t("恢复初始状态");
+      }, 4000);
+      return;
+    }
+    clearTimeout(timer);
+    timer = null;
+    button.disabled = true;
+    const { status, data } = await post("/api/reset", {});
+    if (status === 200 && data && data.ok) {
+      window.location.replace("/");
+      return;
+    }
+    button.disabled = false;
+    button.classList.remove("armed");
+    button.textContent = t("恢复初始状态");
+    line(els.log, "bad", `!! ${(data && data.error) || `HTTP ${status}`}`);
+  });
+})();
 
 /* Keyboard: the terminal's bindings, not the browser's. Ctrl+Q and Ctrl+, never reach the page --
    Chrome and Firefox handle them first -- so advertising a chord that cannot fire would be a

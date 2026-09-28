@@ -144,8 +144,9 @@ label.check input { width: 14px; height: 14px; margin: 0; accent-color: var(--ac
 .keys { margin: 14px 0 0; color: var(--faint); font-size: 9px; line-height: 1.8; }
 .keys b { color: var(--muted); font-family: var(--mono); font-weight: 600; }
 
-button.primary { border: 1px solid var(--accent); border-radius: 7px; background: var(--accent); color: #fff; padding: 9px 16px; font-weight: 600; transition: background .15s ease,border-color .15s ease; }
-button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+button.primary { border: 1px solid var(--accent); border-radius: 7px; background: var(--accent); color: #fff; padding: 9px 16px; font-weight: 600; transition: background .15s ease,border-color .15s ease,transform .14s ease,box-shadow .16s ease; }
+button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); transform: translateY(-1px); box-shadow: 0 5px 16px rgba(25,107,103,.28); }
+button.primary:active:not(:disabled) { transform: translateY(0) scale(.985); box-shadow: none; }
 button.primary:disabled { opacity: .48; cursor: not-allowed; }
 button.secondary { border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--ink); padding: 7px 11px; }
 button.secondary:hover { background: var(--surface-subtle); border-color: #afb7bf; }
@@ -208,6 +209,37 @@ code { padding: 1px 4px; border-radius: 3px; background: var(--surface-subtle); 
 .modal .remember { margin-top: 2px; }
 .modal-actions { display: flex; justify-content: flex-end; margin-top: 2px; }
 #set-msg:not(:empty) { color: var(--warn); }
+
+/* The destructive zone: what it erases is written next to it, including what it
+   deliberately does not erase. Two clicks, four seconds apart, and the armed state
+   is impossible to mistake for the resting one. */
+.danger-zone { margin-top: 6px; padding-top: 14px; border-top: 1px dashed var(--line-strong); display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.dz-copy { max-width: 300px; }
+.dz-copy .hint { margin: 5px 0 0; }
+h2.dz-title { font-size: 13px; color: var(--bad); }
+button.danger { flex: none; border: 1px solid #e4b4b4; border-radius: 7px; background: var(--bad-bg); color: var(--bad); padding: 8px 12px; font-weight: 600; transition: background .15s ease, color .15s ease, border-color .15s ease, transform .14s ease; }
+button.danger:hover { border-color: #d89c9c; }
+button.danger:active { transform: scale(.97); }
+button.danger.armed { background: var(--bad); color: #fff; border-color: var(--bad); }
+button.danger:disabled { opacity: .55; cursor: not-allowed; }
+
+/* The question box: a composer docked to the bottom center of the page, under all
+   three columns, instead of a form wedged into the top of the content column. The
+   dock itself ignores pointer events, so empty space beside the card stays clickable. */
+.composer-dock { position: fixed; left: 0; right: 0; bottom: 0; z-index: 15; display: flex; justify-content: center; padding: 0 20px 16px; pointer-events: none; }
+.composer-dock .query-card { pointer-events: auto; width: min(780px, 100%); margin: 0; background: rgba(255,255,255,.94); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); box-shadow: 0 14px 44px rgba(24,33,43,.16), 0 2px 10px rgba(24,33,43,.09); animation: dock-in .6s .12s cubic-bezier(.16,1,.3,1) both; }
+@keyframes dock-in { from { opacity: 0; transform: translateY(22px); } }
+body { padding-bottom: 152px; }   /* clearance under the docked composer, on every layout */
+
+/* Entrance: the shell rises into place once, then never moves again. */
+.topbar { animation: chrome-in .5s cubic-bezier(.16,1,.3,1) both; }
+.sidebar, .content, .inspector { animation: chrome-in .55s .07s cubic-bezier(.16,1,.3,1) both; }
+@keyframes chrome-in { from { opacity: 0; transform: translateY(8px); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .topbar, .sidebar, .content, .inspector, .composer-dock .query-card { animation: none; }
+  button.primary, button.danger { transition: none; }
+}
 
 @media (max-width: 1180px) {
   .workspace { grid-template-columns: 220px minmax(450px,1fr); }

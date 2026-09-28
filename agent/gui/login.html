@@ -8,6 +8,13 @@
 </head>
 <body>
 
+<div class="scene" aria-hidden="true">
+  <div class="scene-glow"></div>
+  <div class="scene-grid"></div>
+  <div class="orb orb-a"></div>
+  <div class="orb orb-b"></div>
+</div>
+
 <main class="gate">
   <div class="gate-panel" id="gate-panel">
     <header class="gate-head">
@@ -21,18 +28,29 @@
       <button type="button" id="lang" class="text-button">English</button>
     </header>
 
+    <!-- sign-in: the gate has a password -->
     <form id="gate-form" class="gate-body" novalidate>
       <span class="overline">Access</span>
-      <h1 id="t-title">输入访问口令</h1>
-      <p id="t-sub" class="gate-sub">这份工作台由访问口令保护，口令来自启动这份服务的一方。</p>
-      <label class="lt" for="token" id="t-label">访问口令</label>
-      <input id="token" type="password" autocomplete="current-password" spellcheck="false" autofocus>
+      <h1 id="t-title">输入访问密码</h1>
+      <p id="t-sub" class="gate-sub">这份工作台由访问密码保护，密码来自启动这份服务的一方。</p>
+      <label class="lt" for="password" id="t-label">访问密码</label>
+      <input id="password" type="password" autocomplete="current-password" spellcheck="false" autofocus>
+      <label class="lt confirm-row" for="confirm" id="t-label2" hidden>再输入一次</label>
+      <input id="confirm" class="confirm-row" type="password" autocomplete="new-password" spellcheck="false" hidden>
       <p class="gate-msg" id="gate-msg" role="alert" hidden></p>
       <button type="submit" id="gate-submit" class="primary full">进入工作台</button>
     </form>
 
+    <!-- setup pending, seen from another machine: nothing to do but wait -->
+    <div id="gate-waiting" class="gate-body" hidden>
+      <span class="overline">Setup</span>
+      <h1 id="t-wait-title">等待初始设置</h1>
+      <p id="t-wait-sub" class="gate-sub">这份服务还没有设置访问密码。请在运行它的那台机器上打开本页面，完成首次设置后，这里即可登录。</p>
+      <div class="waiting-note"><span class="spinner" aria-hidden="true"></span><span id="t-wait-note">正在等待管理员设置密码…</span></div>
+    </div>
+
     <footer class="gate-foot">
-      <span id="t-foot">口令只在请求体中传输 · 会话保留 7 天 · 服务重启后失效</span>
+      <span id="t-foot">密码只在请求体中传输 · 会话保留 7 天 · 服务重启后失效</span>
     </footer>
   </div>
 </main>

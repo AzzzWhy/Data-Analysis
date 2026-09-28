@@ -76,15 +76,6 @@
       </div>
     </div>
 
-    <section class="query-card">
-      <div class="query-label"><span>问题</span><span class="keyboard-hint">Enter 发送</span></div>
-      <form id="asker" class="asker">
-        <input id="prompt" type="text" autocomplete="off" placeholder="例如：按地区统计收入的总和与均值，并比较差异">
-        <button type="submit" id="ask" class="primary">分析</button>
-      </form>
-      <p class="hint" id="ask-hint"></p>
-    </section>
-
     <section class="result-panel">
       <div class="result-header">
         <div><span class="overline">Result</span><h2>分析结果</h2></div>
@@ -158,6 +149,19 @@
   </aside>
 </main>
 
+<!-- The question box is a chat-style composer docked to the bottom center of the page:
+     results live above, the ask lives below, centered across all three columns. -->
+<div class="composer-dock">
+  <section class="query-card">
+    <div class="query-label"><span>问题</span><span class="keyboard-hint">Enter 发送</span></div>
+    <form id="asker" class="asker">
+      <input id="prompt" type="text" autocomplete="off" placeholder="例如：按地区统计收入的总和与均值，并比较差异">
+      <button type="submit" id="ask" class="primary">分析</button>
+    </form>
+    <p class="hint" id="ask-hint"></p>
+  </section>
+</div>
+
 <div id="veil" class="veil">
   <form id="settings" class="modal">
     <div class="modal-header">
@@ -170,6 +174,13 @@
     <label class="check remember"><input id="set-remember" type="checkbox"><span>将密钥保存到本机明文文件</span></label>
     <p class="hint">密钥不会回显到浏览器。更换 API 地址会清除上一服务商的密钥与模型。</p>
     <p class="hint" id="set-msg"></p>
+    <div class="danger-zone">
+      <div class="dz-copy">
+        <h2 class="dz-title">数据初始化</h2>
+        <p class="hint">擦除本机的会话、缓存、连接设置与访问密码，恢复初始状态。数据文件与已生成的报告不会被删除。</p>
+      </div>
+      <button type="button" id="reset-all" class="danger">恢复初始状态</button>
+    </div>
     <div class="modal-actions"><button type="submit" class="primary">保存设置</button></div>
   </form>
 </div>
