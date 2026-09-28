@@ -83,6 +83,8 @@ with QueueExecutor(max_cpu_workers=2) as pool:
 
 [七档冷启动校准与自动选路验收](COLD_CALIBRATION_RESULTS.md)记录了此前 5000 万和 1.135 亿行自动选路落后的修复效果；仅对已校准任务有效，不能当作跨数据集的通用倍数。
 
+后续[有界异常示例提取对照](OUTLIER_EXAMPLES_RESULTS.md)保持全量异常计数，只减少展示前 K 行时的中间帧分配；亿级完整三项分析同轮有约 2%～5% 收益。回退开关为 `GPU_ANALYSIS_BOUNDED_OUTLIER_EXAMPLES=0`，切换或算法升级会使旧校准失效。该轮尚未覆盖正式部署或推送 GitHub，具体边界及逐轮证据见记录。
+
 既有 GB10 实验在同一组三项分析中，批量比逐项重新读取的热工作进程快约 1.4～1.8 倍，主要因为批量共用一次读取和转换。具体数值见[修复与验收记录](PUBLIC_DATA_REPAIR.md)及[原始规模样本](hybrid-evidence/public-repair-scale.jsonl)。这描述的是旧热工作口径。
 
 整合后新增的同口径测试让**对话常驻会话与批量都只读一次**。真实家庭用电数据 2,075,259 行，摘要、异常值、相关性三项，显式 CPU 读取＋GPU 计算，五轮交错测试：热会话中位数 **0.09018 秒**，批量 **0.08794 秒**；批量约快 **1.025 倍**。两路结果一致、实际加载路径均为 `cpu_gpu`、源文件未变、每轮后无活动会话或帧缓存。首次热会话为 0.389 秒，明显高于后续轮次；进程启动另测为 0.647 秒，均未计入上述稳态中位数。这个结果只覆盖一份数据、一组任务，不能推广为所有数据规模的加速比。[五轮原始记录](hybrid-evidence/unified-power-2m.json)；复测脚本为 [`benchmark/unified_execution_benchmark.py`](../benchmark/unified_execution_benchmark.py)。

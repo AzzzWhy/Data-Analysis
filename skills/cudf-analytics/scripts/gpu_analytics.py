@@ -986,6 +986,30 @@ def _pandas_uses_numeric_only() -> bool:
     return major < 3
 
 
+def _outlier_examples(df: Any, mask: Any, columns: Sequence[str], count: int, limit: int) -> Any:
+    """Find the first requested matches without materializing all matching rows.
+
+    The caller already counted the full mask. Only the display examples use a
+    growing prefix, preserving original row order and index alignment on both
+    pandas and cuDF. The worst case still reaches the complete input.
+    """
+    target = min(count, limit)
+    frame = df[list(columns)]
+    if target <= 0:
+        return frame.head(0)
+    if (os.environ.get("GPU_ANALYSIS_BOUNDED_OUTLIER_EXAMPLES", "1") == "0"
+            or count <= limit or len(frame) <= 100_000):
+        # Every match is needed, or a small frame does not justify the guard.
+        # Avoid retry/filter overhead on sparse and tiny datasets.
+        return frame[mask].head(limit)
+    stop = min(len(frame), max(1024, target * 8))
+    while True:
+        examples = frame.head(stop)[mask.head(stop)].head(target)
+        if len(examples) >= target or stop == len(frame):
+            return examples
+        stop = min(len(frame), stop * 4)
+
+
 def op_outliers(df: Any, eng: Engine, args: argparse.Namespace,
                 max_columns: Optional[int] = None,
                 summary_stats: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -1037,7 +1061,7 @@ def op_outliers(df: Any, eng: Engine, args: argparse.Namespace,
             # columns that are discarded immediately. Filter only the columns
             # returned as examples; the mask still scans every source row.
             example_cols = list(wanted) if len(wanted) > 1 else [name]
-            top = df[example_cols][mask].head(int(args.top_k))
+            top = _outlier_examples(df, mask, example_cols, count, int(args.top_k))
             records = _frame_records(top, int(args.top_k))
         except Exception as exc:
             if eng.is_gpu:
