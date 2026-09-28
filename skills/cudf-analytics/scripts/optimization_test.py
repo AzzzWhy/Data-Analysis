@@ -16,6 +16,18 @@ import parquet_cache
 
 
 class OptimizationTests(unittest.TestCase):
+    def test_clean_quartiles_do_not_allocate_another_dropna(self):
+        clean = pd.Series([1.0, 2.0, 3.0, 4.0])
+        with mock.patch.object(clean, "dropna", side_effect=AssertionError("duplicate cleaning")):
+            self.assertEqual(ga._quartiles(clean, False, already_clean=True), (1.75, 2.5, 3.25))
+
+    def test_binary_formats_do_not_use_csv_newline_estimator(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = os.path.join(root, "data.json")
+            with open(path, "w", encoding="utf-8") as stream:
+                stream.write('{"x":1}\n' * 100)
+            self.assertIsNone(ga._estimate_rows(path))
+
     def test_json_projection_does_not_pass_csv_only_arguments(self):
         with tempfile.TemporaryDirectory() as root:
             source = pd.DataFrame({"a": [1, 2], "b": [3, 4]})

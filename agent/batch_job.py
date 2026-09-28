@@ -13,7 +13,7 @@ from uuid import uuid4
 import skills
 
 
-PLAN_FIELDS = {"title", "file_path", "steps", "language", "force_cpu",
+PLAN_FIELDS = {"title", "file_path", "steps", "language", "force_cpu", "force_gpu",
                "load_backend", "hybrid_profile"}
 STEP_FIELDS = {"op", "by", "agg", "columns", "top_k"}
 OPS = {"auto", "profile", "summary", "groupby", "corr", "outliers"}
@@ -52,6 +52,10 @@ def load_plan(path: Path) -> dict:
         raise ValueError("language must be zh or en")
     if not isinstance(plan.get("force_cpu", False), bool):
         raise ValueError("force_cpu must be a boolean")
+    if not isinstance(plan.get("force_gpu", False), bool):
+        raise ValueError("force_gpu must be a boolean")
+    if plan.get("force_cpu") and plan.get("force_gpu"):
+        raise ValueError("force_cpu and force_gpu conflict")
     if plan.get("load_backend", "auto") not in {"auto", "native", "cpu_gpu"}:
         raise ValueError("load_backend must be auto, native or cpu_gpu")
     if plan.get("force_cpu") and plan.get("load_backend") == "cpu_gpu":
@@ -91,11 +95,15 @@ def _table(rows: list[dict], fields: list[str]) -> list[str]:
 def render_report(plan: dict, result: dict, wall_seconds: float) -> str:
     zh = plan.get("language", "zh") == "zh"
     t = (lambda chinese, english: chinese if zh else english)
+    timing_label = (t("计划归属计算耗时（共享启动与读取见队列组级耗时）",
+                      "Attributed plan compute time (shared startup/read in queue group wall time)")
+                    if result.get("shared_transaction") else
+                    t("分析调用耗时（含进程启动）", "Analysis call wall time (including startup)"))
     lines = [f"# {plan['title']}", "",
              f"{t('数据文件', 'Data file')}: `{plan['file_path']}`  ",
              f"{t('扫描行数', 'Rows scanned')}: {result.get('rows', '—')}  ",
              f"{t('批量计算', 'Batch compute')}: {_cell(result.get('total_seconds'))} s  ",
-             f"{t('分析调用耗时（含进程启动）', 'Analysis call wall time (including startup)')}: "
+             f"{timing_label}: "
              f"{wall_seconds:.6f} s  ",
              f"{t('实际加载方式', 'Actual load path')}: "
              f"{_cell(result.get('loading', {}).get('actual'))}", "",
@@ -106,6 +114,9 @@ def render_report(plan: dict, result: dict, wall_seconds: float) -> str:
                          t("计算引擎", "Compute engine"): step.get("engine"),
                          t("扫描行数", "Rows"): step.get("rows_scanned"),
                          t("耗时秒", "Seconds"): step.get("step_seconds")})
+    if result.get("shared_transaction"):
+        lines.extend([t("本计划属于共享数据事务。扫描行数为 0 的步骤复用了本事务已验证的精确结果，不是新扫描。",
+                        "Shared transaction: steps with zero scanned rows reuse verified exact results, not a new scan."), ""])
     lines.extend(_table(overview, list(overview[0])))
     for index, step in enumerate(result["results"], 1):
         op = step["op"]
@@ -156,8 +167,13 @@ def run(plan_path: Path, output_root: Path) -> Path:
     result = json.loads(skills.analyze_batch(
         plan["file_path"], plan["steps"], force_cpu=plan.get("force_cpu", False),
         load_backend=plan.get("load_backend", "auto"),
-        hybrid_profile=plan.get("hybrid_profile")))
+        hybrid_profile=plan.get("hybrid_profile"), force_gpu=plan.get("force_gpu", False)))
     wall_seconds = time.perf_counter() - started
+    return write_result(plan, result, output_root, wall_seconds)
+
+
+def write_result(plan: dict, result: dict, output_root: Path, wall_seconds: float) -> Path:
+    """Shared report writer; a cached scan is explicitly marked as such."""
     if not result.get("success"):
         raise RuntimeError(result.get("error", "batch failed"))
     output_root = output_root.expanduser().resolve()

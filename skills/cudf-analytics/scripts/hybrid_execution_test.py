@@ -126,6 +126,23 @@ class HybridTests(unittest.TestCase):
     def test_missing_calibration_does_not_guess(self):
         self.assertIsNone(self.select())
 
+    def test_reports_use_full_transaction_cost_not_legacy_component_margins(self):
+        measurements = self.measures()
+        measurements["native"][0]["seconds"] = measurements["native"][1]["seconds"] = 5.8
+        measurements["cpu_gpu"][0]["seconds"] = measurements["cpu_gpu"][1]["seconds"] = 5.5
+        self.save(measurements, context="reports_warm")
+        self.assertEqual(self.select(context="reports_warm"), "cpu_gpu")
+        self.assertIsNone(self.select(context="reports_cold"))
+
+    def test_fingerprint_cache_tracks_routing_environment(self):
+        before = hybrid.fingerprint()
+        with patch.dict(os.environ, {"CUDA_VISIBLE_DEVICES": "different-device-set"}):
+            self.assertNotEqual(hybrid.fingerprint(), before)
+        self.assertEqual(hybrid.fingerprint(), before)
+
+    def test_parquet_rows_use_footer_not_binary_newlines(self):
+        self.assertEqual(ga._estimate_rows(self.path), 3)
+
     def test_columns_query_and_context_must_match(self):
         self.save()
         self.assertIsNone(self.select(columns=["revenue"]))

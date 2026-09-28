@@ -21,6 +21,7 @@ import time
 from uuid import uuid4
 
 import batch_job
+from queue_runtime import QueueExecutor
 
 
 @dataclass(frozen=True)
@@ -125,7 +126,7 @@ def _run_job(job: Job, report_root: Path, timeout_seconds: int) -> dict:
     return finish(record)
 
 
-def run(manifest_path: Path, output_root: Path, max_cpu_workers: int = 2,
+def _run_isolated(manifest_path: Path, output_root: Path, max_cpu_workers: int = 2,
         timeout_seconds: int = 3600) -> tuple[Path, dict]:
     if not 1 <= max_cpu_workers <= 4:
         raise ValueError("max_cpu_workers must be 1 to 4")
@@ -175,16 +176,101 @@ def run(manifest_path: Path, output_root: Path, max_cpu_workers: int = 2,
     return run_dir, summary
 
 
+def run(manifest_path: Path, output_root: Path, max_cpu_workers: int = 2,
+        timeout_seconds: int = 3600, *, executor=None, execution_mode="reuse"):
+    """Default: bounded persistent workers and compatible same-file transactions.
+
+    The isolated legacy mode is retained for troubleshooting and A/B tests.
+    Reuse an explicit QueueExecutor context for repeated scheduled submissions.
+    A one-shot CLI owns and closes its pool, leaving no background processes.
+    """
+    if execution_mode == "isolated":
+        return _run_isolated(manifest_path, output_root, max_cpu_workers, timeout_seconds)
+    if execution_mode != "reuse":
+        raise ValueError("execution_mode must be reuse or isolated")
+    if not 1 <= max_cpu_workers <= 4:
+        raise ValueError("max_cpu_workers must be 1 to 4")
+    if not 1 <= timeout_seconds <= 86400:
+        raise ValueError("timeout_seconds must be 1 to 86400")
+    if executor is None:
+        with QueueExecutor(max_cpu_workers) as owned:
+            return run(manifest_path, output_root, max_cpu_workers, timeout_seconds, executor=owned)
+    if executor.closed or executor.max_cpu_workers != max_cpu_workers:
+        raise ValueError("executor closed or concurrency does not match")
+    with executor.submission_lock:
+        if executor.closed:
+            raise ValueError("executor closed")
+        return _run_reused(manifest_path, output_root, timeout_seconds, executor)
+
+
+def _run_reused(manifest_path, output_root, timeout_seconds, executor):
+    jobs = load_manifest(manifest_path)
+    groups = []
+    last_key = None
+    for job in jobs:
+        plan = batch_job.load_plan(job.plan_path)
+        key = (job.lane, plan["file_path"], plan.get("force_cpu", False),
+               plan.get("force_gpu", False), plan.get("load_backend", "auto"),
+               plan.get("hybrid_profile"))
+        if key != last_key:
+            groups.append([])
+        groups[-1].append(job)
+        last_key = key
+    output_root = output_root.expanduser().resolve()
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    run_dir = output_root / f"queue-{stamp}-{uuid4().hex[:8]}"
+    report_root = run_dir / "reports"
+    report_root.mkdir(parents=True, exist_ok=False)
+    started = time.perf_counter()
+    results = [None] * len(jobs)
+    def execute(group):
+        began = datetime.now(timezone.utc).isoformat()
+        timer = time.perf_counter()
+        try:
+            runner = executor.gpu.call if group[0].lane == "gpu_exclusive" else executor.cpu
+            reply = runner([str(job.plan_path) for job in group], report_root, timeout_seconds)
+            records = reply["jobs"]
+        except Exception as exc:
+            records = [{"ok": False, "error": f"{type(exc).__name__}: {exc}"} for _ in group]
+        ended = datetime.now(timezone.utc).isoformat()
+        elapsed = time.perf_counter() - timer
+        for job, record in zip(group, records):
+            results[job.index] = {**record, "name": job.name, "lane": job.lane,
+                "started_at_utc": began, "finished_at_utc": ended,
+                "group_wall_seconds": elapsed, "group_size": len(group)}
+    cursor = 0
+    while cursor < len(groups):
+        if groups[cursor][0].lane == "gpu_exclusive":
+            execute(groups[cursor])
+            cursor += 1
+        else:
+            end = cursor
+            while end < len(groups) and groups[end][0].lane == "cpu":
+                end += 1
+            futures = [executor.pool.submit(execute, group) for group in groups[cursor:end]]
+            for future in futures:
+                future.result()
+            cursor = end
+    summary = {"schema_version": 2, "seconds": time.perf_counter() - started,
+               "execution_mode": "reuse", "max_cpu_workers": executor.max_cpu_workers,
+               "gpu_exclusive": True, "groups": len(groups), "jobs": results,
+               "ok": all(record and record["ok"] for record in results)}
+    (run_dir / "queue-summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return run_dir, summary
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--max-cpu-workers", type=int, default=2)
     parser.add_argument("--timeout-seconds", type=int, default=3600)
+    parser.add_argument("--execution-mode", choices=("reuse", "isolated"), default="reuse")
     args = parser.parse_args(argv)
     try:
         run_dir, summary = run(args.manifest, args.output_root,
-                               args.max_cpu_workers, args.timeout_seconds)
+                               args.max_cpu_workers, args.timeout_seconds,
+                               execution_mode=args.execution_mode)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"batch queue failed: {exc}", file=sys.stderr)
         return 1

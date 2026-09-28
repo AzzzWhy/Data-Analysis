@@ -282,7 +282,8 @@ def _fmt_size(nbytes: float) -> str:
 def pick_engine_for(path: str, op: str, force_cpu: bool = False,
                     force_gpu: bool = False, verbose: bool = False,
                     details: Optional[Dict[str, Any]] = None,
-                    calibration_file: Optional[str] = None) -> Tuple[bool, Optional[str]]:
+                    calibration_file: Optional[str] = None,
+                    read_columns=None) -> Tuple[bool, Optional[str]]:
     """Decide whether the GPU is worth using for this file, from measured numbers.
 
     Returns (use_gpu, reason). reason is set when the CPU was chosen deliberately, so the
@@ -351,6 +352,18 @@ def pick_engine_for(path: str, op: str, force_cpu: bool = False,
                          "GPU must beat CPU by at least 10% to offset model uncertainty")
 
     rows = _estimate_rows(path)
+    # Hot Parquet operations scan decoded values, not compressed file bytes.
+    if op == "session" and _ENGINE is not None and _ENGINE.is_gpu and rows:
+        try:
+            if os.path.splitext(path)[1].lower() in (".parquet", ".pq"):
+                decoded = _decoded_numeric_bytes(path, read_columns)
+                if decoded is not None and decoded >= CROSSOVER_BYTES_NARROW:
+                    if details is not None:
+                        details.update(policy="warm_parquet_decoded_size", estimated_rows=rows,
+                                       decoded_numeric_bytes=decoded, file_size_bytes=size)
+                    return True, None
+        except (OSError, ValueError, TypeError, AttributeError, ImportError):
+            pass
     per_row = (size / rows) if (rows and rows > 0) else None
     narrow = per_row is not None and per_row < NARROW_BYTES_PER_ROW
     threshold = CROSSOVER_BYTES_NARROW if narrow else CROSSOVER_BYTES
@@ -405,6 +418,21 @@ def execution_decision_record(*, mode: str, policy: str, selected_backend: str,
     }
 
 
+def _decoded_numeric_bytes(path, columns=None):
+    """Cheap fixed-width Parquet footprint; unknown types stay conservative."""
+    if os.path.splitext(path)[1].lower() not in (".parquet", ".pq"):
+        return None
+    try:
+        import pyarrow.parquet as pq
+        parquet = pq.ParquetFile(path)
+        schema = parquet.schema_arrow
+        fields = [schema.field(name) for name in columns] if columns else list(schema)
+        widths = [getattr(field.type, "bit_width", 0) for field in fields]
+        return parquet.metadata.num_rows * sum(widths) / 8 if widths and all(widths) else None
+    except (OSError, ValueError, TypeError, AttributeError, ImportError, KeyError):
+        return None
+
+
 def _estimate_rows(path: str, sample_bytes: int = 1 << 20) -> Optional[int]:
     """Estimate a CSV's row count from a prefix of the file.
 
@@ -413,6 +441,15 @@ def _estimate_rows(path: str, sample_bytes: int = 1 << 20) -> Optional[int]:
     either side of the crossover, and file size is checked first as a cheaper and more reliable
     signal.
     """
+    extension = os.path.splitext(path)[1].lower()
+    if extension in (".parquet", ".pq"):
+        try:
+            import pyarrow.parquet as pq
+            return pq.ParquetFile(path).metadata.num_rows
+        except (OSError, ValueError, ImportError):
+            return None
+    if extension not in (".csv", ".tsv", ".txt"):
+        return None
     try:
         with open(path, "rb") as fh:
             head = fh.read(sample_bytes)
@@ -549,9 +586,9 @@ def _col_list(series: Any, limit: Optional[int] = None) -> List[Any]:
     return [_native_scalar(x) for x in out]
 
 
-def _quartiles(s: Any, is_gpu: bool) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+def _quartiles(s: Any, is_gpu: bool, *, already_clean: bool = False) -> Tuple[Optional[float], Optional[float], Optional[float]]:
     """Compute all three quartiles in one reduction instead of three full scans."""
-    clean = s.dropna()
+    clean = s if already_clean else s.dropna()
     if len(clean) == 0:
         return None, None, None
     try:
@@ -652,7 +689,7 @@ def _describe_stats(s: Any, is_gpu: bool) -> Dict[str, Any]:
             if is_gpu:
                 raise OpNotSupported(f"cuDF cannot compute {label}: {exc}") from exc
             _log(f"{label} failed: {exc}")
-    stats["q1"], stats["median"], stats["q3"] = _quartiles(clean, is_gpu)
+    stats["q1"], stats["median"], stats["q3"] = _quartiles(clean, is_gpu, already_clean=True)
     return stats
 
 

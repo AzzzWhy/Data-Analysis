@@ -678,7 +678,7 @@ def _session_script() -> str:
     return cand
 
 
-def _worker_start():
+def _worker_start(*, register_cleanup=True):
     """Start the session worker, or return None when it cannot be started."""
     script = _session_script()
     proc = subprocess.Popen(
@@ -702,7 +702,8 @@ def _worker_start():
     threading.Thread(target=drain_errors, daemon=True).start()
     # Kill the worker when this process exits, so a crashed agent does not leave a process
     # holding gigabytes of device memory.
-    atexit.register(lambda: _worker_stop(proc))
+    if register_cleanup:
+        atexit.register(lambda: _worker_stop(proc))
     return proc
 
 
@@ -793,11 +794,12 @@ def _run_analysis(cmd):
 
 
 def analyze_batch(file_path: str, steps: list, force_cpu: bool = False,
-                  load_backend: str = "auto", hybrid_profile: str = None) -> str:
+                  load_backend: str = "auto", hybrid_profile: str = None,
+                  force_gpu: bool = False) -> str:
     """Independent known analyses in one tool turn, with deterministic cleanup."""
     try:
         request = {"cmd": "batch", "path": _resolve_data_path(file_path),
-                   "steps": steps, "force_cpu": force_cpu,
+                   "steps": steps, "force_cpu": force_cpu, "force_gpu": force_gpu,
                    "load_backend": load_backend}
         if hybrid_profile:
             request["hybrid_profile"] = hybrid_profile

@@ -6,6 +6,8 @@ No imports of CUDA/cuDF are needed to inspect a profile or a Parquet footer.
 from __future__ import annotations
 
 import hashlib
+import copy
+from functools import lru_cache
 import importlib.metadata
 import json
 import math
@@ -38,6 +40,16 @@ def identity(path):
 
 
 def fingerprint():
+    affinity = tuple(sorted(os.sched_getaffinity(0))) if hasattr(os, "sched_getaffinity") else os.cpu_count()
+    key = (affinity, os.environ.get("OMP_NUM_THREADS"), os.environ.get("ARROW_NUM_THREADS"),
+           os.environ.get("CUDA_VISIBLE_DEVICES", "default"))
+    return copy.deepcopy(_fingerprint_cached(key))
+
+
+@lru_cache(maxsize=16)
+def _fingerprint_cached(key):
+    # Package code and the physical devices do not change inside a live worker.
+    # Affinity and routing-relevant environment changes are separate cache keys.
     packages = {}
     for package in ("pyarrow", "pandas", "cudf", "cudf-cu12", "cupy", "cupy-cuda12x"):
         try:
@@ -53,7 +65,7 @@ def fingerprint():
     except OSError:
         pass
     affinity = sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count()
-    return {"implementation": "hybrid-nullable-pearson-v3", "host": platform.node(), "arch": platform.machine(), "devices": sorted(devices),
+    return {"implementation": "hybrid-nullable-pearson-v4-shared", "host": platform.node(), "arch": platform.machine(), "devices": sorted(devices),
             "python": platform.python_version(), "packages": packages,
             "cpu_affinity": affinity, "omp_threads": os.environ.get("OMP_NUM_THREADS"),
             "arrow_threads_env": os.environ.get("ARROW_NUM_THREADS"),
@@ -122,6 +134,19 @@ def choose(profile_path, path, columns, workflow, context):
                                   for key in ("seconds", "read_seconds", "compute_seconds")}
         cpu, gpu = estimates["cpu"], estimates["native"]
         hybrid = estimates.get("cpu_gpu")
+        if context == "reports_warm":
+            # Full-transaction parity and timing include memoization overhead.
+            # CPU/read/component margins from independent batches no longer
+            # describe this cost. Keep CPU on ties within measured run spread.
+            winner = min(estimates, key=lambda backend: estimates[backend]["seconds"])
+            spread = {backend: (max(run["seconds"] for run in entry["measurements"][backend]) -
+                                min(run["seconds"] for run in entry["measurements"][backend]))
+                      for backend in candidates}
+            if winner != "cpu" and (cpu["seconds"] - estimates[winner]["seconds"] <=
+                                    max(spread["cpu"], spread[winner])):
+                winner = "cpu"
+            return winner, {**note, "selected": winner, "estimated": estimates,
+                            "reason": "fastest verified warm transaction; CPU on measurement ties"}
         hybrid_wins = (hybrid is not None and hybrid["read_seconds"] < .95 * gpu["read_seconds"]
                        and hybrid["compute_seconds"] < .90 * cpu["compute_seconds"]
                        and hybrid["seconds"] < .90 * min(cpu["seconds"], gpu["seconds"]))

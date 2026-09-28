@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import copy
 import io
 import json
 import os
@@ -400,6 +401,9 @@ def do_open(req: dict) -> dict:
     size_gb = os.path.getsize(path) / (1024 ** 3)
     free_gb = None if req.get("force_cpu") else _free_gpu_gb()
     need_gb = size_gb * MEM_HEADROOM + MEM_FLOOR_GB
+    decoded_bytes = GA._decoded_numeric_bytes(str(path), cols)
+    if decoded_bytes is not None:
+        need_gb = max(need_gb, decoded_bytes / 1024**3 * MEM_HEADROOM + MEM_FLOOR_GB)
     while free_gb is not None and free_gb < need_gb and WARM_CACHE:
         oldest = min(WARM_CACHE, key=lambda k: WARM_CACHE[k].opened_at)
         WARM_CACHE.pop(oldest, None)
@@ -430,7 +434,7 @@ def do_open(req: dict) -> dict:
     # resident GPU versus stateless CPU is not a fair acceleration comparison.
     if not force_cpu and not force_gpu:
         use_gpu, route_reason = GA.pick_engine_for(
-            str(path), "session", details=route_details
+            str(path), "session", details=route_details, read_columns=cols
         )
         if not use_gpu:
             return _err(
@@ -903,12 +907,12 @@ def batch_workflow(steps):
         **({"top_k": 30} if step["op"] == "groupby" else {}), **step}))[0] for step in steps]
 
 
-def do_batch(req: dict) -> dict:
+def do_batch(req: dict, *, plans=None) -> dict:
     """Execute an independent bounded plan on one projected resident frame."""
     request_started = time.perf_counter()
     steps = req.get("steps")
     allowed = {"op", "by", "agg", "columns", "top_k"}
-    if not isinstance(steps, list) or not 1 <= len(steps) <= 8:
+    if not isinstance(steps, list) or not 1 <= len(steps) <= (256 if plans else 8):
         return _err("steps must contain 1 to 8 analyses")
     for step in steps:
         if (not isinstance(step, dict) or set(step) - allowed
@@ -948,6 +952,7 @@ def do_batch(req: dict) -> dict:
     context = "warm" if GA._ENGINE is not None and GA._ENGINE.is_gpu else "cold"
     decision = {"selected": None, "reason": "explicit/native request"}
     selected = None
+    warm_init_seconds = 0.0
     eligibility = GA.hybrid_execution.preflight(path, columns, batch_workflow(steps), backend)
     if eligibility and backend == "cpu_gpu":
         return _err("CPU-to-GPU loading unavailable: " + eligibility)
@@ -958,7 +963,7 @@ def do_batch(req: dict) -> dict:
     if backend == "auto" and not eligibility and not force_cpu:
         selected, decision = GA.hybrid_execution.choose(
             req.get("hybrid_profile", os.environ.get("GPU_ANALYSIS_HYBRID_PROFILE")), path,
-            columns, batch_workflow(steps), "batch_" + context)
+            columns, batch_workflow(steps), ("reports_" if plans else "batch_") + context)
         if selected == "cpu_gpu":
             backend = "cpu_gpu"
         elif selected:
@@ -971,10 +976,15 @@ def do_batch(req: dict) -> dict:
         force_cpu = selected == "cpu"
         force_gpu = not force_cpu
     elif not force_cpu and not force_gpu:
-        use_gpu, route_reason = GA.pick_engine_for(path, "session")
+        if len(steps) > 1 and (GA._decoded_numeric_bytes(path, columns) or 0) >= GA.CROSSOVER_BYTES_NARROW:
+            init_started = time.perf_counter()
+            GA.detect_engine()
+            warm_init_seconds = time.perf_counter() - init_started
+        signals = {}
+        use_gpu, route_reason = GA.pick_engine_for(path, "session", details=signals, read_columns=columns)
         force_cpu = not use_gpu
         decision = {"selected": "native" if use_gpu else "cpu",
-                    "policy": "measured_file_size_crossover",
+                    "policy": signals.get("policy", "measured_file_size_crossover"),
                     "reason": route_reason,
                     "calibration": decision}
     started = time.perf_counter()
@@ -988,12 +998,57 @@ def do_batch(req: dict) -> dict:
                       "_batch_load_backend": backend})
     if not opened.get("ok"):
         return opened
+    opened["loading"]["engine_init_seconds"] += warm_init_seconds
     sid = opened["session_id"]
     results = []
+    memo = {}
+    max_k = {}
+    def memo_key(step):
+        signature = batch_workflow([step])[0]
+        if step["op"] in {"groupby", "outliers", "corr"}:
+            signature.pop("top_k", None)
+        return json.dumps(signature, sort_keys=True)
+    if plans:
+        for step in steps:
+            key = memo_key(step)
+            max_k[key] = max(max_k.get(key, 0), batch_workflow([step])[0]["top_k"])
     try:
         for index, step in enumerate(steps):
             defaults = {"top_k": 30} if step["op"] == "groupby" else {}
-            reply = do_analyze({**defaults, **step, "sid": sid})
+            key = memo_key(step) if plans else None
+            if key in memo:
+                if _file_identity(path) != SESSIONS[sid].identity:
+                    return _err("input changed during shared batch", failed_step=index)
+                reply = copy.deepcopy(memo[key])
+                reply.update(rows_scanned=0, step_seconds=0, result_reused=True,
+                             source_rows=opened["rows"],
+                             cumulative_seconds=round(SESSIONS[sid].load_seconds + SESSIONS[sid].analysis_seconds, 3),
+                             steps_this_session=SESSIONS[sid].steps,
+                             note="Exact transaction result reused; no new scan.")
+                reply["execution_decision"].update(policy="transaction_result_reuse",
+                                                   actual_backend="result_cache")
+                reply["execution_decision"]["observed"].update(compute_seconds=0,
+                    elapsed_seconds=0, rows_scanned=0, result_reused=True)
+                reply[step["op"]]["rows_scanned"] = 0
+                reply[step["op"]]["compute_seconds"] = 0
+            else:
+                request = {**defaults, **step, "sid": sid}
+                if plans and step["op"] in {"groupby", "outliers", "corr"}:
+                    request["top_k"] = max_k[key]
+                reply = do_analyze(request)
+                if plans and reply.get("ok") and not reply.get("fallback_reason"):
+                    memo[key] = copy.deepcopy(reply)
+            if plans and reply.get("ok"):
+                wanted_k = batch_workflow([step])[0]["top_k"]
+                payload = reply[step["op"]]
+                if step["op"] == "groupby":
+                    payload["top_k"] = payload["top_k"][:wanted_k]
+                elif step["op"] == "corr":
+                    payload["pairs"] = payload["pairs"][:wanted_k]
+                elif step["op"] == "outliers":
+                    for column in payload["results"].values():
+                        if "examples" in column:
+                            column["examples"] = column["examples"][:wanted_k]
             group = reply.get("groupby") or {}
             if len(group.get("top_k", [])) < group.get("groups", 0):
                 reply["group_coverage_warning"] = (
@@ -1016,9 +1071,38 @@ def do_batch(req: dict) -> dict:
         do_close({"sid": sid})
 
 
+def do_batch_many(req: dict) -> dict:
+    """A file-validated transaction with bounded per-plan exact result reuse."""
+    plans = req.get("plans")
+    if (not isinstance(plans, list) or not 1 <= len(plans) <= 32 or any(
+            not isinstance(steps, list) or not 1 <= len(steps) <= 8 for steps in plans)):
+        return _err("plans must contain 1-32 lists of 1-8 analyses")
+    reply = do_batch({**req, "steps": [step for plan in plans for step in plan]}, plans=plans)
+    if not reply.get("ok"):
+        return reply
+    results = []
+    cursor = 0
+    for index, plan in enumerate(plans):
+        steps = reply["results"][cursor:cursor + len(plan)]
+        loading = copy.deepcopy(reply["loading"])
+        loading["scope"] = "one validated load per transaction; compatible plans share exact results"
+        if index:
+            loading.update(load_seconds=0, engine_init_seconds=0, attempts=[],
+                           read_count=0, conversion_count=0, transaction_reuse=True)
+        results.append({**reply, "results": steps, "loading": loading,
+                        "load_seconds": reply["load_seconds"] if index == 0 else 0,
+                        "total_seconds": sum(s["execution_decision"]["observed"]["elapsed_seconds"]
+                                             for s in steps),
+                        "shared_transaction": True, "transaction_plans": len(plans)})
+        cursor += len(plan)
+    return {"ok": True, "results": results, "total_seconds": reply["total_seconds"],
+            "rows": reply["rows"], "loading": reply["loading"]}
+
+
 HANDLERS = {
     "oneshot": do_oneshot,
     "batch": do_batch,
+    "batch_many": do_batch_many,
     "open": do_open,
     "analyze": do_analyze,
     "list": do_list,
@@ -1054,7 +1138,7 @@ def handle(req: dict) -> dict:
                       else bool(SESSIONS.get(sid) and SESSIONS[sid].engine.is_gpu))
     else:
         # oneshot delegates to GA.main, which coordinates CLI and fallback too.
-        needs_slot = cmd in {"open", "batch"} and not bool(req.get("force_cpu"))
+        needs_slot = cmd in {"open", "batch", "batch_many"} and not bool(req.get("force_cpu"))
     if not needs_slot:
         return fn(req)
     try:

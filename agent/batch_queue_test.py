@@ -39,7 +39,7 @@ class BatchQueueTests(unittest.TestCase):
         self.plan("first")
         self.plan("second")
         run_dir, summary = batch_queue.run(self.manifest(["first", "second"]),
-                                           self.root / "out")
+                                           self.root / "out", execution_mode="isolated")
         self.assertTrue(summary["ok"])
         self.assertEqual(len({job["pid"] for job in summary["jobs"]}), 2)
         self.assertLess(max(job["started_at_utc"] for job in summary["jobs"]),
@@ -73,7 +73,7 @@ class BatchQueueTests(unittest.TestCase):
         with patch.object(batch_queue, "_run_job", side_effect=fake):
             _, summary = batch_queue.run(
                 self.manifest(["cpu_a", "cpu_b", "gpu", "cpu_c"]),
-                self.root / "out", max_cpu_workers=2)
+                self.root / "out", max_cpu_workers=2, execution_mode="isolated")
         self.assertTrue(summary["ok"])
         self.assertEqual(summary["jobs"][2]["lane"], "gpu_exclusive")
         self.assertLess(events.index(("start", "cpu_a")), events.index(("end", "cpu_b")))
@@ -114,6 +114,55 @@ class BatchQueueTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("process group was stopped", result["error"])
         self.assertLess(result["seconds"], 5)
+
+    def test_shared_cpu_transaction_and_persistent_submissions(self):
+        self.plan("first")
+        self.plan("second")
+        manifest = self.manifest(["first", "second"])
+        with batch_queue.QueueExecutor(2) as executor:
+            _, first = batch_queue.run(manifest, self.root / "out", executor=executor)
+            _, second = batch_queue.run(manifest, self.root / "out", executor=executor)
+            self.assertTrue(first["ok"] and second["ok"])
+            self.assertEqual(first["groups"], 1)
+            self.assertEqual(len({job["pid"] for job in first["jobs"]}), 1)
+            self.assertEqual(first["jobs"][0]["pid"], second["jobs"][0]["pid"])
+            cached = json.loads((Path(first["jobs"][1]["report_dir"]) / "result.json").read_text())
+            self.assertTrue(cached["result"]["results"][0]["result_reused"])
+            self.assertEqual(cached["result"]["results"][0]["rows_scanned"], 0)
+        self.assertTrue(executor.closed)
+        self.assertIsNone(executor.cpu_runners[0].proc)
+
+    def test_shared_failure_preserves_good_report(self):
+        self.plan("good")
+        self.plan("bad", missing=True)
+        _, summary = batch_queue.run(self.manifest(["good", "bad"]), self.root / "out")
+        self.assertFalse(summary["ok"])
+        self.assertTrue(summary["jobs"][0]["ok"])
+        self.assertFalse(summary["jobs"][1]["ok"])
+
+    def test_auto_uses_dedicated_worker_and_releases_it(self):
+        self.plan("first", force_cpu=False)
+        self.plan("second", force_cpu=False)
+        with batch_queue.QueueExecutor(2) as executor:
+            _, summary = batch_queue.run(self.manifest(["first", "second"]), self.root / "out", executor=executor)
+            self.assertTrue(summary["ok"], summary)
+            self.assertTrue(executor.gpu.proc is not None)
+            gpu_process = executor.gpu.proc
+            self.assertEqual(len({job["pid"] for job in summary["jobs"]}), 1)
+        self.assertIsNotNone(gpu_process.poll())
+        self.assertIsNone(executor.gpu.proc)
+
+    def test_cpu_groups_use_bounded_distinct_workers(self):
+        self.plan("first")
+        other = self.plan("second")
+        (self.root / "other.csv").write_text("region,revenue\nX,42\n", encoding="utf-8")
+        plan = json.loads(other.read_text())
+        plan["file_path"] = "other.csv"
+        other.write_text(json.dumps(plan))
+        _, summary = batch_queue.run(self.manifest(["first", "second"]), self.root / "out")
+        self.assertTrue(summary["ok"])
+        self.assertEqual(summary["groups"], 2)
+        self.assertEqual(len({job["pid"] for job in summary["jobs"]}), 2)
 
 
 if __name__ == "__main__":

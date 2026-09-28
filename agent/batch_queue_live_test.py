@@ -47,7 +47,9 @@ def main(argv: list[str] | None = None) -> int:
     manifest.write_text(json.dumps({"jobs": [
         {"name": name, "plan": f"{name}.json"} for name in names
     ]}), encoding="utf-8")
-    run_dir, summary = batch_queue.run(manifest, output_root / "queues", 2)
+    # Legacy isolation is still explicitly testable. Optimized reuse and
+    # same-file grouping have their own exact-parity benchmark and unit tests.
+    run_dir, summary = batch_queue.run(manifest, output_root / "queues", 2, execution_mode="isolated")
     if not summary["ok"]:
         raise AssertionError(summary["jobs"])
     cpu_a, cpu_b, gpu_a, gpu_b = summary["jobs"]
