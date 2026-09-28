@@ -386,6 +386,18 @@ def _compact(obj, depth: int = 0, max_list: int = 30, max_depth: int = 4):
     return obj
 
 
+def _compact_operation(payload, operation):
+    # outliers.results[column].examples[row] is one level deeper than other
+    # result rows. Preserve these already-bounded flat records, not a placeholder.
+    if operation == "outliers":
+        return _compact(payload, max_depth=5)
+    compacted = _compact(payload)
+    if (operation == "auto" and isinstance(payload, dict)
+            and isinstance(payload.get("outliers"), dict)):
+        compacted["outliers"] = _compact_operation(payload["outliers"], "outliers")
+    return compacted
+
+
 def _trim_matrix(matrix: dict, max_cols: int = 8) -> dict:
     """Keep a correlation matrix readable: at most max_cols columns per axis."""
     if not isinstance(matrix, dict):
@@ -814,7 +826,7 @@ def analyze_batch(file_path: str, steps: list, force_cpu: bool = False,
                 if op in result:
                     if op == "corr" and "matrix" in result[op]:
                         result[op]["matrix"] = _trim_matrix(result[op]["matrix"])
-                    result[op] = _compact(result[op])
+                    result[op] = _compact_operation(result[op], op)
         if reply["success"]:
             _remember_last_file(_resolve_data_path(file_path))
         return json.dumps(reply, ensure_ascii=False, default=str)
@@ -937,7 +949,7 @@ def _resident_single_analysis(path: str, operation: str, by: str | None,
                          "load_seconds": opened.get("load_seconds"),
                          "warm_cache_hit": bool(opened.get("cache_hit"))})
         decision["observed"] = observed
-        result = {"op": operation, operation: _compact(payload),
+        result = {"op": operation, operation: _compact_operation(payload, operation),
                   "rows_scanned": rows, "total_seconds": elapsed}
         if group and len(group.get("top_k", [])) < group.get("groups", 0):
             result["group_coverage_warning"] = (
@@ -1025,7 +1037,7 @@ def dataset_session(operation: str, file_path: str = None, session_id: str = Non
         # model sees a consistent shape either way.
         for key in ("profile", "summary", "groupby", "corr", "outliers", "auto"):
             if key in out:
-                out[key] = _compact(out[key])
+                out[key] = _compact_operation(out[key], key)
         if operation == "analyze" and out.get("engine") != "cudf":
             route = out.get("routing_reason")
             if route:
@@ -1160,6 +1172,10 @@ def analyze_dataset(file_path: str, operation: str, by: str = None, agg: str = N
                     rows_scanned = block["rows_scanned"]
                     break
 
+        compacted_result = _compact(result)
+        for op in ("outliers", "auto"):
+            if op in result:
+                compacted_result[op] = _compact_operation(result[op], op)
         out = {
             "success": True,
             "file": os.path.basename(path),
@@ -1171,7 +1187,7 @@ def analyze_dataset(file_path: str, operation: str, by: str = None, agg: str = N
             "transport_timings": getattr(proc, "transport_timings", None),
             "loading": payload.get("loading"),
             "execution_decision": payload.get("execution_decision"),
-            "result": _compact(result),
+            "result": compacted_result,
         }
         # Tell the model plainly when it did NOT get GPU speed, so it cannot overclaim. The two cases
         # must be worded differently, because they mean different things: a deliberate routing choice

@@ -13,6 +13,8 @@
 [GB10 复测与真实 1.135 亿行实验](docs/POST_CACHE_AND_PUBLIC_DATA_RESULTS.md)
 [最后一轮 GB10 算法与端到端优化对照](docs/FINAL_ROUND_RESULTS.md)
 [七档规模与冷/热最快路径复测](docs/ALL_SCALES_RESULTS.md)
+[最新核心部署与真实 Agent 验收](docs/FINAL_CORE_DEPLOYMENT.md) · [GUI 核心接口约定](docs/GUI_CORE_CONTRACT.md)
+[三份新公开数据与八组 CPU/GPU/自动选路测试](docs/new-public-data-20260929/README.md)
 
 [CPU 加载＋GPU 计算：三个独立开发分支](docs/HYBRID_BRANCHES.md)
 
@@ -20,9 +22,9 @@
 
 A tool-calling agent that runs exact statistical analysis over large local datasets. On a
 configured NVIDIA GPU it can use RAPIDS cuDF; otherwise it reports the actual pandas/CPU path.
-The model decides what to compute and writes the answer from local tool results; raw dataset
-rows are not sent as the model's input. User questions, paths and statistical summaries do reach
-the selected model provider.
+The model decides what to compute and writes the answer from local tool results. Whole dataset
+files are not uploaded; user questions, paths, statistical summaries and bounded previews or
+outlier examples returned by tools do reach the selected model provider.
 
 Submitted to the third NVIDIA DGX Spark Hackathon, Agent Skills track.
 

@@ -1,0 +1,10 @@
+{
+  "architecture": "aarch64",
+  "runtime_sha256": {
+    "skills/cudf-analytics/scripts/gpu_analytics.py": "46301bec05712a959c5340312233c1a9da75b2516db12d5b3ba73227d2503209",
+    "skills/cudf-analytics/scripts/gpu_session.py": "88eb5a0f4db0e74647f9599ca0fc07cf80ef6176a395ba762da7c435343799ec",
+    "skills/cudf-analytics/scripts/hybrid_execution.py": "30df1ca9a5b9bce23ad2e314dc2fbd5c29764ea845836dc9ee2216b25d05f74d",
+    "benchmark/prepare_new_public_data.py": "839607a37a3c34389557fa1f911bd82ba0b03e086d8bac43a25fba3d41aaf3d2",
+    "benchmark/public_diversity_benchmark.py": "ddf8cd7af6b6bbfecfbe1b8521ebb1633375ee30cd0e400f4fa4c165c21063c6"
+  }
+}

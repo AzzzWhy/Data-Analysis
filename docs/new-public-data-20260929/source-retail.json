@@ -1,0 +1,50 @@
+{
+  "rows": 1067371,
+  "columns": [
+    "Invoice",
+    "StockCode",
+    "Description",
+    "Quantity",
+    "InvoiceDate",
+    "Price",
+    "Customer ID",
+    "Country"
+  ],
+  "dtypes": {
+    "Invoice": "string",
+    "StockCode": "string",
+    "Description": "string",
+    "Quantity": "int64",
+    "InvoiceDate": "datetime64[ns]",
+    "Price": "float64",
+    "Customer ID": "string",
+    "Country": "string"
+  },
+  "null_counts": {
+    "Invoice": 0,
+    "StockCode": 0,
+    "Description": 4382,
+    "Quantity": 0,
+    "InvoiceDate": 0,
+    "Price": 0,
+    "Customer ID": 243007,
+    "Country": 0
+  },
+  "round_trip_exact": true,
+  "sheets": {
+    "Year 2009-2010": 525461,
+    "Year 2010-2011": 541910
+  },
+  "preparation": "Concatenated both original sheets in workbook order. Identifiers stored as nullable text, timestamps preserved; no dropped returns, blank customers, rows or columns. Overlaps in period with earlier Online Retail dataset; not independent retail evidence.",
+  "dataset": "retail",
+  "source_url": "https://archive.ics.uci.edu/dataset/502/online+retail+ii",
+  "doi": "10.24432/C5CG6D",
+  "creator": "Daqing Chen",
+  "license_note": "CC BY 4.0",
+  "archive_sha256": "572e36277c2390fbfde10664750731e0a86f55e33470d91919085f0408e67bfb",
+  "parquet_sha256": "763c8bb619da9502610d3a7b2da0eabc5e1205c0d43619e250a7212e02cc02a3",
+  "archive_bytes": 45622418,
+  "parquet_bytes": 7249733,
+  "seconds": 25.709466985892504,
+  "source_rows_verified": true
+}
