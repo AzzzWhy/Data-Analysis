@@ -243,8 +243,11 @@ function renderSession(doc) {
   els.mb.textContent = active
     ? (active.resident_mb === null ? "未知" : active.resident_mb + " MB")
     : (doc.warm_cache_mb === null || doc.warm_cache_mb === undefined ? "—" : doc.warm_cache_mb + " MB（保留帧）");
-  els.frames.textContent = doc.warm_frames === null ? "未知"
-    : doc.warm_frames + " 帧" + (doc.warm_frames === 0 && !active ? "（本机无 cuDF 时不会累积）" : "");
+  // Zero retained frames says nothing about whether this machine has cuDF -- a host that served
+  // a `GPU · cuDF (reuse)` answer a moment ago has exactly zero of them once they are released,
+  // so the old parenthetical contradicted the engine chip on the same screen. `未知` already
+  // covers the case where the worker did not answer at all.
+  els.frames.textContent = doc.warm_frames === null ? "未知" : doc.warm_frames + " 帧";
   els.hint.textContent = wedged ? doc.error
     : (doc.reused ? "上一次结果来自复用，未重新读盘。" : "保留帧只报数量与总字节：worker 的 list 不报每个帧是哪个文件。");
 }
@@ -741,7 +744,8 @@ els.release.addEventListener("click", async () => {
   if (data.error) {
     line(els.log, "bad", `!! 释放失败：${data.error}`);
   } else {
-    line(els.log, "ok", `释放：关闭 ${data.closed} 个会话，丢弃 ${data.warm_frames_dropped} 个保留帧；` +
+    const freed = data.bytes_freed_mb ? `，约 ${data.bytes_freed_mb} MB` : "";
+    line(els.log, "ok", `释放：关闭 ${data.closed} 个会话，丢弃 ${data.warm_frames_dropped} 个保留帧${freed}；` +
          `之后 ${data.sessions_after} 会话 / ${data.warm_frames_after} 帧`);
   }
   if (data.state) renderSession({ ...data.state, reused: false });

@@ -41,7 +41,7 @@ DATA="${DEMO_DATA:-$AGENT_DIR/../benchmark/demo/sales_demo.csv}"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
-PASS=0; FAIL=0
+PASS=0; FAIL=0; MATCHED=0
 FAILED_CASES=""
 ONLY=""
 [ "$1" = "--only" ] && ONLY="$2"
@@ -62,6 +62,7 @@ PYTHON="${PYTHON:-python}"
 run_case() {
   local name="$1" question="$2" expect="$3" forbid="${4:-}"
   if [ -n "$ONLY" ] && [[ "$name" != *"$ONLY"* ]]; then return; fi
+  MATCHED=$((MATCHED + 1))
 
   echo "----------------------------------------------------------------------"
   echo "CASE: $name"
@@ -88,11 +89,22 @@ run_case() {
     echo "  !! non-zero exit ($code)"
     ok=0
   fi
+  # Judge the evidence, not the transcript. Every run echoes the question back and prints the
+  # capability banner ("[agent] skills available to the model: dataset_session, analyze_dataset,
+  # list_datasets, export_deliverables"), so a case whose pattern names a tool can be satisfied by
+  # prose the agent emitted about itself rather than by a result. Strip exactly those two things:
+  # first the box-drawing and padding the frontend adds, then the verbatim question line and the
+  # banner line. Nothing else is removed -- an earlier version that skipped whole sections by
+  # marker lost the answer too, because rich opens the answer with a corner glyph, not `Agent`.
+  local judge="$WORK/$name.judge"
+  sed -E 's/[│╭╮╰╯─]+/ /g; s/[[:space:]]+/ /g; s/^ //; s/ $//' "$out" \
+    | grep -v -F -x -- "$question" \
+    | grep -v -F -e 'skills available to the model:' > "$judge" || true
   if [ -n "$expect" ]; then
-    if grep -qE "$expect" "$out"; then
-      echo "  match: $(grep -oE "$expect" "$out" | head -1)"
+    if grep -qE "$expect" "$judge"; then
+      echo "  match: $(grep -oE "$expect" "$judge" | head -1)"
     else
-      echo "  !! expected pattern not found: $expect"
+      echo "  !! expected pattern not found: $expect (question and capability banner excluded)"
       ok=0
     fi
   fi
@@ -195,7 +207,20 @@ run_case "plan-attached" \
   "load refused|device memory|out of memory|insufficient memory"
 
 echo "==============================================================="
-echo "PASS=$PASS  FAIL=$FAIL  tool calls matched across the suite=$TRACE_TOTAL"
+# The case list is derived from this file rather than hard-coded, so adding a 12th case cannot
+# silently turn an "11/11" gate into a pass on 11 of 12. Resolved to an absolute path because the
+# script has already cd'd into $AGENT_DIR by now, which makes a relative "$0" unopenable.
+SELF="$AGENT_DIR/$(basename "${BASH_SOURCE[0]}")"
+CASE_COUNT=$(grep -c '^run_case ' "$SELF")
+if [ -n "$ONLY" ] && [ "$MATCHED" -eq 0 ]; then
+  # A substring that names nothing used to print "ALL CRITERIA CASES PASSED" and exit 0, which
+  # makes a typo indistinguishable from a clean run -- and a *partial* run indistinguishable from
+  # a full one, since `--only session` also printed 11-case wording.
+  echo "!! --only '$ONLY' matched no case. Available:"
+  grep -o '^run_case "[^"]*"' "$SELF" | sed 's/^run_case /     /'
+  exit 1
+fi
+echo "PASS=$PASS  FAIL=$FAIL  cases_run=$MATCHED/$CASE_COUNT  tool calls matched across the suite=$TRACE_TOTAL"
 
 # The guard that was missing. Most of these cases load a real file and must produce tool calls,
 # so a whole suite with not one matched trace line is not an agent that never reaches for a
@@ -207,6 +232,12 @@ if [ -z "$ONLY" ] && [ "$TRACE_TOTAL" -eq 0 ]; then
   echo "Real runs call tools, so this means the rendered trace format changed and every forbid"
   echo "check reported above was vacuously satisfied. Fix the matcher before trusting any"
   echo "green in this output."
+  exit 1
+fi
+
+if [ -z "$ONLY" ] && [ "$MATCHED" -ne "${CASE_COUNT:-0}" ]; then
+  # Only meaningful for a full run: a filtered run is allowed to cover a subset, and now says so.
+  echo "!! $MATCHED of $CASE_COUNT cases ran. Something returned early -- not trusting that green."
   exit 1
 fi
 

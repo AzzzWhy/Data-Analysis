@@ -656,7 +656,11 @@ def main() -> int:
                   'or piped input. Run agent/gui.py directly if you need that.', file=sys.stderr)
             return 2
         import gui
-        return gui.serve(port=args.gui_port or gui.DEFAULT_PORT, model=args.model)
+        # The --gui-port help advertises GPU_GUI_PORT, but this fell straight back to the
+        # DEFAULT_PORT constant, so the documented env var silently did nothing through --gui
+        # (running agent/gui.py directly was the only way it worked).
+        gui_port = args.gui_port or int(os.environ.get('GPU_GUI_PORT') or gui.DEFAULT_PORT)
+        return gui.serve(port=gui_port, model=args.model)
     client = build_client(config) if config.ready else None
     # Full screen is only for an interactive terminal. Scripted --ask runs and pipes keep
     # their stable line-oriented output; --plain explicitly opts out.

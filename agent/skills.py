@@ -800,9 +800,16 @@ def release_all_sessions_and_cache() -> dict:
         before = _worker_call({"cmd": "list"})
         out = _worker_call({"cmd": "close", "sid": "all"})
         after = _worker_call({"cmd": "list"})
+        # `warm_frames_dropped` counts frames sitting in the warm cache. Releasing a *live*
+        # session also frees its frame -- it was never in that cache -- so a release that put
+        # ~1.7 GB back could truthfully report "0 frames dropped" while the occupancy card went to
+        # zero. Report the bytes too, so the log line does not undercut the screen.
+        held_mb = float(before.get("warm_cache_mb") or 0.0) + sum(
+            float(s.get("resident_mb") or 0.0) for s in (before.get("sessions") or []))
         return {
             "closed": before.get("count") or 0,
             "warm_frames_dropped": before.get("warm_cache_count") or 0,
+            "bytes_freed_mb": round(held_mb, 1),
             "sessions_after": after.get("count") or 0,
             "warm_frames_after": after.get("warm_cache_count") or 0,
             "detail": out,

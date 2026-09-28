@@ -64,9 +64,12 @@ if _SCRIPTS not in sys.path:
 from smoke_test import make_fixture  # noqa: E402
 
 FAILS = []
+RAN = 0
 
 
 def check(label, ok, detail=""):
+    global RAN
+    RAN += 1
     print(f"  [{'PASS' if ok else 'FAIL'}] {label}{'  ' + detail if detail else ''}")
     if not ok:
         FAILS.append(label)
@@ -462,13 +465,84 @@ def main() -> int:
               code == 200 and bad.get("ok") is False, json.dumps(bad)[:140])
         code, noKey = request("/api/settings",
                               {"api_key": "temp-only", "remember_key": False}, method="PATCH")
-        check("a key offered without consent to persist it warns",
-              noKey.get("ok") is True and "not saved" in noKey.get("warning", ""),
-              json.dumps(noKey)[:200])
+        check("a key offered without consent to persist it warns truthfully",
+              noKey.get("ok") is True and "discarded" in noKey.get("warning", "")
+              and "disk" in noKey.get("warning", ""), json.dumps(noKey)[:200])
         check("and it is genuinely not on disk",
               "temp-only" not in Path(scratch_cfg).read_text(encoding="utf-8"))
+
+        # Regression for the 2026-09-28 review finding: the submission above also carried
+        # remember_key=false, and persisting that flag made `save_config` write a key-less file
+        # (api_config.py:104), deleting a credential the operator already had working. Refusing one
+        # key must not be an excuse to rewrite the whole file.
+        code, again = request("/api/settings",
+                              {"base_url": "https://first.example/v1", "api_key": secret,
+                               "model": "chosen-model", "remember_key": True,
+                               "skip_setup": True, "language": "zh"}, method="PATCH")
+        check("a working credential is back in place for the regression checks",
+              json.loads(Path(scratch_cfg).read_text(encoding="utf-8")).get("api_key") == secret)
+        code, off = request("/api/settings", {"api_key": "offered-no-consent",
+                                             "remember_key": False}, method="PATCH")
+        kept = json.loads(Path(scratch_cfg).read_text(encoding="utf-8"))
+        check("the stored key survives a submission that refuses a new one",
+              kept.get("api_key") == secret, json.dumps({k: v for k, v in kept.items()
+                                                         if k != "api_key"})[:160])
+        check("remember_key is not downgraded as a side effect", kept.get("remember_key") is True)
+        check("the offered key still never reaches disk",
+              "offered-no-consent" not in Path(scratch_cfg).read_text(encoding="utf-8"))
+        check("and the question box stays open on the surviving credential",
+              off.get("config_ready") is True, json.dumps(off)[:160])
+
+        stamp = os.stat(scratch_cfg).st_mtime_ns
+        code, noop = request("/api/settings", {"language": "zh"}, method="PATCH")
+        check("a submit that changes nothing leaves the file byte-identical and unstamped",
+              os.stat(scratch_cfg).st_mtime_ns == stamp
+              and noop.get("ok") is True)
+
+        code, drop = request("/api/settings", {"remember_key": False}, method="PATCH")
+        check("turning the checkbox off on its own does delete the plaintext key",
+              secret not in Path(scratch_cfg).read_text(encoding="utf-8"),
+              json.dumps({k: v for k, v in json.loads(
+                  Path(scratch_cfg).read_text(encoding="utf-8")).items()
+                  if k != "api_key"})[:160])
+        check("and it says so instead of leaving the operator to discover it",
+              "removes the stored plaintext key" in drop.get("warning", ""),
+              json.dumps(drop)[:200])
     finally:
         os.environ.pop("GPU_ANALYSIS_CONFIG", None)
+
+    print("=== spec #9: the engine chips are pinned by literal, not just by predicate ===")
+    # `decision_is_warm` was already asserted above, but nothing locked the strings the operator
+    # actually reads -- and the reuse label fired in production on the node before any test did.
+    # Fallback and by-choice must differ in text *and* style: painting a deliberate CPU route as a
+    # defect, or a real fallback as a choice, are the two inversions this project cannot ship.
+    chips = [
+        ({"execution_decision": {"actual_backend": "cudf", "selected_backend": "cudf",
+                                 "policy": "measured_file_size_crossover"}},
+         "GPU · cuDF", "gpu"),
+        ({"execution_decision": {"actual_backend": "cudf", "selected_backend": "cudf",
+                                 "policy": "warm_cache",
+                                 "observed": {"phase": "warm_cache_hit"}}},
+         "GPU · cuDF (reuse)", "gpu"),
+        ({"execution_decision": {"actual_backend": "pandas", "selected_backend": "cudf",
+                                 "fallback_reason": "cuDF unavailable"}},
+         "CPU · pandas (fallback)", "warn"),
+        ({"execution_decision": {"actual_backend": "pandas", "selected_backend": "pandas",
+                                 "reason": "below the measured crossover"}},
+         "CPU · pandas (by choice)", "cpu"),
+        ({}, "no result yet", "muted"),
+    ]
+    for decision, want, want_class in chips:
+        got = gui.chip_state(decision)
+        check(f"chip renders {want!r} with class {want_class!r}",
+              got.get("label") == want and got.get("class") == want_class,
+              json.dumps({k: got.get(k) for k in ("label", "class")}, ensure_ascii=False))
+    warm = gui.chip_state(chips[1][0])
+    check("the reuse chip names the warm cache as its source",
+          "warm cache" in warm.get("note", ""), str(warm.get("note"))[:120])
+    cold = gui.chip_state(chips[2][0])
+    check("a fallback is never styled like a deliberate choice",
+          cold.get("class") != chips[3][1], json.dumps(cold)[:160])
 
     httpd.shutdown()
     gui._shutdown(wb)
@@ -477,10 +551,15 @@ def main() -> int:
     check("the openai double never pulled in a real HTTP client",
           "httpx" not in sys.modules,
           f"httpx in sys.modules: {'httpx' in sys.modules}")
+    # Both numbers, because they are not the same thing: a parametrised label calls `check` from
+    # one site several times, so "74" and "75" can both be true of one run. Printing the pair means
+    # nobody has to reconstruct which counting rule produced a diff against another machine.
+    sites = sum(1 for line in Path(__file__).read_text(encoding="utf-8").splitlines()
+                if line.lstrip().startswith("check("))
     if FAILS:
-        print(f"FAILED ({len(FAILS)}): {FAILS}")
+        print(f"FAILED ({len(FAILS)} of {RAN} checks from {sites} call sites): {FAILS}")
         return 1
-    print("ALL WORKBENCH CHECKS PASSED")
+    print(f"ALL WORKBENCH CHECKS PASSED ({RAN} checks from {sites} call sites)")
     return 0
 
 

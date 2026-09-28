@@ -1296,7 +1296,7 @@ def chip_checks():
           "policy": "measured_file_size_crossover", "observed": {}}, "gpu", "GPU · cuDF"),
         ({"actual_backend": "cudf", "selected_backend": "cudf", "fallback_reason": None,
           "policy": "resident_reuse", "observed": {"phase": "session_reuse"}},
-         "gpu", "GPU · cuDF (warm)"),
+         "gpu", "GPU · cuDF (reuse)"),
         ({"actual_backend": "pandas", "selected_backend": "cudf",
           "fallback_reason": "cuDF is not installed", "policy": "x", "observed": {}},
          "warn", "CPU · pandas (fallback)"),
@@ -1583,15 +1583,18 @@ ssh -N -L 8765:127.0.0.1:8765 Developer@<jump-host> -p <node-port>
 
 - [ ] **Step 7: 浏览器验收清单（逐条对着 spec §3）**
 
-> **显存怎么量：** GB10 是统一内存，`nvidia-smi` 的 `memory.used` / `memory.total` 返回 **N/A**，
-> `free -h` 又被大量 buff/cache 糊住 —— 所以任何"看显存回落"的判据都不能用 nvidia-smi 的数字。
-> 用 worker 自己的 `cupy.cuda.runtime.memGetInfo()`：`gpu_session.py` 的 `ping` 报
-> `free_gpu_gb`、`list` 报 `resident_mb` / `warm_cache_mb`，工作台卡片读的就是这两个字段。
-> `nvidia-smi -L` 仍然可用（它只列设备名，与内存字段无关），留作 GPU 身份证据。
+> **显存怎么量：** GB10 是统一内存，`nvidia-smi` 的**设备级** `memory.used` / `memory.total` 返回
+> **N/A**（2026-09-28 节点实测），`free -h` 又被大量 buff/cache 糊住 —— 所以"释放了多少"不能看设备
+> 总量。两个可用来源：① worker 自己的 `cupy.cuda.runtime.memGetInfo()`，即 `gpu_session.py` 的 `ping`
+> 报 `free_gpu_gb`、`list` 报 `resident_mb` / `warm_cache_mb`（工作台卡片读的就是这两个字段）；
+> ② `nvidia-smi --query-compute-apps`，它报**每进程**显存，节点实测能拍出 vLLM 44,708 MiB /
+> worker 192 MiB 这样的对照，**释放镜头拍这张表**最直观。`nvidia-smi -L` 只列设备名，留作 GPU 身份证据。
+> （更正记录：本块 01:40 那版写的"任何显存回落判据都不能用 nvidia-smi"过严 —— 错在把设备级字段的
+> N/A 推广到了整张表。这句是我本会话写进 plan 的，按节点实测改回。）
 
 - [ ] `http://127.0.0.1:8765/` 打开，工作台渲染完整，无控制台报错
 - [ ] 选数据集 → 问一句 → 看到 `phase / tool_call / tool_result / answer / done` 依次出现
-- [ ] **验收 #2**：对同一数据集连问 5 轮，第 2 轮起 chip 显示 `GPU · cuDF (warm)`，单步耗时接近 `references/engine-contract.md` 的 ~0.06 s（这是"文件没被重读"的证据，spec §3.2 的原始意图 —— 记住判据是 `policy == "resident_reuse"`，不是 C1 里那个不存在的 `mode`）
+- [ ] **验收 #2**：对同一数据集连问 5 轮，第 2 轮起 chip 显示 `GPU · cuDF (reuse)`，单步耗时接近 `references/engine-contract.md` 的 ~0.06 s（这是"文件没被重读"的证据，spec §3.2 的原始意图）。**判据用 `execution_decision.observed.phase == "warm_cache_hit"`（或 `policy == "warm_cache"`）**：`resident_reuse` 只说明复用了打开中的会话，pandas 路径也会出现，不能当作 GPU 证据
 - [ ] **验收 #5**：按「释放会话」→ 卡片显示会话 0 **且保留帧 0**，显存确实下降（另开 tmux 窗口跑 `gpu_session.py` 的 `ping`，对拍 `free_gpu_gb` 前后差；`/api/session/release` 的响应里 `warm_frames_dropped` / `sessions_after` / `warm_frames_after` 是同一事实的服务端说法）
 - [ ] **验收 #6**：`Ctrl+C` 杀掉服务进程 → `ping` 的 `free_gpu_gb` 回到释放前水平（`skills.py:659` 的 atexit 生效）。不要用 `nvidia-smi` 的内存字段判断，GB10 上它是 N/A
 - [ ] `nvidia-smi -L` 输出在日志抽屉里可见（录视频要用的 GPU 证据）
@@ -1603,7 +1606,7 @@ ssh -N -L 8765:127.0.0.1:8765 Developer@<jump-host> -p <node-port>
 建议顺序（一次过，避免中途等 LLM）：
 1. `nvidia-smi -L` + 数据集 `wc -l` —— 交代环境
 2. 问一个明确的聚合问题，展示 `GPU · cuDF` chip 与 `rows_scanned`
-3. 立刻问第二个 —— 展示 `(warm)` 与单步 ~0.06 s，**这是全片最重要的一帧**（暖复用）
+3. 立刻问第二个 —— 展示 `(reuse)` 与单步 ~0.06 s，**这是全片最重要的一帧**（暖复用）
 4. 切一个 CPU 被**主动**选中的例子（小文件）—— 展示 chip 是 `by choice` 而不是"故障"。这是项目的核心诚实主张，spec §6.3 专门警告过不能渲染反
 5. 按「释放会话」，卡片上 `占用` 与 `保留帧` 同时归零，`ping` 的 `free_gpu_gb` 回落
 6. 收尾提一句 `report.html` 才是交付物

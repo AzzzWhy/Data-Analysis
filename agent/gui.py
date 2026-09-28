@@ -297,6 +297,8 @@ class Workbench:
             config = load_config()
         except Exception as exc:
             return {"ok": False, "error": f"could not read current settings: {exc}"}
+        was = (config.base_url, config.model, config.api_key, config.skip_setup,
+               config.remember_key, config.language)
 
         warning = ""
         new_base = str(patch.get("base_url") or "").strip()
@@ -314,21 +316,39 @@ class Workbench:
         for field in ("model", "skip_setup", "remember_key", "language"):
             if field in patch:
                 setattr(config, field, patch[field])
-        if patch.get("api_key"):
-            if not config.remember_key:
-                warning = ("api_key was not saved: remember_key is false, and storing a "
-                           "plaintext key has to be an explicit choice. It is used for this "
-                           "run only.")
+        if patch.get("api_key") and not config.remember_key:
+            # The workbench rebuilds its client from disk (`_configure` calls `load_config`), so a
+            # key that is not persisted cannot be used here at all -- say that, rather than
+            # implying a memory-only session the GUI does not have. And do not let this submission
+            # downgrade remember_key either: `save_config` writes the key only while the flag is
+            # true (api_config.py:104), so persisting the flag as false would rewrite
+            # connection.json with no key in it and delete a credential that was already working.
+            warning = ("api_key was discarded: without 记住密钥 / Remember key nothing is written, "
+                       "and the workbench reads its credential from disk, so an unpersisted key "
+                       "cannot be used here. To replace the stored key, submit again with Remember "
+                       "key ticked; to stop keeping the stored plaintext key, change that checkbox "
+                       "on its own.")
+            if config.base_url == was[0]:
+                config.remember_key = was[4]
+                config.api_key = was[2]
+        elif patch.get("api_key"):
             config.api_key = str(patch["api_key"])
+        elif was[4] and not config.remember_key:
+            # Turning the checkbox off really does delete the stored plaintext key, which is the
+            # safe reading of "don't remember" but must not surprise the operator at the next ask.
+            warning = ("remember_key off removes the stored plaintext key from connection.json: "
+                       "the question box closes until a key is saved again or GPU_API_KEY was "
+                       "exported before this server started.")
 
         try:
-            save_config(config)
+            if (config.base_url, config.model, config.api_key, config.skip_setup,
+                    config.remember_key, config.language) != was:
+                # A no-op settings submit used to rewrite the operator's connection.json (its mtime
+                # moved even when every field was identical), and a refused key rewrote it too.
+                save_config(config)
         except Exception as exc:
             # save_config validates the language and refuses anything but zh/en.
             return {"ok": False, "error": f"settings not saved: {type(exc).__name__}: {exc}"}
-        if patch.get("api_key") and not config.remember_key:
-            # Do not leave a credential in the live config object after refusing to persist it.
-            config.api_key = ""
 
         self._configure(self.model)
         response = {
@@ -337,7 +357,10 @@ class Workbench:
             "model": config.model or None,
             "language": config.language,
             "config_ready": self.config_ready,
-            "api_key_stored": bool(self.config_ready),
+            # A key can be live in memory without being on disk -- that is the documented default.
+            # `save_config` writes the field only when remember_key is true, so disk truth is that
+            # flag plus a non-empty key, not merely a non-empty key.
+            "api_key_stored": bool(config.remember_key and config.api_key),
             "warning": warning,
         }
         return response
