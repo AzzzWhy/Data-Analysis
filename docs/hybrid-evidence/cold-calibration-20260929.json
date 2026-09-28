@@ -1,0 +1,13 @@
+{
+  "scope": "GB10; four fixed reports; full fresh queue CLI and workers; OS file cache retained; no LLM; one warmup then three alternating timed runs per explicit route, followed by one auto verification",
+  "units": "seconds",
+  "rows": [
+    {"rows": 20000, "routes": {"cpu": [0.412762, 0.417536, 0.407893], "native": [1.671696, 1.678671, 1.706955], "cpu_gpu": [1.221323, 1.178121, 1.213685]}, "selected": "cpu", "auto_verify_seconds": 0.447685, "auto_actual": "cpu", "results_agree": true, "sources_unchanged": true},
+    {"rows": 100000, "routes": {"cpu": [0.433019, 0.462574, 0.426109], "native": [1.690375, 1.718491, 1.722059], "cpu_gpu": [1.193938, 1.283279, 1.248175]}, "selected": "cpu", "auto_verify_seconds": 0.422537, "auto_actual": "cpu", "results_agree": true, "sources_unchanged": true},
+    {"rows": 1000000, "routes": {"cpu": [0.472872, 0.433061, 0.467214], "native": [1.754285, 1.747349, 1.76776], "cpu_gpu": [1.295356, 1.300303, 1.271452]}, "selected": "cpu", "auto_verify_seconds": 0.47756, "auto_actual": "cpu", "results_agree": true, "sources_unchanged": true},
+    {"rows": 5000000, "routes": {"cpu": [0.572983, 0.575573, 0.584949], "native": [1.840053, 1.827149, 1.845699], "cpu_gpu": [1.406112, 1.310759, 1.37698]}, "selected": "cpu", "auto_verify_seconds": 0.616742, "auto_actual": "cpu", "results_agree": true, "sources_unchanged": true},
+    {"rows": 20000000, "routes": {"cpu": [1.098082, 1.120998, 1.086516], "native": [1.975694, 1.964076, 1.945967], "cpu_gpu": [1.512392, 1.503395, 1.522187]}, "selected": "cpu", "auto_verify_seconds": 1.102734, "auto_actual": "cpu", "results_agree": true, "sources_unchanged": true},
+    {"rows": 50000000, "routes": {"cpu": [2.155149, 2.142677, 2.156257], "native": [2.192033, 2.209489, 2.166373], "cpu_gpu": [1.837171, 1.875836, 1.816041]}, "selected": "cpu_gpu", "auto_verify_seconds": 1.801423, "auto_actual": "cpu_gpu", "results_agree": true, "sources_unchanged": true},
+    {"rows": 113500327, "routes": {"cpu": [4.234576, 4.321309, 4.238928], "native": [2.614268, 2.576733, 2.616135], "cpu_gpu": [2.469429, 2.461206, 2.496855]}, "selected": "cpu_gpu", "auto_verify_seconds": 2.450279, "auto_actual": "cpu_gpu", "results_agree": true, "sources_unchanged": true}
+  ]
+}

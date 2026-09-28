@@ -20,6 +20,14 @@
 
 若已用 `benchmark/hybrid_calibrate.py --mode batch` 为**同一文件、列和步骤**生成校准文件，可在计划中填 `"hybrid_profile": "/absolute/path/to/profile.json"` 并保留 `"load_backend": "auto"`。校准过期、文件变化或环境变化时，路由不会套用旧数据；不要把含机器及文件身份的校准文件上传到仓库。也可显式选 `native` 或 `cpu_gpu` 做受支持场景的验证。
 
+对每次新建进程的**多报表队列**，可另行校准完整冷启动耗时（包括队列 CLI、分析 worker、报表写入和退出）。这是明确发起的离线实验，不会在正常报表请求里自动重跑：
+
+```bash
+python benchmark/report_queue_calibrate.py --manifest /absolute/path/to/queue.json --profile /absolute/path/to/local-profile.json --output-root /absolute/path/to/calibration-runs --repeats 5
+```
+
+清单应是 1～32 份相邻、兼容、同源的 `auto` 固定计划，且所需列为受混合加载支持的数值 Parquet 列。脚本先预热，再交错测 CPU、原生 GPU、CPU 读取＋GPU 计算三路；逐份核对完整分析结果，检查原文件未变，然后保存本机 `reports_cold` 校准，并用输出中的 `manifest` 做一次真正的自动路由验收。输出目录包含各轮完整报告及 `calibration-result.json`；运行时间和磁盘占用会随数据规模及重复次数增长。原计划无需事先填写校准文件，但**执行时**应使用脚本打印的已校准清单，或将生成的本机 profile 路径填入原计划。profile 只匹配相同文件身份、列、步骤、机器和软件环境，24 小时后失效；改变报表、数据或代码后要重新校准。当前不做在线学习，也不保证未测数据的最优路径；清空操作系统文件缓存不在实验范围内。
+
 ```bash
 python agent/batch_job.py --plan examples/batch-plan.json --output-root reports
 ```
@@ -63,7 +71,7 @@ with QueueExecutor(max_cpu_workers=2) as pool:
     run(Path("examples/batch-queue.json"), Path("reports/queues"), executor=pool)
 ```
 
-每次提交仍重新读取文件、验证身份；这里只跨提交复用进程，不复用旧数据。相符的 `reports_warm` 校准按整份共享事务实测总时间选路径，差异落在实测波动内时保留 CPU；普通单批继续使用 `batch_warm`/`batch_cold` 校准，两者不混用。校准包含机器与文件身份，只保存在本机，不上传。算法版本变更使旧校准失效，需要重新测量。没有校准时，热 Parquet 路由结合投影列解码大小，不再拿 CSV 换行估计其行数；启发式不保证未知数据的绝对最优。
+每次提交仍重新读取文件、验证身份；这里只跨提交复用进程，不复用旧数据。相符的 `reports_warm` 校准按整份共享事务实测总时间选路径；每次新建队列进程则只使用 `reports_cold` 校准，比较完整冷启动用时，差异落在实测波动内时优先保留 CPU。普通单批继续使用 `batch_warm`/`batch_cold` 校准，各上下文不混用。校准包含机器与文件身份，只保存在本机，不上传。算法版本变更使旧校准失效，需要重新测量。没有校准时，热 Parquet 路由结合投影列解码大小，不再拿 CSV 换行估计其行数；启发式不保证未知数据的绝对最优。
 
 不写 Python 调用者时，也可启动 `python agent/report_service.py --output-root /absolute/path/to/reports`，等待首行 `{"event":"ready",...}`，再向标准输入逐行发送 `{"cmd":"run","manifest":"/absolute/path/to/manifest.json","id":"job-1"}`。每次返回的 `run_dir` 指向独立报告目录；`{"cmd":"status"}` 查询已完成请求和当前 worker，`{"cmd":"close"}` 正常释放进程。消息上限 16 KiB；它不是网络服务，不提供定时调度，也不宜对不可信用户开放该进程的标准输入。固定低频任务继续使用一次性 CLI。
 
@@ -72,6 +80,8 @@ with QueueExecutor(max_cpu_workers=2) as pool:
 最新的精确分析、进程池和跨报表共享优化见 [2026-09-28 GB10 优化验收](GB10_OPTIMIZATION_RESULTS.md)，含小、中、亿级五轮对照与原始证据。下面保留早期实验口径，不能混合比较为同一个加速比。
 
 后续[最后一轮算法与端到端对照](FINAL_ROUND_RESULTS.md)进一步加入低基数数值列的全量频数路径与可选常驻报表服务；回退开关为 `GPU_ANALYSIS_FREQUENCY_STATS=0`。这轮与前述验收使用不同代码版本，应以各自原始记录中的同口径对照为准。
+
+[七档冷启动校准与自动选路验收](COLD_CALIBRATION_RESULTS.md)记录了此前 5000 万和 1.135 亿行自动选路落后的修复效果；仅对已校准任务有效，不能当作跨数据集的通用倍数。
 
 既有 GB10 实验在同一组三项分析中，批量比逐项重新读取的热工作进程快约 1.4～1.8 倍，主要因为批量共用一次读取和转换。具体数值见[修复与验收记录](PUBLIC_DATA_REPAIR.md)及[原始规模样本](hybrid-evidence/public-repair-scale.jsonl)。这描述的是旧热工作口径。
 

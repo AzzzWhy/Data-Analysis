@@ -134,6 +134,43 @@ class HybridTests(unittest.TestCase):
         self.assertEqual(self.select(context="reports_warm"), "cpu_gpu")
         self.assertIsNone(self.select(context="reports_cold"))
 
+    def test_cold_reports_use_complete_startup_cost_not_component_margins(self):
+        measurements = self.measures()
+        measurements["cpu"] = [{"seconds": 4.3, "read_seconds": .3, "compute_seconds": 3.8}]*2
+        measurements["native"] = [{"seconds": 2.60, "read_seconds": .8, "compute_seconds": .7}]*2
+        measurements["cpu_gpu"] = [{"seconds": 2.44, "read_seconds": .4, "compute_seconds": .7}]*2
+        self.save(measurements, context="reports_cold")
+        selected, decision = hybrid.choose(self.profile, self.path, self.columns,
+                                           self.workflow, "reports_cold")
+        self.assertEqual(selected, "cpu_gpu")
+        self.assertEqual(decision["confidence"], "clear")
+        self.assertIsNone(self.select(context="reports_warm"))
+
+    def test_cold_report_tie_keeps_cpu(self):
+        measurements = self.measures()
+        measurements["cpu"] = [{"seconds": 1.01, "read_seconds": .1, "compute_seconds": .5},
+                               {"seconds": 1.03, "read_seconds": .1, "compute_seconds": .5}]
+        measurements["native"] = [{"seconds": 1.00, "read_seconds": .2, "compute_seconds": .5},
+                                  {"seconds": 1.02, "read_seconds": .2, "compute_seconds": .5}]
+        measurements["cpu_gpu"] = [{"seconds": 1.2, "read_seconds": .1, "compute_seconds": .5}]*2
+        self.save(measurements, context="reports_cold")
+        selected, decision = hybrid.choose(self.profile, self.path, self.columns,
+                                           self.workflow, "reports_cold")
+        self.assertEqual(selected, "cpu")
+        self.assertEqual(decision["confidence"], "tie")
+
+    def test_cold_report_checks_spread_against_every_alternative(self):
+        measurements = self.measures()
+        measurements["cpu"] = [{"seconds": 1.0, "read_seconds": .1, "compute_seconds": .5},
+                               {"seconds": 1.8, "read_seconds": .1, "compute_seconds": .5}]
+        measurements["native"] = [{"seconds": 1.2, "read_seconds": .2, "compute_seconds": .5}]*2
+        measurements["cpu_gpu"] = [{"seconds": .9, "read_seconds": .1, "compute_seconds": .5}]*2
+        self.save(measurements, context="reports_cold")
+        selected, decision = hybrid.choose(self.profile, self.path, self.columns,
+                                           self.workflow, "reports_cold")
+        self.assertEqual(selected, "cpu")
+        self.assertEqual(decision["confidence"], "tie")
+
     def test_fingerprint_cache_tracks_routing_environment(self):
         before = hybrid.fingerprint()
         with patch.dict(os.environ, {"CUDA_VISIBLE_DEVICES": "different-device-set"}):

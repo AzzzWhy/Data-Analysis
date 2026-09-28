@@ -135,19 +135,37 @@ def choose(profile_path, path, columns, workflow, context):
                                   for key in ("seconds", "read_seconds", "compute_seconds")}
         cpu, gpu = estimates["cpu"], estimates["native"]
         hybrid = estimates.get("cpu_gpu")
-        if context == "reports_warm":
+        if context in {"reports_warm", "reports_cold"}:
             # Full-transaction parity and timing include memoization overhead.
             # CPU/read/component margins from independent batches no longer
-            # describe this cost. Keep CPU on ties within measured run spread.
+            # describe this cost. Cold measurements also include process start
+            # and teardown, so they must never borrow reports_warm estimates.
             winner = min(estimates, key=lambda backend: estimates[backend]["seconds"])
             spread = {backend: (max(run["seconds"] for run in entry["measurements"][backend]) -
                                 min(run["seconds"] for run in entry["measurements"][backend]))
                       for backend in candidates}
-            if winner != "cpu" and (cpu["seconds"] - estimates[winner]["seconds"] <=
-                                    max(spread["cpu"], spread[winner])):
-                winner = "cpu"
+            if context == "reports_warm":
+                # Keep the existing warm-route decision contract unchanged.
+                if winner != "cpu" and (cpu["seconds"] - estimates[winner]["seconds"] <=
+                                        max(spread["cpu"], spread[winner])):
+                    winner = "cpu"
+                return winner, {**note, "selected": winner, "estimated": estimates,
+                                "reason": "fastest verified warm transaction; CPU on measurement ties"}
+            confident = all(
+                estimates[backend]["seconds"] - estimates[winner]["seconds"] >
+                max(spread[backend], spread[winner])
+                for backend in candidates if backend != winner)
+            if not confident:
+                near = {backend for backend in candidates
+                        if estimates[backend]["seconds"] - estimates[winner]["seconds"] <=
+                        max(spread[backend], spread[winner])}
+                # A tie is not evidence for paying CUDA startup or conversion
+                # cost. Prefer CPU, then the simpler native GPU reader.
+                winner = "cpu" if "cpu" in near else "native" if "native" in near else winner
             return winner, {**note, "selected": winner, "estimated": estimates,
-                            "reason": "fastest verified warm transaction; CPU on measurement ties"}
+                            "measured_spread": spread, "confidence": "clear" if confident else "tie",
+                            "reason": "fastest verified complete report transaction; "
+                                      "CPU/native on measurement ties"}
         hybrid_wins = (hybrid is not None and hybrid["read_seconds"] < .95 * gpu["read_seconds"]
                        and hybrid["compute_seconds"] < .90 * cpu["compute_seconds"]
                        and hybrid["seconds"] < .90 * min(cpu["seconds"], gpu["seconds"]))
