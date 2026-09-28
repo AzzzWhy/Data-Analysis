@@ -531,14 +531,17 @@ GPU_GUI_TOKEN=<secret> python agent/gui.py --host 0.0.0.0 --port 8765
 # or: python agent/gui.py --host 0.0.0.0 --token <secret>
 ```
 
-The browser asks for the token once per session — any user name, the token as the password —
-and every route, including the static page, stays closed without it. The token is compared as a
-sha256 digest, is never accepted in the URL, and the flag or the environment variable are the
-only ways to set it; `GPU_GUI_TOKEN` keeps the secret off the process command line. This is a
-gate, not encryption: Basic auth travels as plain text like the rest of the page, so treat it as
-"trusted network plus a door code", not as a public endpoint. Binding a non-loopback host without
-a token still refuses to start unless `GPU_GUI_ALLOW_REMOTE=1` is set, which remains the loud
-opt-in for exactly what it sounds like.
+Without a session, `/` is a sign-in page wearing the workbench's own design, and every other
+route — including `/app.js` itself — answers 401. Signing in POSTs the token to `/api/login`
+once; what comes back is a random session id in an HttpOnly, SameSite=Strict cookie that lasts
+seven days or until the server restarts. The token itself is never sent again, is never accepted
+in a URL, and exists server-side only as a sha256 digest compared in constant time; a wrong
+guess costs the caller 0.8 seconds rather than the server anything. 退出 in the top bar retires
+the session. `GPU_GUI_TOKEN` keeps the secret off the process command line. This is a gate, not
+encryption: the page still travels as plain text, so treat it as "trusted network plus a door
+code", not as a public endpoint. Binding a non-loopback host without a token still refuses to
+start unless `GPU_GUI_ALLOW_REMOTE=1` is set, which remains the loud opt-in for exactly what it
+sounds like.
 
 `python agent/agent_main.py --gui` starts the same server from the agent's own entry point. It is
 chosen before the "configure me first" check, so the workbench comes up with no key and says which

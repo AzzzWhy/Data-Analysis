@@ -28,7 +28,7 @@ const els = {
   forceCpu: $("force-cpu"), forceGpu: $("force-gpu"),
   prompt: $("prompt"), ask: $("ask"), askHint: $("ask-hint"),
   pulse: $("pulse"), tabs: $("tabs"), chart: $("chart"), chartCap: $("chart-cap"),
-  placeholder: $("result-placeholder"),
+  placeholder: $("result-placeholder"), logout: $("logout"),
 };
 
 let selected = null;      // absolute path of the chosen dataset
@@ -241,6 +241,7 @@ function renderState(state) {
   applyChrome();
   els.model.textContent = state.model || t("未配置模型");
   els.host.textContent = location.host;
+  els.logout.hidden = !state.auth_required;
   if (!selected) els.file.textContent = t("未选择数据文件");
 
   const notes = [];
@@ -851,6 +852,16 @@ $("lang").addEventListener("click", async () => {
   await refreshState();
   // No re-render needed: every chrome label carries its untranslated key, so applyChrome()
   // inside refreshState() relabels tiles that were rendered before the flip as well.
+});
+
+/* The way out of a token-gated workbench. Visible only when /api/state says the gate is on,
+   so a loopback server gains no button that would lead nowhere. The server forgets the
+   session; the browser lands back on the sign-in page. */
+$("logout").addEventListener("click", async () => {
+  els.logout.disabled = true;
+  try { await fetch("/api/logout", { method: "POST" }); }
+  catch (err) { /* the cookie expiry is already set; the door is behind us either way */ }
+  window.location.replace("/");
 });
 
 /* Keyboard: the terminal's bindings, not the browser's. Ctrl+Q and Ctrl+, never reach the page --

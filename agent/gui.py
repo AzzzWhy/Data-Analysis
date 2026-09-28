@@ -23,17 +23,18 @@ this is an interface layer, and it must not be a reason an analysis cannot run.
 from __future__ import annotations
 
 import argparse
-import base64
 import hashlib
 import hmac
 import inspect
 import json
 import mimetypes
 import os
+import secrets
 import sys
 import threading
 import time
 from collections import deque
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -86,6 +87,7 @@ JOB_HISTORY = 20
 # then never uses it, so a wedged worker blocks the readline forever while holding the module
 # lock. Every call the workbench makes therefore needs a deadline it owns itself.
 WORKER_TIMEOUT_SECONDS = 20.0
+SESSION_TTL_SECONDS = 7 * 24 * 3600
 CSP = ("default-src 'self'; style-src 'self'; script-src 'self'; "
        "connect-src 'self'; img-src 'self' data:")
 
@@ -668,37 +670,81 @@ class Handler(BaseHTTPRequestHandler):
             super().log_message(fmt, *args)
 
     def _authorized(self) -> bool:
-        """Gate every route behind the access token when one is configured.
+        """True when this request carries a live session, or no token is configured.
 
-        HTTP Basic is used because the browser supplies the login prompt, remembers the
-        credential for the session and attaches it to fetch() and EventSource() alike, which
-        keeps gui/app.js untouched. The token is the password half; the user half is ignored.
-        Comparison is over sha256 digests with hmac.compare_digest, so neither the length nor
-        the bytes of the token leak through timing, and a digest never appears on the wire.
-        The digest lives on the server instance, not the class: unlike `workbench`, a second
-        server in the same process (the headless tests run two) must not inherit the first
-        one's token.
+        The token itself is sent exactly once: POST /api/login trades it for a random
+        session id in an HttpOnly, SameSite=Strict cookie, which the browser then
+        attaches to fetch() and EventSource() alike. That is why the gate moved off
+        HTTP Basic -- its credentials are something EventSource is not required to
+        send, and the browser's own dialog is not this workbench's design. The
+        session table lives on the server instance, not the Handler class, so a
+        second server in one process (the headless tests run two) never inherits the
+        first one's gate.
         """
+        if getattr(self.server, "token_digest", None) is None:
+            return True
+        try:
+            jar = SimpleCookie(self.headers.get("Cookie") or "")
+        except CookieError:
+            return False
+        morsel = jar.get("dws")
+        if morsel is None or not morsel.value:
+            return False
+        sessions = self.server.sessions
+        expiry = sessions.get(morsel.value)
+        if expiry is None:
+            return False
+        if expiry < time.time():
+            sessions.pop(morsel.value, None)
+            return False
+        return True
+
+    def _login(self, url) -> None:
+        """Trade the access token for a session cookie.
+
+        The token is accepted only in the request body -- the same rule the API key
+        follows -- because a query string lands in access logs, proxies and history.
+        """
+        if "token" in parse_qs(url.query):
+            return self._json(400, {"error": "token must be sent in the request body, "
+                                             "never in the query string"})
         digest = getattr(self.server, "token_digest", None)
         if digest is None:
-            return True
-        header = self.headers.get("Authorization") or ""
-        scheme, _, value = header.partition(" ")
-        offered = ""
-        if scheme.lower() == "basic":
-            try:
-                decoded = base64.b64decode(value, validate=True).decode("utf-8")
-            except (ValueError, UnicodeDecodeError):
-                decoded = ""
-            offered = decoded.partition(":")[2]
-        if hmac.compare_digest(hashlib.sha256(offered.encode("utf-8")).digest(), digest):
-            return True
-        self._send(401,
-                   b'{"error": "an access token is configured; the browser asks for it as the '
-                   b'password of HTTP Basic auth, and it is never accepted in the URL"}',
-                   "application/json; charset=utf-8",
-                   {"WWW-Authenticate": 'Basic realm="data-workbench", charset="UTF-8"'})
-        return False
+            return self._json(404, {"error": "this server has no token; "
+                                             "there is nothing to sign in with"})
+        body = self._body()
+        if body is None:
+            return
+        offered = str(body.get("token") or "")
+        if not hmac.compare_digest(hashlib.sha256(offered.encode("utf-8")).digest(), digest):
+            # A wrong guess costs the caller a delay, not the server an outage.
+            time.sleep(0.8)
+            return self._json(401, {"error": "wrong token"})
+        now = time.time()
+        for stale, expiry in list(self.server.sessions.items()):
+            if expiry < now:
+                self.server.sessions.pop(stale, None)
+        sid = secrets.token_urlsafe(32)
+        self.server.sessions[sid] = now + SESSION_TTL_SECONDS
+        self._json(200, {"ok": True, "expires_in": SESSION_TTL_SECONDS},
+                   {"Set-Cookie": f"dws={sid}; Path=/; Max-Age={SESSION_TTL_SECONDS}; "
+                                  f"HttpOnly; SameSite=Strict"})
+
+    def _logout(self) -> None:
+        """Retire the session named by the caller's cookie and expire the cookie.
+
+        Reachable without a session on purpose: leaving through a door that is
+        already open is still leaving, and the browser ends up somewhere truthful.
+        """
+        try:
+            jar = SimpleCookie(self.headers.get("Cookie") or "")
+        except CookieError:
+            jar = SimpleCookie()
+        morsel = jar.get("dws")
+        if morsel is not None and morsel.value:
+            self.server.sessions.pop(morsel.value, None)
+        self._json(200, {"ok": True},
+                   {"Set-Cookie": "dws=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict"})
 
     def _send(self, code: int, body: bytes, content: str, extra=None) -> None:
         self.send_response(code)
@@ -715,9 +761,9 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
-    def _json(self, code: int, payload) -> None:
+    def _json(self, code: int, payload, extra=None) -> None:
         self._send(code, json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-                   "application/json; charset=utf-8")
+                   "application/json; charset=utf-8", extra)
 
     def _body(self) -> dict | None:
         """Return the parsed JSON object, or answer the client and return None.
@@ -767,9 +813,17 @@ class Handler(BaseHTTPRequestHandler):
     # -- routes ------------------------------------------------------------------------
 
     def do_GET(self):                      # noqa: N802
-        if not self._authorized():
-            return
         url = urlparse(self.path)
+        # The gate's own two assets: markup aside, they contain nothing, and the
+        # sign-in page could not render without them.
+        if url.path in ("/login.css", "/login.js"):
+            kind = "text/css; charset=utf-8" if url.path.endswith(".css") else \
+                "application/javascript; charset=utf-8"
+            return self._static(url.path.lstrip("/"), kind)
+        if not self._authorized():
+            if url.path in ("/", "/index.html"):
+                return self._static("login.html", "text/html; charset=utf-8")
+            return self._json(401, {"error": "a token is configured; sign in at / first"})
         wb = self.workbench
         if url.path in ("/", "/index.html"):
             return self._static("index.html", "text/html; charset=utf-8")
@@ -778,7 +832,9 @@ class Handler(BaseHTTPRequestHandler):
                 "application/javascript; charset=utf-8"
             return self._static(url.path.lstrip("/"), kind)
         if url.path == "/api/state":
-            return self._json(200, wb.engine_state())
+            payload = wb.engine_state()
+            payload["auth_required"] = getattr(self.server, "token_digest", None) is not None
+            return self._json(200, payload)
         if url.path == "/api/files":
             directory = (parse_qs(url.query).get("dir") or [None])[0]
             try:
@@ -797,10 +853,15 @@ class Handler(BaseHTTPRequestHandler):
         return self._json(404, {"error": f"no such route: {url.path}"})
 
     def do_POST(self):                     # noqa: N802
-        if not self._authorized():
-            return
         wb = self.workbench
         url = urlparse(self.path)
+        # The two door routes are the only ones reachable without a session.
+        if url.path == "/api/login":
+            return self._login(url)
+        if url.path == "/api/logout":
+            return self._logout()
+        if not self._authorized():
+            return self._json(401, {"error": "a token is configured; sign in at / first"})
         if url.path == "/api/session/release":
             return self._json(200, wb.release())
         if url.path == "/api/shutdown":
@@ -833,9 +894,9 @@ class Handler(BaseHTTPRequestHandler):
         return self._json(404, {"error": f"no such route: {url.path}"})
 
     def do_PATCH(self):                    # noqa: N802
-        if not self._authorized():
-            return
         url = urlparse(self.path)
+        if not self._authorized():
+            return self._json(401, {"error": "a token is configured; sign in at / first"})
         if url.path != "/api/settings":
             return self._json(404, {"error": f"no such route: {url.path}"})
         # A credential in a query string lands in access logs, proxy logs and browser history.
@@ -909,6 +970,7 @@ def make_server(port: int = DEFAULT_PORT, host: str = "127.0.0.1",
     httpd = ThreadingHTTPServer((host, port), Handler)
     httpd.daemon_threads = True
     httpd.token_digest = hashlib.sha256(token.encode("utf-8")).digest() if token else None
+    httpd.sessions = {}                # sid -> expiry; survives exactly as long as the process
     workbench.httpd = httpd
     return httpd, workbench
 
@@ -942,8 +1004,8 @@ def serve(port: int = DEFAULT_PORT, host: str = "127.0.0.1",
         model_state = "installed but no base URL / key / model configured"
     print(f"GPU加速与数据分析 · workbench on http://{host}:{port}")
     if token:
-        print("  access: token required -- the browser will ask for it once per session "
-              "(HTTP Basic, any user name, the token as password)")
+        print("  access: token required -- the sign-in page comes up once per browser; "
+              "the session cookie lasts 7 days or until this process restarts")
     elif remote:
         print("  access: NO token set and GPU_GUI_ALLOW_REMOTE=1 is on -- anyone who can "
               "reach this address can read files through /artifact. Bind a token before "
@@ -967,8 +1029,8 @@ def main() -> int:
     ap.add_argument("--host", default="127.0.0.1",
                     help="loopback only, unless a token or GPU_GUI_ALLOW_REMOTE=1 is set")
     ap.add_argument("--token", default=os.environ.get("GPU_GUI_TOKEN"),
-                    help="access token for non-loopback use; the browser asks for it once "
-                         "(HTTP Basic, any user name, this token as the password). "
+                    help="access token for non-loopback use; without a session the browser gets "
+                         "the sign-in page, and POSTing the token buys a 7-day session cookie. "
                          "GPU_GUI_TOKEN is the same thing as an environment variable, and "
                          "keeps the secret off the process command line.")
     ap.add_argument("--model", default=None, help="override the configured model ID for this run")

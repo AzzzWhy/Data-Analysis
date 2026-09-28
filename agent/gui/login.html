@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>登录 · Data Workbench</title>
+<link rel="stylesheet" href="/login.css">
+</head>
+<body>
+
+<main class="gate">
+  <div class="gate-panel" id="gate-panel">
+    <header class="gate-head">
+      <div class="product">
+        <span class="product-mark" aria-hidden="true">D</span>
+        <div class="product-copy">
+          <strong>Data Workbench</strong>
+          <span>GPU 数据分析工作台</span>
+        </div>
+      </div>
+      <button type="button" id="lang" class="text-button">English</button>
+    </header>
+
+    <form id="gate-form" class="gate-body" novalidate>
+      <span class="overline">Access</span>
+      <h1 id="t-title">输入访问口令</h1>
+      <p id="t-sub" class="gate-sub">这份工作台由访问口令保护，口令来自启动这份服务的一方。</p>
+      <label class="lt" for="token" id="t-label">访问口令</label>
+      <input id="token" type="password" autocomplete="current-password" spellcheck="false" autofocus>
+      <p class="gate-msg" id="gate-msg" role="alert" hidden></p>
+      <button type="submit" id="gate-submit" class="primary full">进入工作台</button>
+    </form>
+
+    <footer class="gate-foot">
+      <span id="t-foot">口令只在请求体中传输 · 会话保留 7 天 · 服务重启后失效</span>
+    </footer>
+  </div>
+</main>
+
+<script src="/login.js"></script>
+</body>
+</html>

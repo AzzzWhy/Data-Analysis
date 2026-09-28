@@ -749,7 +749,7 @@ def main() -> int:
     # process would hand the first one a different workbench mid-suite. The probe keeps the two
     # worlds apart, and pins the same scratch config the suite above runs under.
     probe_src = r'''
-import base64, sys, threading, urllib.error, urllib.parse, urllib.request
+import json, sys, threading, urllib.error, urllib.parse, urllib.request
 from pathlib import Path
 sys.path.insert(0, str(Path.cwd()))
 import gui
@@ -760,11 +760,14 @@ guard, guard_wb = gui.make_server(port=0, host="127.0.0.1", token=TOKEN)
 for srv in (plain, guard):
     threading.Thread(target=srv.serve_forever, daemon=True).start()
 
-def hit(httpd, path, password=None, user="workbench"):
-    req = urllib.request.Request(f"http://127.0.0.1:{httpd.server_address[1]}{path}")
-    if password is not None:
-        blob = base64.b64encode(f"{user}:{password}".encode("utf-8")).decode("ascii")
-        req.add_header("Authorization", "Basic " + blob)
+def hit(httpd, path, body=None, cookie=None):
+    req = urllib.request.Request(f"http://127.0.0.1:{httpd.server_address[1]}{path}",
+                                 method="POST" if body is not None else "GET")
+    if body is not None:
+        req.add_header("Content-Type", "application/json")
+        req.data = json.dumps(body).encode("utf-8")
+    if cookie:
+        req.add_header("Cookie", cookie)
     try:
         with urllib.request.urlopen(req, timeout=20) as r:
             return r.status, dict(r.headers), r.read()
@@ -777,24 +780,48 @@ def expect(label, ok, detail=""):
     if not ok:
         failures.append(label)
 
-# The tokenless server is only ever asked for a static file: after the second make_server(),
+# The tokenless server is only ever asked for static files: after the second make_server(),
 # `Handler.workbench` points at the guard's workbench, so an /api/state there would exercise
 # the wrong object and prove nothing about token isolation.
-code, headers, _ = hit(guard, "/api/state")
-expect("no credential is a 401 that carries the Basic challenge",
-       code == 401 and headers.get("WWW-Authenticate", "").startswith("Basic"), f"code {code}")
-code, _, _ = hit(guard, "/", password="wrong")
-expect("a wrong token is a 401 on the page itself, not only on the API", code == 401, f"code {code}")
-code, _, _ = hit(guard, "/?token=" + urllib.parse.quote(TOKEN))
-expect("the token in a query string does not authenticate", code == 401, f"code {code}")
-code, _, body = hit(guard, "/api/state", password=TOKEN, user="anything")
-expect("the right token opens the API for any user name",
+code, _, body = hit(guard, "/")
+expect("no session: / is the sign-in page, not the app",
+       code == 200 and b"gate-form" in body and b"workspace" not in body, f"code {code}")
+code, _, _ = hit(guard, "/login.css")
+expect("the sign-in page's own stylesheet loads without a session", code == 200, f"code {code}")
+code, _, _ = hit(guard, "/api/state")
+expect("no session: the API answers 401, not data", code == 401, f"code {code}")
+code, _, _ = hit(guard, "/app.js")
+expect("no session: the app's own code stays behind the gate", code == 401, f"code {code}")
+code, _, _ = hit(guard, "/api/login", body={"token": "wrong"})
+expect("a wrong token is a 401", code == 401, f"code {code}")
+code, _, _ = hit(guard, "/api/login?" + urllib.parse.urlencode({"token": TOKEN}),
+                 body={"token": TOKEN})
+expect("the token in a query string is refused outright", code == 400, f"code {code}")
+code, headers, _ = hit(guard, "/api/login", body={"token": TOKEN})
+cookie = headers.get("Set-Cookie", "")
+sid = cookie.split("dws=", 1)[1].split(";", 1)[0] if "dws=" in cookie else ""
+expect("the right token trades for an HttpOnly, SameSite=Strict cookie",
+       code == 200 and sid and "HttpOnly" in cookie and "SameSite=Strict" in cookie,
+       f"code {code}")
+code, _, body = hit(guard, "/api/state", cookie="dws=" + sid)
+expect("the session cookie opens the API",
        code == 200 and b"engine_ready" in body, f"code {code}")
-code, _, body = hit(guard, "/", password=TOKEN)
-expect("the right token boots the page a browser needs",
-       code == 200 and b"Data Workbench" in body, f"code {code}")
-code, _, _ = hit(plain, "/")
-expect("a server started without a token keeps serving without one", code == 200, f"code {code}")
+code, _, body = hit(guard, "/api/state", cookie="dws=" + sid)
+expect("the state says the gate is on for this server",
+       json.loads(body).get("auth_required") is True,
+       f"auth_required={json.loads(body).get('auth_required')}")
+code, _, body = hit(guard, "/", cookie="dws=" + sid)
+expect("the session cookie boots the app itself",
+       code == 200 and b"workspace" in body and b"gate-form" not in body, f"code {code}")
+code, _, _ = hit(guard, "/api/state", cookie="dws=forged-session-id")
+expect("a cookie nobody issued is rejected", code == 401, f"code {code}")
+code, _, _ = hit(guard, "/api/logout", body={}, cookie="dws=" + sid)
+expect("logout retires the session it names", code == 200, f"code {code}")
+code, _, _ = hit(guard, "/api/state", cookie="dws=" + sid)
+expect("a logged-out cookie no longer works", code == 401, f"code {code}")
+code, _, body = hit(plain, "/")
+expect("a server started without a token serves the app with no gate",
+       code == 200 and b"workspace" in body, f"code {code}")
 plain.shutdown(); plain.server_close()
 guard.shutdown(); guard.server_close()
 sys.exit(1 if failures else 0)
