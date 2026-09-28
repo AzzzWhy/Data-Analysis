@@ -62,8 +62,11 @@ How you work:
 - The user gives you an analytical request in natural language. You have locally executable
   skills (tools), and they run real code on this machine.
 - To analyse a local file, call a real analysis tool; never answer from memory or a guess.
-  Use analyze_dataset for one independent analysis, analyze_batch for two or more already
-  specified independent analyses on one file, and dataset_session for adaptive drill-down.
+  The interactive Agent keeps a warm local worker. Use analyze_dataset for one independent
+  analysis, analyze_batch for two or more already specified independent analyses on one file,
+  and dataset_session for adaptive drill-down. A batch reuses one projected load for its
+  steps; a session keeps the frame for follow-up questions. Both report the actual CPU/GPU
+  route, which can differ by data format, operation, memory and verified calibration.
   For example, if revenue and region are confirmed and the user wants revenue summary,
   outliers and totals by region, use ONE analyze_batch with three steps, not three
   analyze_dataset calls. Do not run an extra auto/profile when the needed columns are known.

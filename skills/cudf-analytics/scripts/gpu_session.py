@@ -269,6 +269,23 @@ def do_open(req: dict) -> dict:
 
     usecols = req.get("usecols")
     cols = tuple(c.strip() for c in str(usecols).split(",") if c.strip()) if usecols else None
+    requested_backend = req.get("load_backend", req.get("_batch_load_backend", "native"))
+    if requested_backend not in {"auto", "native", "cpu_gpu"}:
+        return _err("load_backend must be auto, native or cpu_gpu")
+    requested_force_cpu = bool(req.get("force_cpu"))
+    requested_force_gpu = bool(req.get("force_gpu"))
+    if requested_force_cpu and requested_force_gpu:
+        return _err("force_cpu and force_gpu are mutually exclusive")
+    if requested_force_cpu and requested_backend == "cpu_gpu":
+        return _err("force_cpu conflicts with CPU-to-GPU loading")
+    # Adaptive conversation steps are unknown at open time. An uncalibrated session
+    # keeps the native reader; a planned batch has an exact-workflow calibration.
+    load_backend = "native" if requested_backend == "auto" else requested_backend
+    eligibility = GA.hybrid_execution.preflight(str(path), cols, [], load_backend)
+    if eligibility and requested_backend == "cpu_gpu":
+        return _err("CPU-to-GPU loading unavailable: " + eligibility)
+    if eligibility and not req.get("force_cpu"):
+        req = {**req, "force_cpu": True, "force_gpu": False}
     _prune_cache()
 
     # Reuse an existing session for the same file instead of loading the dataset again.
@@ -287,6 +304,15 @@ def do_open(req: dict) -> dict:
             invalidated = True
             continue
         if existing.usecols == cols:
+            if ((req.get("force_cpu") and existing.engine.is_gpu) or
+                    (req.get("force_gpu") and not existing.engine.is_gpu) or
+                    (requested_backend == "cpu_gpu" and
+                     existing.loading.get("actual") != "cpu_gpu") or
+                    (requested_backend == "native" and
+                     existing.loading.get("actual") == "cpu_gpu")):
+                return _err("file already has an active session with a different engine or "
+                            "load backend; close it before changing the route",
+                            session_id=existing.sid)
             return {
                 "ok": True,
                 "session_id": existing.sid,
@@ -297,6 +323,11 @@ def do_open(req: dict) -> dict:
                 "gpu": existing.engine.gpu_name,
                 "accelerated": existing.engine.is_gpu,
                 "load_seconds": round(existing.load_seconds, 3),
+                "loading": {"requested": requested_backend,
+                            "actual": existing.loading.get("actual", "native_gpu" if
+                                       existing.engine.is_gpu else "cpu"),
+                            "read_count": 0, "conversion_count": 0,
+                            "session_reuse": True},
                 "reused_existing_session": True,
                 "already_loaded": True,
                 "execution_decision": GA.execution_decision_record(
@@ -320,7 +351,12 @@ def do_open(req: dict) -> dict:
         _release_unused_gpu_blocks()
 
     cached = None if req.get("_fresh_batch") else WARM_CACHE.pop(_cache_key(path, cols), None)
-    if cached is not None and not req.get("force_cpu"):
+    cache_backend_matches = (requested_backend == "auto" or cached is not None and
+                             ((load_backend == "cpu_gpu" and
+                               cached.loading.get("actual") == "cpu_gpu") or
+                              (load_backend == "native" and
+                               cached.loading.get("actual") != "cpu_gpu")))
+    if cached is not None and not req.get("force_cpu") and cache_backend_matches:
         _COUNTER["n"] += 1
         cached.sid = f"s{_COUNTER['n']}"
         cached.opened_at = time.perf_counter()
@@ -332,6 +368,10 @@ def do_open(req: dict) -> dict:
             "rows": cached.rows, "columns": [str(c) for c in cached.frame.columns],
             "engine": cached.engine.name, "gpu": cached.engine.gpu_name,
             "accelerated": cached.engine.is_gpu, "load_seconds": 0.0,
+            "loading": {"requested": requested_backend,
+                        "actual": cached.loading.get("actual", "native_gpu"),
+                        "read_count": 0, "conversion_count": 0,
+                        "cache_reuse": True},
             "cache_hit": True, "reused_existing_session": False,
             "already_loaded": True, "resident_mb": round(_frame_bytes(cached) / 1024**2, 1),
             "execution_decision": GA.execution_decision_record(
@@ -374,15 +414,16 @@ def do_open(req: dict) -> dict:
         )
 
     force_cpu = bool(req.get("force_cpu"))
-    force_gpu = bool(req.get("force_gpu"))
-    decision_mode = "force_cpu" if force_cpu else "force_gpu" if force_gpu else "auto"
-    route_reason = req.get("_route_reason") or ("CPU forced by the caller" if force_cpu else None)
+    force_gpu = bool(req.get("force_gpu")) or load_backend == "cpu_gpu"
+    decision_mode = ("force_cpu" if requested_force_cpu else
+                     "force_gpu" if requested_force_gpu or requested_backend == "cpu_gpu" else
+                     "auto")
+    route_reason = req.get("_route_reason") or (
+        "CPU forced by the caller" if requested_force_cpu else None)
     route_details: Dict[str, Any] = {}
-    eligibility = GA.hybrid_execution.preflight(
-        str(path), cols, [], req.get("_batch_load_backend", "native"))
-    if eligibility and not force_cpu:
+    if eligibility:
         force_cpu, force_gpu = True, False
-        route_reason = "preflight selected CPU: " + eligibility
+        route_reason = route_reason or "preflight selected CPU: " + eligibility
         route_details["eligibility"] = eligibility
     # Preserve the single-query heuristic. Both engines can keep data resident:
     # resident GPU versus stateless CPU is not a fair acceleration comparison.
@@ -415,7 +456,6 @@ def do_open(req: dict) -> dict:
     started = time.perf_counter()
     read_fallback = None
     cache_trace = {"status": "disabled"}
-    load_backend = req.get("_batch_load_backend", "native")
     load_attempts = []
 
     def read_frame(engine):
@@ -458,7 +498,8 @@ def do_open(req: dict) -> dict:
         sid=sid, path=path, engine=eng, frame=frame, rows=int(len(frame)),
         identity=_file_identity(path), load_seconds=load_seconds,
         reason=route_reason if selected_backend == "pandas" else None, usecols=cols,
-        loading={"actual": "cpu_gpu" if eng.is_gpu and (load_backend == "cpu_gpu" or
+        loading={"requested": requested_backend,
+                 "actual": "cpu_gpu" if eng.is_gpu and (load_backend == "cpu_gpu" or
                  any(a.get("conversion_count") for a in load_attempts)) else
                  "native_gpu" if eng.is_gpu else "cpu", "attempts": load_attempts,
                  "engine_init_seconds": init_seconds, "load_seconds": load_seconds},
@@ -501,7 +542,8 @@ def do_open(req: dict) -> dict:
         "resident_mb": resident_mb,
         "execution_decision": GA.execution_decision_record(
             mode=decision_mode,
-            policy="caller_override" if decision_mode != "auto" else
+            policy="capability_preflight" if eligibility and not requested_force_cpu else
+                   "caller_override" if decision_mode != "auto" else
                    "measured_file_size_crossover",
             selected_backend=selected_backend,
             actual_backend=eng.name,
@@ -905,6 +947,8 @@ def do_batch(req: dict) -> dict:
     decision = {"selected": None, "reason": "explicit/native request"}
     selected = None
     eligibility = GA.hybrid_execution.preflight(path, columns, batch_workflow(steps), backend)
+    if eligibility and backend == "cpu_gpu":
+        return _err("CPU-to-GPU loading unavailable: " + eligibility)
     if eligibility and not force_cpu:
         force_cpu, force_gpu = True, False
         decision = {"selected": "cpu", "policy": "capability_preflight",

@@ -186,6 +186,17 @@ skill_definitions = [
                                        "CPU. Use this only when several analyses will reuse the "
                                        "same loaded data, so the GPU startup cost is amortised.",
                     },
+                    "load_backend": {
+                        "type": "string",
+                        "enum": ["auto", "native", "cpu_gpu"],
+                        "description": "optional for open: auto keeps the safe native reader "
+                                       "because later interactive steps are not known yet; "
+                                       "cpu_gpu reads supported numeric Parquet or XLSX on CPU "
+                                       "and keeps the converted frame on GPU for later steps. "
+                                       "Use cpu_gpu only when its read path was measured or "
+                                       "the user explicitly requested it. The response reports "
+                                       "the actual loader and compute engine.",
+                    },
                 },
                 "required": ["operation"],
             },
@@ -773,11 +784,16 @@ def _run_analysis(cmd):
     return proc
 
 
-def analyze_batch(file_path: str, steps: list, force_cpu: bool = False, load_backend: str = "auto") -> str:
+def analyze_batch(file_path: str, steps: list, force_cpu: bool = False,
+                  load_backend: str = "auto", hybrid_profile: str = None) -> str:
     """Independent known analyses in one tool turn, with deterministic cleanup."""
     try:
-        reply = _worker_call({"cmd": "batch", "path": _resolve_data_path(file_path),
-                              "steps": steps, "force_cpu": force_cpu, "load_backend": load_backend})
+        request = {"cmd": "batch", "path": _resolve_data_path(file_path),
+                   "steps": steps, "force_cpu": force_cpu,
+                   "load_backend": load_backend}
+        if hybrid_profile:
+            request["hybrid_profile"] = hybrid_profile
+        reply = _worker_call(request)
         reply["success"] = bool(reply.pop("ok", False))
         reply["comparison_measured"] = False
         reply["performance_note"] = (
@@ -920,6 +936,7 @@ def _resident_single_analysis(path: str, operation: str, by: str | None,
         out = {"success": True, "file": os.path.basename(path),
                "engine": step.get("engine"), "accelerated": step.get("accelerated"),
                "rows_scanned": rows, "seconds": elapsed,
+               "loading": opened.get("loading"),
                "execution_decision": decision, "result": result,
                "resident_reuse": bool(opened.get("cache_hit")),
                "performance_note": (
@@ -940,7 +957,7 @@ def dataset_session(operation: str, file_path: str = None, session_id: str = Non
                     op: str = None, by: str = None, agg: str = None,
                     columns: str = None, top_k: int = None,
                     force_cpu: bool = False, force_gpu: bool = False,
-                    goal: str = None) -> str:
+                    goal: str = None, load_backend: str = "auto") -> str:
     """
     Load a dataset into memory once, then run several analyses against that copy.
 
@@ -959,6 +976,7 @@ def dataset_session(operation: str, file_path: str = None, session_id: str = Non
         if operation == "open":
             req = {"cmd": "open", "path": _resolve_data_path(file_path),
                    "force_cpu": bool(force_cpu), "force_gpu": bool(force_gpu),
+                   "load_backend": load_backend,
                    "measure_cpu": _speedup_enabled()}
             if goal and str(goal).strip():
                 req["goal"] = str(goal).strip()

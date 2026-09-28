@@ -1,6 +1,8 @@
-# CPU 加载＋GPU 计算：三个开发分支
+# CPU 加载＋GPU 计算：实验分支与整合入口
 
-2026-09-28 本地增量：空值相关性、CSV/Excel 读取、校准选择及四套公开数据回归见 [修复与验收记录](PUBLIC_DATA_REPAIR.md)。最新增量仍为未提交状态。
+`codex/hybrid-warm-worker` 与 `codex/hybrid-batch` 的已实现路径现已在本地整合为 `codex/hybrid-unified`。Agent 对话保留热工作进程，固定报表、定时任务及已规划步骤使用批量执行；入口与边界见[统一执行说明](UNIFIED_EXECUTION.md)。以下是原实验分支的设计及历史记录。
+
+2026-09-28 本地增量：空值相关性、CSV/Excel 读取、校准选择及四套公开数据回归见 [修复与验收记录](PUBLIC_DATA_REPAIR.md)。该修复已保存在本地整合分支，尚未推送远程。
 
 三个分支从同一 main 提交建立。热工作与批量分支已实现第一版数值 Parquet CPU 加载＋GPU 计算和校准路由，分别发布代码、使用说明与小数据到亿级实测；未合并 main、未替换正式部署。单进程分支仍是方案，未将实验代码冒充已完成实现。两个实现共享加载基础，但生命周期不同，详见本分支 HYBRID_EXECUTION_PLAN.md 和 [共同分规模对照](HYBRID_SCALE_RESULTS.md)。
 

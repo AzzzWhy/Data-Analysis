@@ -109,6 +109,63 @@ class BatchTests(unittest.TestCase):
         self.reader.assert_not_called()
         self.assertFalse(self.batch(force_cpu=True)["ok"])
 
+    def test_interactive_session_can_keep_cpu_loaded_gpu_frame(self):
+        opened = gs.do_open({"path": self.path, "usecols": "region,revenue",
+                             "load_backend": "cpu_gpu", "measure_cpu": False})
+        self.assertTrue(opened["ok"], opened)
+        self.assertEqual(opened["engine"], "cudf")
+        self.assertEqual(opened["loading"]["actual"], "cpu_gpu")
+        step = gs.do_analyze({"sid": opened["session_id"], "op": "summary",
+                              "columns": "revenue"})
+        self.assertTrue(step["ok"], step)
+        self.assertEqual(step["rows_scanned"], 20)
+        self.assertEqual(self.reader.call_count, 1)
+        gs.do_close({"sid": opened["session_id"]})
+
+    def test_interactive_hybrid_preflight_rejects_before_gpu_probe(self):
+        with patch.object(gs, "_free_gpu_gb", side_effect=AssertionError("GPU probed")):
+            opened = gs.do_open({"path": self.path, "load_backend": "cpu_gpu",
+                                 "measure_cpu": False})
+        self.assertFalse(opened["ok"])
+        self.assertIn("numeric", opened["error"])
+        self.reader.assert_not_called()
+
+    def test_cached_hybrid_is_not_reused_for_explicit_native_load(self):
+        first = gs.do_open({"path": self.path, "usecols": "region,revenue",
+                            "load_backend": "cpu_gpu", "measure_cpu": False})
+        self.assertTrue(first["ok"], first)
+        gs.do_close({"sid": first["session_id"], "retain": True})
+        native = gs.do_open({"path": self.path, "usecols": "region,revenue",
+                             "load_backend": "native", "force_gpu": True,
+                             "measure_cpu": False})
+        self.assertTrue(native["ok"], native)
+        self.assertFalse(native.get("cache_hit", False))
+        self.assertEqual(native["loading"]["actual"], "native_gpu")
+        self.assertEqual(self.reader.call_count, 1)
+        gs.do_close({"sid": native["session_id"]})
+
+    def test_active_session_cannot_silently_change_loader(self):
+        first = gs.do_open({"path": self.path, "usecols": "region,revenue",
+                            "load_backend": "cpu_gpu", "measure_cpu": False})
+        self.assertTrue(first["ok"], first)
+        second = gs.do_open({"path": self.path, "usecols": "region,revenue",
+                             "load_backend": "native", "force_gpu": True,
+                             "measure_cpu": False})
+        self.assertFalse(second["ok"])
+        self.assertEqual(second["session_id"], first["session_id"])
+        self.assertIn(first["session_id"], gs.SESSIONS)
+
+    def test_preflight_cpu_route_is_not_labelled_caller_override(self):
+        json_path = Path(self.temp.name) / "data.jsonl"
+        json_path.write_text('{"region": 1, "revenue": 2}\n', encoding="utf-8")
+        with patch.object(gs, "_free_gpu_gb", side_effect=AssertionError("GPU probed")):
+            opened = gs.do_open({"path": str(json_path), "load_backend": "auto",
+                                 "measure_cpu": False})
+        self.assertTrue(opened["ok"], opened)
+        self.assertEqual(opened["engine"], "pandas")
+        self.assertEqual(opened["execution_decision"]["mode"], "auto")
+        self.assertEqual(opened["execution_decision"]["policy"], "capability_preflight")
+
 
 if __name__ == "__main__":
     unittest.main()
