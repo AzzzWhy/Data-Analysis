@@ -4,6 +4,7 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+.web-deps/
 
 # GPU/CPU comparison cache: machine-specific timings, useless in version control
 .gpu_vs_cpu_cache.json
@@ -47,3 +48,16 @@ external_tools.json
 # Private project summaries: risk assessment and self-critique aimed at the author only.
 # Kept on the PC outside the repository, never published.
 PROJECT_SUMMARY_*.md
+
+# Agent working notes and scratch, not project deliverables.
+#
+# docs/superpowers/plans/ used to be listed here because the plans written there quoted the real
+# jump-host address, node name and SSH port, and the organiser's rules say that information must
+# not appear in a code repository. Those plans have since been sanitized and committed, so the
+# path is deliberately NOT ignored: an ignore rule over a tracked file silently swallows every
+# future edit to it. If real host or port values ever reappear in a plan, scrub them rather than
+# re-adding this rule.
+.superpowers/
+
+# Local demo data generated while testing the workbench.
+_gui_demo/

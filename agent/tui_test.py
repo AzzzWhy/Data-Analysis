@@ -1,11 +1,23 @@
-"""Headless UI regression tests: no API calls, generated test data only."""
+"""Headless UI regression tests: no API calls, generated test data only.
+
+The full-screen interface is an optional layer (requirements-tui.txt); the agent runs on the
+plain terminal without it. When Textual is not installed this file reports SKIP and exits 0
+rather than failing a machine that never claimed to have a UI. FakeAgent itself is always
+importable so api_config_test can use it either way.
+"""
 import asyncio
 import tempfile
 import threading
 from pathlib import Path
 
-from textual.widgets import Input, Markdown, Static
-from tui_app import SparkTUI
+try:
+    from textual.widgets import Input, Markdown, Static
+    from tui_app import SparkTUI
+    _UI_OK = True
+    _UI_WHY = ""
+except ImportError as exc:
+    _UI_OK = False
+    _UI_WHY = str(exc)
 
 
 class FakeAgent:
@@ -113,4 +125,10 @@ async def main():
 
 
 if __name__ == '__main__':
+    if not _UI_OK:
+        print(f"SKIP: Textual is not installed, so there is no full-screen UI to test "
+              f"({_UI_WHY}).\n"
+              f"This is the optional layer, not a failure -- the agent still runs on the plain "
+              f"terminal.\nInstall it with:  pip install -r requirements-tui.txt")
+        raise SystemExit(0)
     asyncio.run(main())

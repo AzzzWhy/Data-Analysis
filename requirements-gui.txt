@@ -1,0 +1,5 @@
+# agent/gui.py remains stdlib-only; its model layer uses requirements.txt.
+# Optional GUI-managed SSH password/key authentication for frontend_gateway.py.
+# Install on the PC hosting 8877; the GPU backend does not need this dependency.
+# Without it, local mode and externally managed SSH tunnels still work.
+paramiko>=3.4,<6

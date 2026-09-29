@@ -9,20 +9,36 @@ import threading
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import openai
-if int(openai.__version__.split('.')[0]) >= 3:
-    import httpx2 as httpx
-else:
-    import httpx
-from openai import OpenAI
-from textual.widgets import Button, Checkbox, Input, Select
+# openai is a runtime dependency of the agent itself (requirements.txt), not an optional layer,
+# so its absence is a real failure -- but say what to do about it instead of raising a traceback.
+try:
+    import openai
+    if int(openai.__version__.split('.')[0]) >= 3:
+        import httpx2 as httpx
+    else:
+        import httpx
+    from openai import OpenAI
+except ImportError as exc:
+    print(f"openai is required by the agent (requirements.txt), and it is missing: {exc}\n"
+          f"Install it with:  pip install -r requirements.txt")
+    raise SystemExit(2)
 
 from api_config import APIConfig, discover_models, load_config, normalize_url, save_config
-from api_setup import APISetup
 from agent_main import Agent
 import agent_main
-from tui_app import SparkTUI
 from tui_test import FakeAgent
+
+# The full-screen UI is optional (requirements-tui.txt). Importing it must not be a condition for
+# testing connection settings, which is where the API-key handling assertions live.
+try:
+    from textual.widgets import Button, Checkbox, Input, Select
+    from api_setup import APISetup
+    from tui_app import SparkTUI
+    _UI_OK = True
+    _UI_WHY = ""
+except ImportError as exc:
+    _UI_OK = False
+    _UI_WHY = str(exc)
 
 
 def config_checks(folder):
@@ -269,6 +285,12 @@ def main():
         folder = Path(directory)
         config_checks(folder)
         http_checks()
+        if not _UI_OK:
+            print(f"SKIP Textual UI checks: the full-screen layer is optional and not "
+                  f"installed ({_UI_WHY}).\n"
+                  f"Install it with:  pip install -r requirements-tui.txt\n"
+                  f"The connection-settings and API-key assertions above ran without it.")
+            return
         entry_checks()
         asyncio.run(ui_checks(folder))
         asyncio.run(language_checks(folder))

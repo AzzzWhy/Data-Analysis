@@ -46,6 +46,9 @@ STRINGS = {
     'API 基础地址（含 /v1 或服务指定的前缀）': 'API base URL (include /v1 or your provider\'s prefix)',
     'API Key（隐藏输入；本机无鉴权服务可填 local）': 'API key (masked; use local for unauthenticated local services)',
     '读取此地址的模型列表': 'Fetch models from this address',
+    '请选择模型': 'Select a model',
+    '已读取 {count} 个模型，请选择一个。': 'Fetched {count} models. Select one.',
+    '工作台进程还是旧的，请先重启它，再读取模型列表。': 'This workbench process is still the old one. Restart it, then fetch the model list.',
     '先读取列表，再选择模型': 'Fetch the list, then select a model',
     '模型名（选择后填入；服务不支持列表时可手填）': 'Model ID (select from the list, or enter manually)',
     '以后不再弹出启动设置': 'Do not show setup on future launches',
@@ -67,6 +70,129 @@ STRINGS = {
     'API 地址的端口无效': 'Invalid port in the API URL.',
     '[model call failed] 尚未配置 API 地址、密钥与模型。请输入 /settings 打开连接设置。':
         '[model call failed] API URL, key and model are not configured. Use /settings.',
+
+    # Browser workbench chrome. Kept here rather than in app.js so the terminal and the browser
+    # translate from one table; two vocabularies is how they drift apart. These label the
+    # interface only -- model prose and raw engine values are never rewritten through this table.
+    '数据源': 'Data sources', '分析计划': 'Analysis plan', '计算会话': 'Compute session',
+    '分析工作台': 'Analysis workspace', '分析结果': 'Analysis results', '运行分析': 'Run analysis',
+    '运行方式': 'Run mode', '分析类型': 'Analysis type', '聚合规则': 'Aggregation',
+    '分析目标': 'Analysis goal', '运行任务': 'Run task', '执行记录': 'Execution log',
+    '保存设置': 'Save settings', '强制 CPU': 'Force CPU', '强制 GPU': 'Force GPU',
+    '问题': 'Question', '分析': 'Analyze',
+    '即时分析': 'One-shot analysis', '驻留会话': 'Resident session',
+    '生成报告': 'Generate report', '发现数据': 'Discover data',
+    '打开': 'Open', '关闭': 'Close', '查看': 'List', '自动判断': 'Auto',
+    '数据概览': 'Profile', '统计摘要': 'Summary', '分组聚合': 'Group by',
+    '相关性': 'Correlation',
+    '数据文件': 'Data files', '会话': 'Session', '状态': 'Status', '会话数': 'Sessions',
+    '步数': 'Steps', '占用': 'Held', '保留帧': 'Warm frames', '释放会话': 'Release session',
+    '计划': 'Plan', '类型': 'Kind', '进度': 'Progress',
+    '未设定分析目标，因此没有计划': 'No goal was set, so there is no plan.',
+    '计划外步骤': 'off-plan step',
+    '提问': 'Ask', '发送': 'Send', '直接工具调用': 'Direct tool call',
+    '工具': 'Tool', '会话操作': 'Session operation', '分析操作': 'Operation',
+    '分组列': 'Group by', '聚合': 'Aggregate', '输出': 'Output', '结果': 'Result',
+    '设置': 'Settings', '连接设置': 'Connection settings', 'API 地址': 'API base URL',
+    '模型': 'Model', 'API 密钥': 'API key', '取消': 'Cancel', '保存': 'Save',
+    '执行详情': 'Execution details', '收起': 'hide', '展开': 'show',
+    '扫描行数': 'Rows scanned', '引擎': 'Engine', '本次耗时': 'This run',
+    '纯计算': 'Compute only', '离群点': 'Outliers', '跨轮复用': 'Resident reuse',
+    '分组数': 'Groups', '驻留内存': 'Resident', '打开报告': 'Open report',
+    '未选择数据文件': 'No dataset selected', '运行失败': 'Run failed',
+    'active（会话打开中）': 'active (session open)', 'cold / released': 'cold / released',
+    'worker 未响应': 'worker not responding',
+    '目标（可选，仅 open 用）': 'Goal (optional, open only)',
+    '例如：找出 revenue 离群点的成因': 'e.g. find the cause of the revenue outliers',
+    '本机不可观测（需 cuDF）': 'Not observable here (needs cuDF)',
+    '暂无产物': 'No artifacts yet', '暂无结果表': 'No result tables yet',
+    '留空表示不修改': 'Leave empty to keep unchanged',
+    '离群值（各列合计）': 'Outlier values (sum across columns)',
+    '留空沿用当前密钥；不记住时仅本次服务有效': 'Leave blank to retain the current key; without Remember it lasts until the service restarts',
+    '设置已应用，提问框已可用。': 'Settings applied. You can now ask a question.',
+    '设置已应用，但提问框还不可用，缺少：{fields}': 'Settings applied, but questions are still unavailable. Missing: {fields}',
+    '将密钥保存到当前后端的明文配置文件': 'Save the key in a plaintext config on the selected backend',
+    '不勾选时仅在当前后端进程内存中使用，重启后需重新输入。本地无鉴权模型的密钥可填 local。': 'Unchecked: use the key only in backend process memory; enter it again after a restart. For a local model without authentication, enter local.',
+
+    # The chart viewer and the key row. Tab labels are matched against the artifact names the report
+    # generator actually writes (groupby_bar / groupby_line / corr_heatmap / outliers_bar), so a kind
+    # with no file gets no tab and no label is ever shown for a chart that does not exist.
+    '折线': 'Line', '柱状': 'Bar', '热力': 'Heat', '直方': 'Histogram', '散点': 'Scatter',
+    '图表类型': 'Chart type', '语言': 'Language', '关闭弹窗': 'Close dialog', '提交': 'Submit',
+    '直接工具调用（不经过模型）': 'Direct tool call (no model)',
+
+    # Added when the browser sweep learned to reach #phase, <option> and <title>: every string
+    # below was already reaching the screen untranslated under language=en, so this is not new
+    # vocabulary -- it is the part of the interface the table had never covered.
+    'GPU加速与数据分析 · 工作台': 'GPU Acceleration & Data Analysis · Workbench',
+    '执行工具': 'Running a tool', '完成': 'Done', '提交中': 'Submitting',
+    '连接中断': 'Connection lost',
+    '模型客户端不可用：': 'Model client unavailable: ', '未知原因': 'unknown reason',
+    '安装：pip install -r requirements.txt\n在此之前，下方“直接工具调用”仍然真实可用，提问区不可用。':
+        'Install it with: pip install -r requirements.txt\n'
+        'Until then the direct tool calls below still run for real; only the question box is closed.',
+    '模型客户端已安装，但没有配置 API 地址 / 密钥 / 模型。':
+        'The model client is installed, but no API base URL / key / model is configured.',
+    # The precise version: /api/state names the fields it found empty, so the sentence is assembled
+    # from facts instead of guessing that all three are missing. Field labels above are reused, and
+    # only the names ever reach the screen -- never a value.
+    '模型客户端已安装，但还缺少：{fields}':
+        'The model client is installed, but these are still missing: {fields}',
+    '已保存，但提问框还不可用，缺少：{fields}':
+        'Saved, but the question box is still unavailable; missing: {fields}',
+    '已保存，提问框已可用。': 'Saved. The question box is now available.',
+    '已保存。': 'Saved. ', '未知项': 'an unknown item',
+    '未保存：': 'Not saved: ',
+    '分析引擎未响应：': 'Analysis engine not responding: ',
+    '引擎与模型客户端均就绪。': 'Engine and model client both ready.',
+    '提问会把选中的文件路径作为一行上下文附在问题后面，日志里会显示模型实际收到的原文。':
+        'Your question is sent with the selected file path as one line of context, and the log '
+        'shows exactly what the model received.',
+    '提问需要模型客户端（pip install -r requirements.txt）。下面「直接工具调用」不需要它。':
+        'Asking needs the model client (pip install -r requirements.txt). '
+        'The direct tool calls below do not.',
+    '共 {total} 个可分析文件，这里按大小列出前 {shown} 个':
+        '{total} analysable files found; the {shown} largest are listed here',
+    '共 {total} 个可分析文件，按大小排序': '{total} analysable files found, sorted by size',
+    '没有可分析的数据文件': 'No analysable data files',
+    'analyze_dataset（单次，无驻留）': 'analyze_dataset (one shot, nothing resident)',
+    'dataset_session（驻留会话）': 'dataset_session (resident session)',
+    'export_deliverables（出报告与图表）': 'export_deliverables (report and charts)',
+    'list_datasets（发现数据）': 'list_datasets (discover data)',
+    '数据初始化': 'Data reset',
+    '恢复初始状态': 'Restore initial state',
+    '再点一次确认擦除': 'Click again to confirm the wipe',
+    '模型连接设置': 'Model connection settings',
+    '模型服务地址': 'Model service URL',
+    '模型服务访问密钥': 'Model service access key',
+    '密钥不会回显到浏览器。更换模型服务地址会清除上一服务商的密钥与模型。': 'Keys are never returned to the browser. Changing the model service URL clears the previous provider key and model.',
+    '本地部署：地址由当前计算后端访问。选择远端后，127.0.0.1 指远端机器，不是这台电脑。SSH 连接不是模型接口。': 'Local deployment: the selected compute backend accesses this URL. When remote is selected, 127.0.0.1 means the remote machine, not this PC. An SSH connection is not a model API.',
+    '使用 OpenAI 兼容的 /v1 地址，例如 Ollama：http://127.0.0.1:11434/v1；vLLM：http://127.0.0.1:8000/v1。按实际部署修改主机与端口。': 'Use an OpenAI-compatible /v1 URL, e.g. Ollama: http://127.0.0.1:11434/v1; vLLM: http://127.0.0.1:8000/v1. Adjust the host and port to match your deployment.',
+    '无鉴权的本地模型服务可填 local 作为密钥占位，无需云服务密钥；启用了鉴权则填写该模型服务的访问密钥。': 'For a local model service without authentication, enter local as a placeholder; no cloud key is needed. If authentication is enabled, use that model service access key.',
+    '重置后将进入设置新访问密码页。退出登录不会清除配置，不需要重置。': 'Reset opens the page for setting a new access password. Signing out keeps your configuration and does not require a reset.',
+    '重置只作用于当前本机后端；远端模式下须先在“计算连接”中选择“使用本机”。': 'Reset applies only to this local backend. In remote mode, select Use local in Compute connection first.',
+    '当前使用远端后端，禁止在此重置。请先在“计算连接”中选择“使用本机”。': 'Reset is blocked while using a remote backend. Select Use local in Compute connection first.',
+    '请再次确认重置。重置后将进入设置新访问密码页；只想退出登录请使用“退出”。': 'Confirm reset again. You will be asked to set a new access password. To sign out only, use Sign out.',
+    '正在核对计算位置与重置权限…': 'Checking compute location and reset authorization…',
+    '无法核对重置权限，未发送重置请求。请检查连接或重新登录后再试。': 'Cannot verify reset authorization; no reset request was sent. Check the connection or sign in again before retrying.',
+    '正在重置，请勿重复提交…': 'Resetting. Do not submit again…',
+    '重置未确认成功（HTTP {status}），未自动重试。请刷新检查；若仍需重置，请重新确认。': 'Reset was not confirmed successful (HTTP {status}); it was not retried. Refresh to check, then confirm again only if a reset is still needed.',
+    '无法确认重置结果，未自动重试。请先刷新检查，不要立即重复重置。': 'The reset outcome is unknown and was not retried. Refresh to check before attempting another reset.',
+    '浏览器扩展改写了页面根样式（transform/filter），底部输入栏将不固定：请用无痕窗口（Ctrl+Shift+N）打开本页验证。':
+        'A browser extension rewrote this page\'s root styling (transform/filter), so the '
+        'bottom composer will not stay pinned. Verify in an incognito window (Ctrl+Shift+N).',
+    '布局自检：输入栏固定在视口底部（滚动位移 {m}px）。':
+        'Layout self-test: the composer is pinned to the viewport bottom (scroll displacement {m}px).',
+    '布局自检：输入栏未固定！滚动位移 {m}px，报告已写入服务器。':
+        'Layout self-test: the composer is NOT pinned! Scroll displacement {m}px; the report '
+        'has been written to the server.',
+    '底部输入栏未固定：当前浏览器的布局自检已检出，详情在执行记录与 diag.json。':
+        'The bottom composer is not pinned: this browser\'s layout self-test caught it; details '
+        'are in the activity log and in diag.json.',
+    '擦除本机的会话、缓存、连接设置与访问密码，恢复初始状态。数据文件与已生成的报告不会被删除。':
+        'Erases this machine\'s sessions, cache, connection settings and access password, '
+        'returning the workbench to its initial state. Dataset files and generated '
+        'reports are not deleted.',
 }
 
 ZH_SPECIAL = {

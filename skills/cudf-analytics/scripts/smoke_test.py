@@ -78,6 +78,7 @@ def make_fixture(path: str, rows: int = 20_000) -> dict:
     # Ground truth computed independently, so the assertions verify the script
     # against the data rather than against assumed properties of the generator.
     truth = {
+        "rows": int(len(df)),
         "revenue_mean": float(df["revenue"].mean()),
         "revenue_median": float(df["revenue"].median()),
         "revenue_q1": float(df["revenue"].quantile(0.25)),

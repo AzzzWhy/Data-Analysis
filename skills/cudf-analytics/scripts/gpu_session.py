@@ -315,7 +315,7 @@ def do_open(req: dict) -> dict:
                 return _err("file already has an active session with a different engine or "
                             "load backend; close it before changing the route",
                             session_id=existing.sid)
-            return {
+            reply = {
                 "ok": True,
                 "session_id": existing.sid,
                 "file": os.path.basename(path),
@@ -348,6 +348,18 @@ def do_open(req: dict) -> dict:
                     f"{existing.sid}** for every later call, and release it with close."
                 ),
             }
+            # The plan is session state, so a reuse reply has to carry it: the workbench card and
+            # the model both read progress out of this reply, and without it a session that has
+            # run four steps answers as if it had no plan at all. Mirrors the warm-cache branch
+            # below, which builds one when a goal arrives for a session that never had it.
+            if (req.get("goal") or req.get("plan")) and existing.plan is None:
+                existing.plan = PLANS_MODULE.build_plan(
+                    plan_id=f"p{existing.sid}", goal=str(req.get("goal") or ""),
+                    kind=req.get("plan_kind"), group_cols=_pick_group_columns(existing.frame),
+                )
+            if existing.plan is not None:
+                reply["plan"] = existing.plan.as_dict()
+            return reply
     existing = None
     if invalidated:
         _release_unused_gpu_blocks()
@@ -803,6 +815,19 @@ def _step_summary(op: str, payload: Any) -> Optional[str]:
     return None
 
 
+def _frame_mb(sess: Session) -> Optional[float]:
+    """Memory the resident frame actually holds, or None when it cannot be measured.
+
+    Zero bytes and unknown bytes are different claims, so this does not collapse them:
+    `_frame_bytes` returns 0 on failure, which would let a workbench card report "0 MB held"
+    for a frame it never measured.
+    """
+    try:
+        return round(float(sess.frame.memory_usage(deep=True).sum()) / 1024 ** 2, 1)
+    except Exception:
+        return None
+
+
 def do_list(_req: dict) -> dict:
     _prune_cache()
     return {
@@ -818,6 +843,7 @@ def do_list(_req: dict) -> dict:
                 "rows": s.rows,
                 "engine": s.engine.name,
                 "steps": s.steps,
+                "resident_mb": _frame_mb(s),
                 "idle_seconds": round(time.perf_counter() - s.opened_at, 1),
                 "cumulative_seconds": round(s.load_seconds + s.analysis_seconds, 3),
             }

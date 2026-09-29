@@ -272,6 +272,7 @@ One JSON object per line on stdin, one JSON object per line on stdout.
 {"cmd": "analyze", "sid": "s1", "op": "groupby", "by": "region", "agg": "revenue:sum"}
 {"cmd": "list"}
 {"cmd": "close",   "sid": "s1"}          // or {"sid": "all"}
+{"cmd": "close",   "sid": "all", "retain": true}   // keep a bounded warm frame for the next question
 {"cmd": "ping"}
 ```
 
@@ -285,7 +286,20 @@ Behaviour that matters:
 - **A modified file invalidates the session.** The worker detects this and reports it, because
   answers from a stale frame would be wrong.
 - Sessions are capped (`SESSION_MAX`, default 4) and an `open` is refused *before* loading when
-  free device memory is short, so an out-of-memory failure never surfaces mid-parse.
+  free device memory is short, so an out-of-memory failure never surfaces mid-parse. The reading
+  it acts on is unavailable on a CPU-only run, so there the guard is inert by design.
+- **`close` with `retain` is not the same verb as `close` without it.** With `retain`, active
+  handles are closed but validated GPU frames are kept in a bounded cache
+  (`SESSION_WARM_CACHE_MB`, `SESSION_WARM_TTL_SECONDS`) for the next question; without it, the
+  cache is cleared too. Only GPU frames are ever retained.
+- **`list` is not a read-only peek.** It prunes the warm cache first, so it can expire frames by
+  TTL and evict them by byte budget before answering. A monitoring loop that polls it changes
+  what it is watching.
+- `list` reports `count`, `max_sessions`, `warm_cache_count`, `warm_cache_mb` and, per session,
+  `session_id`, `file`, `rows`, `engine`, `steps`, `resident_mb`, `idle_seconds` and
+  `cumulative_seconds`. `resident_mb` is `null` when the frame cannot be measured, which is a
+  different claim from `0`. Warm frames are reported only as a count and a total: the reply does
+  not say which file each one came from.
 
 Measured on 20M rows / 3.04 GB:
 

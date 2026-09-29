@@ -42,6 +42,7 @@ from api_config import create_client, load_config, save_config
 import skills
 from skills import load_skill_definitions, skill_func_map
 from external_tools import ExternalTools, DEFINITIONS as EXTERNAL_DEFINITIONS
+from execution_outcome import tool_result_failed
 
 MODEL_NAME = os.environ.get('GPU_API_MODEL') or os.environ.get('OPENAI_MODEL') or os.environ.get('STEPFUN_MODEL', 'step-3.7-flash')
 BASE_URL = os.environ.get('GPU_API_BASE_URL') or os.environ.get('OPENAI_BASE_URL') or os.environ.get('STEPFUN_BASE_URL', 'https://api.stepfun.com/step_plan/v1')
@@ -273,12 +274,21 @@ def _reason_clause(text: str) -> str:
     return flat if len(flat) <= 60 else flat[:59].rstrip() + "…"
 
 
-def summarize_tool_result(result_json: str) -> str:
-    """Short human-readable line for the console, so a demo shows what actually ran."""
-    try:
-        payload = json.loads(result_json)
-    except json.JSONDecodeError:
-        return "unparseable result"
+def summarize_tool_result(result_json: str, payload: dict | None = None) -> str:
+    """Short human-readable line for the console, so a demo shows what actually ran.
+
+    `payload` lets a caller that already parsed the result hand the dict over instead of
+    parsing it a second time. Anything that is not a dict falls back to the unparseable line,
+    so a JSON scalar is not treated as a result shape.
+    """
+    if not isinstance(payload, dict):
+        try:
+            parsed = json.loads(result_json)
+        except json.JSONDecodeError:
+            return "unparseable result"
+        if not isinstance(parsed, dict):
+            return "unparseable result"
+        payload = parsed
     if not payload.get("success"):
         return f"FAILED: {payload.get('error')}"
     rows = payload.get("rows_scanned")
@@ -470,13 +480,20 @@ class Tui:
 
 class Agent:
     def __init__(self, client: OpenAI, verbose: bool = True, event_sink=None,
-                 model: str | None = None, reuse_one_shot: bool = False,
+                 model: str | None = None, result_sink=None, reuse_one_shot: bool = False,
                  external_config=None):
         self.client = client
         self.model = model if model is not None else MODEL_NAME
         self.verbose = verbose
         self.event_sink = event_sink
+        # A second, structured observer. event_sink carries the same text the terminal prints,
+        # which is fine for a human and wrong for a frontend: deriving engine state from trace
+        # prose means a reworded log line silently changes what a UI reports about the GPU.
+        # result_sink gets (name, parsed payload, seconds) so consumers read the decision
+        # record as data. It is never allowed to break an analysis -- see the guard in _run_inner.
+        self.result_sink = result_sink
         self.reuse_one_shot = reuse_one_shot
+        self.last_run_outcome = {"status": "failed", "reason": "not_started", "tool_failures": 0}
         self.messages: list[dict] = [{"role": "system", "content": _system_prompt()}]
         # Control condition for the comparison experiment: the same model, same prompt, no skills.
         # Nothing else changes, so any difference in the answer is attributable to the tools rather
@@ -513,7 +530,13 @@ class Agent:
 
     def log(self, msg: str) -> None:
         if self.event_sink is not None:
-            self.event_sink(msg)
+            # An observer must never break the run it is observing. Before the GUI there was no
+            # sink that could fail on its own -- Textual's post_message is thread-safe by design --
+            # so this guard did not exist. A frontend that renders every tool result does.
+            try:
+                self.event_sink(msg)
+            except Exception:
+                pass
             return
         if not self.verbose:
             return
@@ -537,19 +560,49 @@ class Agent:
                 print(line, flush=True)
 
     def run(self, user_query: str) -> str:
-        """Answer one question. Active sessions close; bounded frames may stay warm."""
+        """Return CLI-compatible text and publish this turn's structured outcome."""
+        self.last_run_outcome = {"status": "failed", "reason": "incomplete", "tool_failures": 0}
         if self.client is None or not self.model:
-            return '[model call failed] 尚未配置 API 地址、密钥与模型。请输入 /settings 打开连接设置。'
+            error = '尚未配置 API 地址、密钥与模型。请输入 /settings 打开连接设置。'
+            self._outcome("failed", reason="not_configured", error=error)
+            return f'[model call failed] {error}'
         try:
             return self._run_inner(user_query)
+        except BaseException as exc:
+            # Preserve the exception contract for callers, but never leave a
+            # previous successful turn's state attached to a failed new run.
+            self._outcome("failed", reason="unhandled_exception", error=self.safe_error(exc))
+            raise
         finally:
             # Structural guarantee rather than a prompt request. The model is asked to call
             # close, and usually does, but a leaked active session is unsafe. The worker can
             # retain a bounded, expiring GPU frame for the next question.
-            released = skills.close_all_sessions()
-            if released.get("closed"):
-                self.log(f"  [session] auto-closed {released['closed']} session(s) left open"
-                         f" (the model did not call close)")
+            try:
+                released = skills.close_all_sessions()
+                if not isinstance(released, dict) or tool_result_failed(released):
+                    detail = released.get("error") if isinstance(released, dict) else None
+                    raise RuntimeError(str(detail or "session cleanup was not confirmed"))
+                if released.get("closed"):
+                    self.log(f"  [session] auto-closed {released['closed']} session(s) left open"
+                             f" (the model did not call close)")
+            except Exception as exc:
+                # Cleanup must neither overwrite a primary exception nor turn
+                # an otherwise useful answer into an unobservable resource leak.
+                error = self.safe_error(exc)
+                previous = self.last_run_outcome
+                primary_error = previous.get("error")
+                self._outcome("failed" if previous["status"] == "failed" else "partial",
+                              reason=previous.get("reason") or "cleanup_failed",
+                              error=(f"{primary_error}; cleanup: {error}" if primary_error else error))
+                self.log(f"  [session error] {error}")
+
+    def _outcome(self, status: str, *, reason: str | None = None, error: str | None = None):
+        outcome = {"status": status, "tool_failures": self.last_run_outcome.get("tool_failures", 0)}
+        if reason:
+            outcome["reason"] = reason
+        if error:
+            outcome["error"] = error
+        self.last_run_outcome = outcome
 
     def _run_inner(self, user_query: str) -> str:
         self.messages.append({"role": "user", "content": user_query})
@@ -571,6 +624,7 @@ class Agent:
             except Exception as exc:
                 # A model/transport failure must not kill the session or lose the history.
                 error = self.safe_error(exc)
+                self._outcome("failed", reason="model_api_error", error=error)
                 self.log(f"  [api error] {error}")
                 if "tool" in str(exc).lower():
                     self.log("  [hint] this model may not support function calling. "
@@ -579,6 +633,7 @@ class Agent:
                 return f"[model call failed] {error}"
 
             if not response.choices:
+                self._outcome("failed", reason="model_empty_response", error="Model returned no choices")
                 return "[model call failed] empty response"
             message = response.choices[0].message
             tool_calls = getattr(message, "tool_calls", None)
@@ -586,7 +641,14 @@ class Agent:
             # ---- no tool call: this is the final answer ----
             if not tool_calls:
                 content = message.content or ""
+                if not isinstance(content, str) or not content.strip():
+                    self._outcome("failed", reason="model_empty_answer", error="Model returned no final answer")
+                    return "[model call failed] empty final answer"
                 self.messages.append({"role": "assistant", "content": content})
+                failures = self.last_run_outcome["tool_failures"]
+                self._outcome("partial" if failures else "succeeded",
+                              reason="tool_failure" if failures else None,
+                              error=f"{failures} tool call(s) reported failure" if failures else None)
                 return content
 
             # ---- tool call(s): echo the assistant turn, then execute each one ----
@@ -609,7 +671,22 @@ class Agent:
                 result, seconds = execute_tool(name, raw,
                                                prefer_resident=self.reuse_one_shot,
                                                external_tools=self.external_tools)
-                self.log(f"      {summarize_tool_result(result)}   ({seconds:.2f}s wall)")
+                # Parse once here and give the parsed dict to both consumers. summarize_tool_result
+                # used to parse it internally and throw the result away, so a structured sink would
+                # otherwise have parsed the same payload a second time.
+                try:
+                    parsed = json.loads(result)
+                except (json.JSONDecodeError, TypeError):
+                    parsed = None
+                if not isinstance(parsed, dict) or tool_result_failed(parsed):
+                    self.last_run_outcome["tool_failures"] += 1
+                if self.result_sink is not None and isinstance(parsed, dict):
+                    try:
+                        self.result_sink(name, parsed, seconds)
+                    except Exception:
+                        pass
+                self.log(f"      {summarize_tool_result(result, payload=parsed)}   "
+                         f"({seconds:.2f}s wall)")
                 self.messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
@@ -618,13 +695,24 @@ class Agent:
 
         # Loop budget exhausted: report what happened instead of spinning forever.
         self.log(f"  [warn] hit the tool-round limit ({MAX_TOOL_ROUNDS})")
+        self._outcome("partial", reason="tool_round_limit",
+                      error=f"Tool round limit ({MAX_TOOL_ROUNDS}) reached")
         try:
             final = self.client.chat.completions.create(
                 model=self.model, messages=self.messages)
+            if not final.choices:
+                self._outcome("failed", reason="model_summary_empty_response",
+                              error="Model returned no summary choices after the tool round limit")
+                return f"[tool round limit {MAX_TOOL_ROUNDS} reached, no summary could be generated] empty response"
             content = final.choices[0].message.content or ""
+            if not isinstance(content, str) or not content.strip():
+                self._outcome("failed", reason="model_summary_empty_answer",
+                              error="Model returned no summary after the tool round limit")
+                return f"[tool round limit {MAX_TOOL_ROUNDS} reached, no summary could be generated] empty answer"
             self.messages.append({"role": "assistant", "content": content})
             return content
         except Exception as exc:
+            self._outcome("failed", reason="model_summary_error", error=self.safe_error(exc))
             return (f"[tool round limit {MAX_TOOL_ROUNDS} reached, no summary could be generated] "
                     f"{self.safe_error(exc)}")
 
@@ -645,6 +733,11 @@ def main() -> int:
     ap.add_argument('--configure', action='store_true', help='open API connection settings even when startup prompts are disabled')
     ap.add_argument('--base-url', help='OpenAI-compatible API base URL (changing it clears inherited credentials)')
     ap.add_argument('--model', help='model ID to use for this run')
+    ap.add_argument('--gui', action='store_true',
+                    help='serve the browser workbench instead of a terminal frontend. It starts '
+                         'even with no model configured, and says which part is unavailable')
+    ap.add_argument('--gui-port', type=int, default=None,
+                    help='port for --gui (default 8765, or GPU_GUI_PORT)')
     ap.add_argument('--external-config', help='external skill / MCP configuration JSON (not API credentials)')
     ap.add_argument('--language', choices=['zh', 'en'], help='TUI language (中文 / English) for this run')
     args = ap.parse_args()
@@ -665,6 +758,21 @@ def main() -> int:
     except ValueError as exc:
         print(f'[error] {exc}', file=sys.stderr)
         return 2
+    # The workbench is its own frontend, so it is chosen before any terminal decision and before
+    # the "configure me first" gate: it stays useful with no model at all (listing data, running
+    # tools directly, reporting honestly why the question box is closed). --ask and piped input
+    # are scripted runs and must not silently start a server nobody asked to stop.
+    if args.gui:
+        if args.ask or not sys.stdin.isatty():
+            print('[error] --gui starts an interactive server; it cannot be combined with --ask '
+                  'or piped input. Run agent/gui.py directly if you need that.', file=sys.stderr)
+            return 2
+        import gui
+        # The --gui-port help advertises GPU_GUI_PORT, but this fell straight back to the
+        # DEFAULT_PORT constant, so the documented env var silently did nothing through --gui
+        # (running agent/gui.py directly was the only way it worked).
+        gui_port = args.gui_port or int(os.environ.get('GPU_GUI_PORT') or gui.DEFAULT_PORT)
+        return gui.serve(port=gui_port, model=args.model)
     client = build_client(config) if config.ready else None
     # Full screen is only for an interactive terminal. Scripted --ask runs and pipes keep
     # their stable line-oriented output; --plain explicitly opts out.

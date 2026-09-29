@@ -23,6 +23,26 @@ python agent/agent_main.py
 
 首次进入交互式 TUI 会显示连接设置。如果未安装可选的 Textual，程序会退回基本终端界面。请使用交互式终端；`--ask` 和管道输入不会弹出设置窗口。
 
+#### 浏览器工作台
+
+如果要在同一个大文件上连续追问，可以用浏览器工作台代替终端：
+
+```bash
+python agent/gui.py --port 8765
+# 在自己的电脑上通过 SSH 隧道访问节点：
+ssh -p <节点SSH端口> -L 8765:127.0.0.1:8765 Developer@<跳板机地址>
+```
+
+`python agent/agent_main.py --gui` 启动同一个服务，走 Agent 自己的入口。它在"请先配置"那道检查之前就被选中，所以没有密钥时界面照样起来，并明确告出哪一半不可用；`--gui` 拒绝与 `--ask` 或管道输入同时使用，因为那是脚本化运行，一个没人要求停的服务器只会变成挂住的进程。
+
+顶部的 **设置** 按钮通过终端同一个 `api_config` 加载器修改 API 地址、模型与密钥。密钥只接受一次、永不回显：响应只告诉你有没有存过；换地址会清掉上一个服务商的密钥与模型；密钥出现在查询串里会被直接拒绝。
+
+服务只绑 `127.0.0.1`。不设 `GPU_GUI_ALLOW_REMOTE=1` 时它拒绝绑定其他网卡，因为这个界面没有鉴权，而节点上 8888/9000 是公网可达端口——请用上面的隧道方式。
+
+界面右下角的引擎标记只报告事实：**有意选择 CPU** 显示为 `CPU · pandas (by choice)` 并附上引擎自己的交叉点判据；**GPU 尝试后失败** 才显示为橙色的 `(fallback)`。两者不会互相冒充。引擎没有给出的数值一律留白，不填估算值。
+
+页面里的「直接工具调用」不经过模型，按下去就是一次真实的 `skills` 调用。它存在的原因是：没有它，在没有 API 密钥的机器上就无法在浏览器里验证图表、会话卡和引擎标记；它不是提问框的替代品，也不会显示任何预置答案。没有安装 `openai` 或未配置密钥时，提问框会禁用并显示真实原因（原始 `ImportError` 或"未配置密钥"），其余面板照常可用。
+
 ### 2. 连接 API、选择模型与语言
 
 启动设置中依次填写：
@@ -90,6 +110,7 @@ python agent/agent_main.py --ask "分析 /absolute/path/to/sales.csv 的异常�
 - **模型不能调用工具**：换用支持 Chat Completions 工具/函数调用的模型；只出现在列表里不够。
 - **文件找不到**：确认文件在执行 Agent 的机器上，而不是仅在你登录所用的电脑上；检查绝对路径及读取权限。
 - **状态显示 CPU**：小数据或 GPU/依赖不可用时可能正常走 pandas。以执行详情里的实际引擎与路由理由为准。
+- **没给路径时找不到数据文件**：`list_datasets` 只列举受控范围——当前目录及其下两层、上一级目录，以及设置了 `DEMO_DATA_DIR` 时的该目录。主目录只列**直接放在里面的文件**，不会进入它的子目录，所以下载目录里的无关 CSV 不会当成候选数据端给你。放在主目录顶层的数据集仍然能被发现；不在上述范围时请直接给绝对路径。
 - **关闭启动提示后无法分析**：默认没有保存密钥，使用 `/settings` 重新输入，或提供环境变量。F5 设置入口始终保留。
 
 ## English
@@ -110,6 +131,27 @@ python agent/agent_main.py
 If you work through SSH, run these commands **inside the SSH session**. The requirements include the CPU path. For GPU acceleration, install a RAPIDS cuDF environment compatible with that machine's CUDA, OS and Python. Without cuDF, the tool reports its actual pandas/CPU execution; it does not claim a GPU run.
 
 An interactive TUI opens connection setup at startup. Without the optional Textual dependency, a basic terminal interface is used. `--ask` and piped input do not open setup dialogs.
+
+#### Browser workbench
+
+If you intend to ask several questions about one large file, the workbench replaces the terminal for that job:
+
+```bash
+python agent/gui.py --port 8765
+# from your own machine, through an SSH tunnel to the node:
+ssh -p <node-ssh-port> -L 8765:127.0.0.1:8765 Developer@<jump-host>
+```
+
+`python agent/agent_main.py --gui` starts the same server from the agent's own entry point. It is chosen before the "configure me first" check, so the workbench comes up with no key and states which half is unavailable; it refuses to combine with `--ask` or piped input, because those are scripted runs and a server nobody asked to stop is a hung process.
+
+The **设置 / Settings** button edits the API address, model and key through the same `api_config` loader the terminal uses. A key is accepted once and never returned: the response reports only whether one is stored, changing the endpoint drops the previous provider's credential, and a key in the query string is refused outright.
+
+The server binds `127.0.0.1` and refuses any other interface unless `GPU_GUI_ALLOW_REMOTE=1` is set, because it has no authentication and the node's 8888/9000 ports are reachable from the public internet. Use the tunnel above.
+
+The engine chip reports facts only. A deliberate CPU route reads `CPU · pandas (by choice)` and carries the engine's own crossover reason; a GPU that was asked for and failed reads `(fallback)` in a warning colour. The two never impersonate each other, and where the engine produced no value the row stays empty rather than showing an estimate.
+
+The **direct tool call** panel invokes the real `skills` functions without a model, and says so in the log drawer. It exists because without it the charts, the session card and the engine chip could not be checked in a browser on a machine that has no API key. It is not a substitute for asking a question, and it never renders a prewritten answer. With `openai` not installed, or no key configured, the question box is disabled and shows the real reason (the original `ImportError`, or "no key configured"); every other panel keeps working.
+
 
 ### 2. Connect an API, select a model and choose a language
 
@@ -156,3 +198,5 @@ python agent/agent_main.py --ask "Find outliers in /absolute/path/to/sales.csv" 
 `--plain` runs the basic terminal. `--language en` / `--language zh` sets the full-screen TUI language; it does not translate all text in the basic terminal. `GPU_ANALYSIS_CONFIG` overrides the config-file path; `XDG_CONFIG_HOME` changes the default config directory.
 
 If model discovery fails, check the URL, key and network, or enter a model ID manually if `/models` is unavailable. If tool calling fails, choose a compatible model. If a file is missing, check its path **on the agent machine** and its read permissions. A CPU status can be correct for small inputs or when GPU dependencies are unavailable. If startup setup was disabled and no key was saved, reopen `/settings` or supply one through the environment.
+
+When a question names no file, the agent looks for candidates with `list_datasets`, which lists the working directory down two levels, its parent one level, and `DEMO_DATA_DIR` when set. The home directory is listed at its top level only -- a dataset sitting directly in it is still found, but `list_datasets` never descends into it, so an unrelated download is not offered as your data. If the file you mean is outside that range, give its absolute path.

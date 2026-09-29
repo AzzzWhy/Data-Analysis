@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>登录 · Data Workbench</title>
+<link rel="stylesheet" href="/login.css">
+</head>
+<body>
+
+<canvas id="dust" aria-hidden="true"></canvas>
+<div class="glow" id="glow" aria-hidden="true"></div>
+<div class="motes" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+<!-- Decorative number field: fixed artwork, never task metrics or counters. -->
+<div class="figures" data-decoration="digits" aria-hidden="true">
+  <span class="figure f1">014</span>
+  <span class="figure f2">256</span>
+  <span class="figure f3">8192</span>
+  <span class="figure f4">128</span>
+  <span class="figure f5">064</span>
+  <span class="figure f6">1024</span>
+</div>
+<div class="vignette" aria-hidden="true"></div>
+<button type="button" id="lang" class="lang">English</button>
+
+<main class="gate">
+  <div class="gate-panel" id="gate-panel">
+    <header class="gate-head">
+      <div class="product">
+        <span class="product-mark" aria-hidden="true">
+          <svg viewBox="0 0 36 36" width="36" height="36">
+            <defs>
+              <linearGradient id="mark-bg" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#242c44"/>
+                <stop offset="1" stop-color="#141a2e"/>
+              </linearGradient>
+            </defs>
+            <rect width="36" height="36" rx="10" fill="url(#mark-bg)"/>
+            <rect x="8" y="20" width="4.5" height="8" rx="1.6" fill="#6e7ab4"/>
+            <rect x="15.75" y="14.5" width="4.5" height="13.5" rx="1.6" fill="#a8b2dc"/>
+            <rect x="23.5" y="8" width="4.5" height="20" rx="1.6" fill="#f4f6fb"/>
+          </svg>
+        </span>
+        <div class="product-copy">
+          <strong>Data Workbench</strong>
+          <span id="product-sub">GPU 加速与数据分析</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="live" aria-describedby="metrics-note">
+      <div><span id="live-k0">行数</span><b id="live-n0">—</b></div>
+      <div><span id="live-k1">加速比</span><b id="live-n1">—</b></div>
+      <div><span id="live-k2">耗时</span><b id="live-n2">—</b></div>
+    </div>
+    <p id="metrics-note" class="metrics-note">此页不执行分析；真实指标在任务完成后于工作台展示。</p>
+
+    <form id="gate-form" class="gate-body" hidden novalidate>
+      <h1 id="t-title">设置访问密码</h1>
+      <p id="t-sub" class="gate-sub">当前所连后端尚未设置访问密码，请先完成设置。此密码不是 SSH 密码。</p>
+
+      <div class="field">
+        <label class="lt" for="password" id="t-label">访问密码</label>
+        <input id="password" name="password" type="password" autocomplete="new-password" spellcheck="false" placeholder="至少 8 位">
+      </div>
+      <div class="field" id="confirm-field">
+        <label class="lt" for="confirm" id="t-label2">再输入一次</label>
+        <input id="confirm" type="password" autocomplete="new-password" spellcheck="false" placeholder="重复一次，确认无误">
+      </div>
+
+      <p class="gate-msg" id="gate-msg" role="alert" hidden></p>
+      <button type="submit" id="gate-submit" class="primary">设置密码并进入</button>
+    </form>
+
+    <div id="gate-waiting" class="gate-body" hidden>
+      <h1 id="t-wait-title">等待初始设置</h1>
+      <p id="t-wait-sub" class="gate-sub">这份服务还没有设置访问密码。请在运行它的那台机器上打开本页面，完成首次设置后，这里即可登录。</p>
+      <div class="waiting-note" id="waiting-note"><span class="spinner" aria-hidden="true"></span><span id="t-wait-note">正在等待管理员设置密码…</span></div>
+      <button type="button" id="gate-retry" class="primary" hidden>重试连接</button>
+    </div>
+
+    <footer class="gate-foot">
+      <span id="t-foot">密码只在请求体中传输 · 会话保留 7 天 · 服务重启后失效</span>
+    </footer>
+  </div>
+</main>
+
+<span class="build-tag">{{BUILD}}</span>
+<script src="/login.js"></script>
+</body>
+</html>

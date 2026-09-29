@@ -27,6 +27,7 @@ import os
 import subprocess
 import queue
 import sys
+import tempfile
 import threading
 import time
 
@@ -696,7 +697,8 @@ def _worker_start(*, register_cleanup=True):
     proc = subprocess.Popen(
         [_python_bin(), script],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True, encoding="utf-8", bufsize=1,
+        # Keep UTF-8 on both ends of the pipe for Chinese goals and tool replies.
+        text=True, encoding="utf-8", errors="replace", bufsize=1,
         env={**os.environ, "PYTHONIOENCODING": "utf-8"},
     )
     proc.responses = queue.Queue()
@@ -892,6 +894,39 @@ def close_all_sessions() -> dict:
             return {"closed": 0}
         out = _worker_call({"cmd": "close", "sid": "all", "retain": True})
         return {"closed": opened, "detail": out}
+    except Exception as exc:
+        return {"closed": 0, "error": f"{type(exc).__name__}: {exc}"}
+
+
+def release_all_sessions_and_cache() -> dict:
+    """Close every session AND drop the warm frame cache, then report what is left.
+
+    close_all_sessions() passes retain=True, which is correct at the end of a turn -- the next
+    question should get that frame for free -- and wrong for an explicit release, where it would
+    report success while continuing to hold up to SESSION_WARM_CACHE_MB. It also returns early
+    when no session is active, so it would not touch frames left behind by a closed turn.
+
+    The after-counts come back with the result so a caller can confirm the memory actually went
+    away instead of trusting that it did.
+    """
+    try:
+        before = _worker_call({"cmd": "list"})
+        out = _worker_call({"cmd": "close", "sid": "all"})
+        after = _worker_call({"cmd": "list"})
+        # `warm_frames_dropped` counts frames sitting in the warm cache. Releasing a *live*
+        # session also frees its frame -- it was never in that cache -- so a release that put
+        # ~1.7 GB back could truthfully report "0 frames dropped" while the occupancy card went to
+        # zero. Report the bytes too, so the log line does not undercut the screen.
+        held_mb = float(before.get("warm_cache_mb") or 0.0) + sum(
+            float(s.get("resident_mb") or 0.0) for s in (before.get("sessions") or []))
+        return {
+            "closed": before.get("count") or 0,
+            "warm_frames_dropped": before.get("warm_cache_count") or 0,
+            "bytes_freed_mb": round(held_mb, 1),
+            "sessions_after": after.get("count") or 0,
+            "warm_frames_after": after.get("warm_cache_count") or 0,
+            "detail": out,
+        }
     except Exception as exc:
         return {"closed": 0, "error": f"{type(exc).__name__}: {exc}"}
 
@@ -1257,29 +1292,44 @@ def _data_search_dirs() -> list:
 
 
 def _data_search_roots() -> list:
-    """(directory, max_depth) pairs for dataset discovery.
+    """(directory, max_depth) pairs for dataset *listing*.
+
+    Roots and dirs are deliberately not the same list. _data_search_dirs() is what
+    _resolve_data_path uses to turn a dataset name the user typed into a path; that lookup only
+    tests one candidate per directory, so it may include the home directory. Listing is
+    different: a root here is walked, so the home directory is capped at depth 0 -- a dataset
+    placed directly in it stays discoverable (the demo dataset lives there on GB10), but whatever
+    CSV happens to sit in ~/Downloads is not offered to the model as "your data".
 
     Depth matters as much as location. Searching the home directory recursively returned 264
     "datasets", almost all of them irrelevant files inside tool installations, which would bury
-    the one 3 GB file the caller wanted. The current directory is small and worth a full walk;
-    a parent or home directory is not, so those are bounded.
+    the one 3 GB file the caller wanted. The current directory gets a bounded walk (two levels
+    below it); other roots get one. The home cap outranks the workspace one: launching from
+    `cd ~` makes home the current directory, and handing it the workspace's two-level walk there
+    would reopen exactly the hole that cap exists to close.
     """
+    home = os.path.abspath(os.path.expanduser("~"))
     roots = []
     cwd = os.path.abspath(os.getcwd())
-    roots.append((cwd, None))                       # workspace: walk it all
+    roots.append((cwd, 0 if cwd == home else 2))   # workspace, unless the workspace is home
     for d in _data_search_dirs():
-        if d != cwd:
-            roots.append((d, 1))                    # parents and home: top level plus one
+        if d == cwd:
+            continue
+        if d == home:
+            roots.append((d, 0))                    # home: its own files only, never descended
+        else:
+            roots.append((d, 1))                    # parents and /data: top level plus one
     return roots
 
 
 def list_datasets(directory: str = None) -> str:
     """List analysable data files with sizes, so the agent can pick a target.
 
-    With no argument, searches every directory _data_search_dirs() returns rather than only
-    the current one, so discovery finds the dataset the resolver would also find. Pass an
-    explicit directory to look somewhere else. Deliberately not a machine-specific absolute
-    path, so the skill works on any checkout.
+    With no argument, searches the bounded roots from _data_search_roots() rather than only the
+    current one, so discovery finds the dataset the resolver would also find. Pass an explicit
+    directory to look somewhere else. Deliberately not a machine-specific absolute path, so the
+    skill works on any checkout. Note that the listing roots are narrower than the resolver's
+    search dirs on purpose -- see _data_search_roots.
     """
     try:
         exts = {".csv", ".tsv", ".parquet", ".pq", ".jsonl", ".json", ".xlsx", ".xls"}
@@ -1424,13 +1474,28 @@ def export_deliverables(file_path: str = None, operation: str = "auto", by: str 
 
         # One subprocess rather than importing: keeps this module dependency-free of the
         # skill's internals and means a failure here cannot corrupt the agent process.
-        proc2 = subprocess.run(
-            [_python_bin(), script, "--input", "/dev/stdin", "--out-dir", target,
-             "--source-file", path]
-            + (["--lang", str(lang)] if lang else [])
-            + (["--lang-context", str(lang_context or _request_text())]
-               if (lang_context or _request_text()) else []),
-            input=proc.stdout, capture_output=True, text=True, timeout=600)
+        #
+        # The analysis JSON goes over as a temp file, not `/dev/stdin`. That path only exists on
+        # POSIX, so on Windows the deliverables tool failed before reaching the generator -- and
+        # the tool is one of the four the agent offers on any platform, so the reviewer's laptop
+        # hit it immediately. A file also avoids the deadlock a large stdin payload can cause if
+        # the child never reads it.
+        fd, analysis_path = tempfile.mkstemp(prefix="deliverables-analysis-", suffix=".json")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                stream.write(proc.stdout)
+            proc2 = subprocess.run(
+                [_python_bin(), script, "--input", analysis_path, "--out-dir", target,
+                 "--source-file", path]
+                + (["--lang", str(lang)] if lang else [])
+                + (["--lang-context", str(lang_context or _request_text())]
+                   if (lang_context or _request_text()) else []),
+                capture_output=True, text=True, timeout=600)
+        finally:
+            try:
+                os.remove(analysis_path)
+            except OSError:
+                pass
         if proc2.returncode != 0:
             detail = (proc2.stderr or "").strip().splitlines()
             return _err(f"could not generate the deliverables: "
