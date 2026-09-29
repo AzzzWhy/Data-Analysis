@@ -8,6 +8,14 @@
 
 [快速开始](#快速开始) · [远程计算](#本机前端--远程后端) · [性能证据](#性能证据与测量边界) · [使用说明](docs/USAGE.md) · [English](#english)
 
+## 黑客松项目材料
+
+- [项目说明与技术栈](docs/HACKATHON_SUBMISSION.md)：500 字以上项目说明、架构、优化方案、NVIDIA 技术及实际模型使用清单。
+- [本地模型部署与优化说明](docs/LOCAL_MODEL_DEPLOYMENT.md)：本地算力部署、模型服务接入、工具调用验证、已实现优化与未验证事项。
+- [Skill 入口](skill.md) 与 [Agent Skill 定义](skills/cudf-analytics/SKILL.md)：触发条件、工作流、参数及结果约束。
+
+这些链接是仓库内材料索引，不表示已替参赛者向组委会提交表单。已实现能力、历史实验和部署参考分别标注，不将 NVIDIA 硬件使用等同于使用了 NVIDIA 大模型。
+
 ## 能做什么
 
 | 场景 | 实现 |

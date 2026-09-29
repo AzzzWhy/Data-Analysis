@@ -42,8 +42,13 @@ Trigger when the user wants **computed facts about a dataset**, and any of these
 | Anomaly / outlier detection | "find the outliers in amount", "how many records are out of range" |
 | Scale or speed is the point | "50 million rows", "pandas is too slow", "how long will this take" |
 
-**Language:** the skill is driven in English. Its flags, operation names, `--agg` syntax, JSON
-keys and trigger vocabulary are English throughout, and so are the example requests above.
+**Language:** flags, operation names, `--agg` syntax and JSON keys use English identifiers.
+User questions may be Chinese or English; select operations from their intent and explain
+actual results in the user's language. Keep paths and column identifiers unchanged.
+
+For submission reviewers, the [project overview](../../docs/HACKATHON_SUBMISSION.md) and
+[local deployment guide](../../docs/LOCAL_MODEL_DEPLOYMENT.md) describe the architecture,
+actual model usage and optimization boundaries. Those documents do not expand tool permissions.
 
 Do **not** trigger for: drawing or editing a chart when no tabular dataset needs analysis,
 training models, querying a remote database, or any task where no tabular file is involved.

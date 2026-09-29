@@ -3,6 +3,10 @@
 Entry point. The **skill itself lives in `skills/cudf-analytics/SKILL.md`**; `README.md` has
 the full usage guide, verification results and submission notes.
 
+Submission reviewers: see [project, architecture and actual technology/model usage](docs/HACKATHON_SUBMISSION.md)
+and [local model deployment and optimization boundaries](docs/LOCAL_MODEL_DEPLOYMENT.md).
+The main branch includes both the Agent core and the final web workbench.
+
 ## Quick start (on GB10)
 
 ```bash
@@ -22,8 +26,8 @@ python skills/cudf-analytics/scripts/benchmark_cpu_vs_gpu.py --rows 1m 5m 20m --
 | `skills/cudf-analytics/scripts/gpu_analytics.py` | Core engine: cuDF analysis, pandas fallback, JSON output |
 | `skills/cudf-analytics/scripts/benchmark_cpu_vs_gpu.py` | CPU vs GPU timing, produces the submission tables |
 | `skills/cudf-analytics/scripts/smoke_test.py` | Core engine self-checks against independently computed truth |
-| `agent/gui.py` + `agent/gui/` | Optional browser workbench: stdlib HTTP/SSE server over the same skills, no new dependency |
-| `agent/gui_test.py` | Headless workbench checks: SSE order, artifact allow-list, release, engine chip |
+| `agent/frontend_gateway.py`, `agent/gui.py`, `agent/gui/` | Local 8877 workbench and selectable SSH backend; managed SSH needs `requirements-gui.txt` |
+| `agent/main_integration_test.py` | Real CPU worker through GUI, Chinese plan reuse and active-engine-switch protection; no model calls |
 | `benchmark/` | GB10 results: comparison table, JSON, raw logs |
 | `README.md` | Full guide: usage, output contract, verification, submission notes |
 
@@ -35,8 +39,8 @@ and IQR outlier detection — especially at large scale or when the user complai
 is slow. It also lists the cases that must **not** trigger (charting, model training,
 querying a database, editing data).
 
-The `description` deliberately carries both English and Chinese trigger vocabulary, because
-users ask in either language.
+The definition documents trigger intent and the execution contract. Users can ask in Chinese
+or English; tool identifiers, JSON keys and command flags remain stable English names.
 
 ## Status
 
@@ -49,27 +53,24 @@ users ask in either language.
   read the current count with
   `python skills/cudf-analytics/scripts/smoke_test.py | grep -c '\[PASS\]'`.
   See `benchmark/VERIFICATION.md` for what each machine actually reported.
-- End-to-end speedup of 6.45× on a 30,000,000-row CSV (5.67 GB): 19.286 s → 2.988 s, with
-  zero difference in results between engines. **Note:** only about 3× of this is GPU compute;
-  the read stage dominates. See the attribution table in `README.md`.
-- Raw evidence: `benchmark/benchmark_results.md`, `benchmark/gb10_run.log`,
-  `benchmark/smoke/gb10_smoke_test.log`.
-- The agent application (tool-calling loop, scripted demo, 11-case criteria suite) lives in
-  `agent/`; see "The agent application" in `README.md`. `run_criteria_tests.sh` passes 11/11.
+- Current historical CPU/GPU comparisons and their cold/warm boundaries are indexed in
+  [README](README.md#性能证据与测量边界) and [core acceptance](docs/FINAL_CORE_DEPLOYMENT.md).
+  They are workload-specific measurements, not fresh performance results for every main commit.
+- The Agent application and tool-calling criteria suite live in `agent/`. Historical model
+  checks and current CPU/GUI regressions are separate evidence; see
+  [main integration](docs/MAIN_INTEGRATION_2026-09-29.md).
 
 ## Quick start for the agent
 
 ```bash
-# On the GB10 (substitute your own host/port/user)
-ssh -p <port> <user>@<host>
-source ~/.bashrc                 # provides STEPFUN_API_KEY
+# On the compute host, with a working RAPIDS environment
 conda activate rapids-cudf
-cd agent
-
-python agent_main.py --ask "analyze the outliers in /path/to/data.csv"
-python demo_script.py --prewarm && python demo_script.py   # 9-stage demo, 176.8 s
-bash run_criteria_tests.sh       # 11 judging-criteria cases
+cd /path/to/Data-Analysis
+python agent/agent_main.py
 ```
 
-Without a GPU the same code runs on pandas and reports `engine="pandas"` honestly; see the
-"Reproducing it" section of `README.md` for the no-GPU path.
+Configure a compatible local or cloud model through the settings entry; no StepFun key or
+particular shell configuration is assumed. See [local deployment](docs/LOCAL_MODEL_DEPLOYMENT.md).
+For the web interface, run `python agent/frontend_gateway.py --port 8877` with the dependencies
+listed in [README](README.md). Without a usable GPU, supported operations run on pandas and
+report `engine="pandas"`; an explicit required-GPU check must not silently count as GPU success.
