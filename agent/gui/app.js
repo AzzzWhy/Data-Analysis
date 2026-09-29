@@ -50,6 +50,20 @@ let reconnectTimer = null;
 let recoveryChecks = 0;
 let catalogRequest = 0;
 let backendContextEpoch = 0;
+let fileCatalogRequest = 0;
+let datasetEntries = new Map();
+let datasetDrag = null;
+let datasetDragDepth = 0;
+let datasetDragGhost = null;
+let datasetDragImage = null;
+let datasetPointer = null;
+let datasetPointerFrame = null;
+let datasetLandingAnimation = null;
+let stagedDataset = null;
+let datasetDropNotice = "";
+let datasetDropTimer = null;
+const DATASET_DRAG_TYPE = "application/x-gpu-workbench-dataset";
+const DATASET_MOTION = window.matchMedia("(prefers-reduced-motion: reduce)");
 const JOB_BOOKMARK_KEY = "gpu-workbench:last-job:v1";
 const JOB_TERMINAL = new Set(["succeeded", "failed", "partial"]);
 
@@ -83,6 +97,23 @@ let I18N = {};
 // The frontend may connect to an older remote backend. Keep only the new labels here as
 // fallbacks so these safety explanations stay bilingual without deploying remote code.
 const LOCAL_I18N = {
+  "将文件拖入分析区，再在下方输入指令。也可点击文件选择。": "Drag a file into the analysis area, then enter an instruction below. Clicking a file also selects it.",
+  "分析结果与文件接收区": "Analysis results and dataset drop area",
+  "拖入数据 · 输入指令 · 开始分析": "Drop a dataset · Write an instruction · Analyze",
+  "待分析文件": "Selected dataset",
+  "输入分析指令": "Write an instruction",
+  "文件仍保留在当前计算后端。输入指令后才会开始分析。": "The file stays on the selected compute backend. Analysis starts only after you send an instruction.",
+  "将左侧数据文件拖到此处，或点击文件进行选择。": "Drag a dataset here from the left, or click a file to select it.",
+  "松开以选择文件，然后在下方输入指令。": "Drop to select the file, then write an instruction below.",
+  "已选择 {file}，请在下方输入分析指令。": "Selected {file}. Write an analysis instruction below.",
+  "任务执行中，暂时不能切换数据文件。": "A task is running. Dataset selection is temporarily locked.",
+  "正在确认后端任务状态，暂时不能拖入文件。": "Checking backend task status. Dataset selection is temporarily locked.",
+  "这里只接受左侧当前数据源中的文件，不会上传电脑文件或打开外部链接。": "Only files from the current dataset list are accepted. Computer files are not uploaded and external links are not opened.",
+  "数据源已经变化，请从左侧重新选择文件。": "The dataset source changed. Select the file again from the left.",
+  "文件大小未提供": "File size unavailable",
+  "移除所选文件（不删除源文件）": "Remove selection (keep source file)",
+  "已移除选择，源文件未删除。": "Selection removed. The source file was not deleted.",
+  "未选择数据文件": "No dataset selected",
   "模型连接设置": "Model connection settings",
   "模型服务地址": "Model service URL",
   "模型服务访问密钥": "Model service access key",
@@ -150,6 +181,8 @@ function applyChrome() {
   renderPlanRows();
   renderJobChrome();
   renderResetControls();
+  renderDatasetStage();
+  renderDropControls();
 }
 
 /* The engine sends one of a closed set of state tokens. They go through the same table as every
@@ -909,11 +942,16 @@ function syncJobControls() {
   const blocked = submissionPending || !jobsKnown || backendBusy;
   els.run.disabled = blocked;
   els.ask.disabled = blocked; // When idle, an unconfigured model still opens its settings form.
-  els.files.querySelectorAll("button").forEach((button) => { button.disabled = blocked; });
+  els.files.querySelectorAll("button").forEach((button) => {
+    button.disabled = blocked;
+    button.draggable = !blocked && button.dataset.pointerDrag !== "true";
+  });
+  if (blocked && (datasetDrag || datasetPointer)) endDatasetDrag();
   const reset = $("reset-all");
   if (reset) reset.dataset.taskBusy = String(submissionPending || backendBusy);
   renderResetControls();
   setBusy(submissionPending || backendBusy);
+  renderDropControls();
 }
 
 function renderJobChrome() {
@@ -989,6 +1027,14 @@ function renderJobHistory() {
 }
 
 function resetJobView() {
+  cancelDatasetLanding();
+  stagedDataset = null;
+  datasetDropNotice = "";
+  if (datasetDropTimer !== null) clearTimeout(datasetDropTimer);
+  datasetDropTimer = null;
+  const zone = $("result-dropzone");
+  if (zone) zone.classList.remove("drop-received");
+  renderDatasetStage();
   text(els.log);
   text(els.answer);
   els.answer.hidden = true;
@@ -1024,6 +1070,8 @@ function adoptJobCatalog(data) {
     canAsk = false;
     agentReady = false;
     backendContextEpoch++;
+    endDatasetDrag();
+    datasetEntries.clear();
     text(els.files);
     els.file.textContent = t("未选择数据文件");
     els.model.textContent = "—";
@@ -1314,16 +1362,424 @@ async function ask() {
 
 /* -------------------------------------------------------------------- startup */
 
+/* Dragging moves a selection, never file bytes. The drag payload is an opaque
+   list-scoped ID; only an active drag created by this page can resolve it. No
+   arbitrary text, filesystem path or foreign page's custom payload is accepted. */
+function datasetSelectionAllowed() {
+  return jobsKnown && !submissionPending && !backendBusy;
+}
+
+function datasetRecordCurrent(record) {
+  return Boolean(record) && datasetSelectionAllowed() && record.epoch === backendContextEpoch
+    && record.generation === fileCatalogRequest && datasetEntries.get(record.id) === record;
+}
+
+function cancelDatasetLanding() {
+  const animation = datasetLandingAnimation;
+  datasetLandingAnimation = null;
+  if (animation) animation.cancel();
+}
+
+function animateDatasetLanding(origin) {
+  cancelDatasetLanding();
+  const card = $("dataset-stage");
+  if (!card || document.hidden || DATASET_MOTION.matches
+      || typeof card.animate !== "function") return;
+  // FLIP: the same visual starts where it was released instead of disappearing
+  // and replaying an unrelated entrance. Layout is read only once on release.
+  let transform = "translate3d(0, 6px, 0) scale(.985)";
+  if (origin && typeof card.getBoundingClientRect === "function") {
+    const destination = card.getBoundingClientRect();
+    if (destination.width > 0 && destination.height > 0 && origin.width > 0 && origin.height > 0) {
+      transform = `translate3d(${origin.left - destination.left}px, ${origin.top - destination.top}px, 0) scale(${origin.width / destination.width}, ${origin.height / destination.height})`;
+    }
+  }
+  try {
+    const animation = card.animate([
+      { transform, transformOrigin: "0 0", opacity: .82 },
+      { transform: "none", transformOrigin: "0 0", opacity: 1 },
+    ], { duration: origin ? 380 : 220, easing: "cubic-bezier(.22, 1, .36, 1)" });
+    datasetLandingAnimation = animation;
+    animation.onfinish = animation.oncancel = () => {
+      if (datasetLandingAnimation === animation) datasetLandingAnimation = null;
+    };
+  } catch (ignored) { /* Animation support must never gate file selection. */ }
+}
+
+function renderDatasetStage() {
+  const card = $("dataset-stage"), zone = $("result-dropzone");
+  if (!card || !zone) return;
+  card.hidden = !stagedDataset;
+  if (stagedDataset) {
+    zone.classList.add("is-staged");
+    $("staged-file-name").textContent = stagedDataset.name;
+    $("staged-file-name").title = stagedDataset.name;
+    $("staged-file-meta").textContent = Number.isFinite(stagedDataset.size)
+      ? `${stagedDataset.size} MB` : t("文件大小未提供");
+    if (els.placeholder) els.placeholder.hidden = true;
+  } else {
+    zone.classList.remove("is-staged");
+    $("staged-file-name").textContent = "";
+    $("staged-file-name").title = "";
+    $("staged-file-meta").textContent = "";
+  }
+}
+
+function renderDropControls() {
+  const zone = $("result-dropzone"), hint = $("drop-hint"), label = $("drop-target-label");
+  if (!zone || !hint) return;
+  zone.setAttribute("aria-label", t("分析结果与文件接收区"));
+  zone.dataset.dropBlocked = String(!datasetSelectionAllowed());
+  if (label) label.textContent = t("拖入数据 · 输入指令 · 开始分析");
+  let message = datasetDropNotice;
+  if (submissionPending || backendBusy) message = "任务执行中，暂时不能切换数据文件。";
+  else if (!jobsKnown) message = "正在确认后端任务状态，暂时不能拖入文件。";
+  else if (datasetDrag) message = "松开以选择文件，然后在下方输入指令。";
+  else if (!message) message = stagedDataset
+    ? "已选择 {file}，请在下方输入分析指令。"
+    : "将左侧数据文件拖到此处，或点击文件进行选择。";
+  hint.textContent = t(message).replace("{file}", stagedDataset ? stagedDataset.name : "");
+  const focus = $("stage-focus");
+  if (focus) focus.disabled = !datasetSelectionAllowed();
+  const remove = $("stage-remove");
+  if (remove) {
+    remove.disabled = !datasetSelectionAllowed() || !stagedDataset || !selected;
+    remove.setAttribute("aria-label", t("移除所选文件（不删除源文件）"));
+    remove.title = t("移除所选文件（不删除源文件）");
+  }
+}
+
+function removeStagedDataset() {
+  if (!datasetSelectionAllowed() || !stagedDataset || !selected) return false;
+  const source = [...datasetEntries.values()].find((record) => record.path === selected);
+  // This only detaches the UI input. No file deletion, worker/session close,
+  // model request or server mutation belongs to this control.
+  ++catalogRequest;
+  endDatasetDrag();
+  closeJobStream();
+  currentJob = null;
+  rememberJob(null);
+  selected = null;
+  session = null;
+  clearPlanCard();
+  resetJobView();
+  els.files.querySelectorAll("button").forEach((button) => button.setAttribute("aria-pressed", "false"));
+  els.file.textContent = t("未选择数据文件");
+  datasetDropNotice = "已移除选择，源文件未删除。";
+  showJobNotice("ready");
+  renderDropControls();
+  const focusTarget = source && source.button.isConnected !== false && !source.button.disabled
+    ? source.button : els.prompt;
+  focusTarget.focus({ preventScroll: true });
+  return true;
+}
+
+function moveDatasetDragGhost(event, allowZero = false) {
+  if (!datasetDragGhost || !Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) return;
+  // Some browsers report 0,0 as a drag leaves the window; do not jump to a corner.
+  if (!allowZero && event.clientX === 0 && event.clientY === 0) return;
+  const x = Math.max(8, Math.min(event.clientX + 18, window.innerWidth - 264));
+  const y = Math.max(8, Math.min(event.clientY + 18, window.innerHeight - 108));
+  datasetDragGhost.style.setProperty("--drag-x", x + "px");
+  datasetDragGhost.style.setProperty("--drag-y", y + "px");
+}
+
+function startDatasetDragGhost(record, event, native = true) {
+  // A live DOM card can animate while dragging, unlike the browser's static
+  // drag-image screenshot. If overriding that image is unsupported, keep the
+  // native drag feedback rather than blocking selection or showing two cards.
+  if (native) {
+    if (!event.dataTransfer || typeof event.dataTransfer.setDragImage !== "function") return;
+    const dragImage = document.createElement("div");
+    dragImage.className = "dataset-drag-image";
+    dragImage.setAttribute("aria-hidden", "true");
+    document.body.appendChild(dragImage);
+    try { event.dataTransfer.setDragImage(dragImage, 0, 0); }
+    catch (ignored) { dragImage.remove(); return; }
+    datasetDragImage = dragImage;
+  }
+  const ghost = document.createElement("div");
+  ghost.className = "dataset-drag-ghost";
+  ghost.setAttribute("aria-hidden", "true");
+  const card = document.createElement("div");
+  card.className = "dataset-drag-ghost-card";
+  const icon = document.createElement("div");
+  icon.className = "dataset-stage-icon";
+  for (let i = 0; i < 3; i++) icon.appendChild(document.createElement("i"));
+  const copy = document.createElement("div");
+  copy.className = "dataset-stage-copy";
+  const name = document.createElement("strong");
+  name.textContent = record.name;
+  const meta = document.createElement("p");
+  meta.textContent = Number.isFinite(record.size) ? `${record.size} MB` : t("文件大小未提供");
+  copy.appendChild(name);
+  copy.appendChild(meta);
+  card.appendChild(icon);
+  card.appendChild(copy);
+  ghost.appendChild(card);
+  document.body.appendChild(ghost);
+  datasetDragGhost = ghost;
+  moveDatasetDragGhost(event, !native);
+}
+
+function datasetPointerOverTarget(pointer) {
+  const zone = $("result-dropzone");
+  if (!zone || !datasetRecordCurrent(pointer.record) || typeof document.elementFromPoint !== "function") return false;
+  // Pointer capture changes event.target, not hit-testing. This also rejects a
+  // dialog/composer laid over the panel rather than dropping through it.
+  const hit = document.elementFromPoint(pointer.x, pointer.y);
+  return Boolean(hit && zone.contains(hit));
+}
+
+function paintDatasetPointer() {
+  datasetPointerFrame = null;
+  const pointer = datasetPointer;
+  if (!pointer || !pointer.active) return;
+  if (document.hidden || !datasetRecordCurrent(pointer.record)) { endDatasetDrag(); return; }
+  const over = datasetPointerOverTarget(pointer);
+  const zone = $("result-dropzone");
+  if (over !== pointer.over) {
+    if (over) zone.classList.add("drag-over");
+    else zone.classList.remove("drag-over");
+    pointer.over = over;
+  }
+  if (datasetDragGhost) {
+    const targetTilt = Math.max(-2.5, Math.min(2.5, (pointer.x - pointer.paintedX) * .1));
+    const previousTilt = pointer.tilt || 0;
+    pointer.tilt = DATASET_MOTION.matches ? 0 : previousTilt + (targetTilt - previousTilt) * .22;
+    datasetDragGhost.style.setProperty("--drag-tilt", pointer.tilt + "deg");
+    moveDatasetDragGhost({ clientX: pointer.x, clientY: pointer.y }, true);
+  }
+  pointer.paintedX = pointer.x;
+}
+
+function moveDatasetPointer(event) {
+  const pointer = datasetPointer;
+  if (!pointer || event.pointerId !== pointer.id) return;
+  if (!Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) return;
+  if (document.hidden || !datasetRecordCurrent(pointer.record)
+      || (pointer.type === "mouse" && Number.isFinite(event.buttons) && !(event.buttons & 1))) {
+    endDatasetDrag(); return;
+  }
+  pointer.x = event.clientX;
+  pointer.y = event.clientY;
+  if (!pointer.active) {
+    const dx = pointer.x - pointer.startX, dy = pointer.y - pointer.startY;
+    const threshold = pointer.type === "touch" ? 10 : 6;
+    // On touchscreens, a vertical gesture continues scrolling the file list.
+    if (pointer.type === "touch" && Math.abs(dy) > threshold && Math.abs(dy) > Math.abs(dx)) {
+      endDatasetDrag(); return;
+    }
+    if (Math.hypot(dx, dy) < threshold) return;
+    try { pointer.record.button.setPointerCapture(pointer.id); }
+    catch (ignored) { endDatasetDrag(); return; }
+    pointer.active = true;
+    pointer.record.suppressPointerClick = true;
+    datasetDrag = pointer.record;
+    datasetDropNotice = "";
+    cancelDatasetLanding();
+    pointer.record.button.classList.add("dataset-dragging");
+    document.body.classList.add("dataset-pointer-dragging");
+    startDatasetDragGhost(pointer.record, event, false);
+    $("result-dropzone").classList.add("drag-ready");
+    renderDropControls();
+  }
+  event.preventDefault();
+  // Coalesce high-frequency pointer input into one compositor update per frame.
+  // Track the latest position directly: no trailing spring or endless RAF loop.
+  if (datasetPointerFrame === null) datasetPointerFrame = requestAnimationFrame(paintDatasetPointer);
+}
+
+function finishDatasetPointer(event) {
+  const pointer = datasetPointer;
+  if (!pointer || event.pointerId !== pointer.id) return;
+  if (!pointer.active) { endDatasetDrag(); return; } // A normal click is still a normal click.
+  event.preventDefault();
+  if (datasetPointerFrame !== null) cancelAnimationFrame(datasetPointerFrame);
+  datasetPointerFrame = null;
+  if (Number.isFinite(event.clientX) && Number.isFinite(event.clientY)) {
+    pointer.x = event.clientX;
+    pointer.y = event.clientY;
+  }
+  paintDatasetPointer(); // Include the release position even if a frame was queued.
+  const accepted = datasetPointer === pointer && !document.hidden && pointer.over;
+  const origin = datasetDragGhost && typeof datasetDragGhost.getBoundingClientRect === "function"
+    ? datasetDragGhost.getBoundingClientRect() : null;
+  endDatasetDrag();
+  if (accepted) selectDataset(pointer.record, true, origin);
+}
+
+function wireDatasetPointer(record) {
+  const button = record.button;
+  if (!window.PointerEvent || typeof button.setPointerCapture !== "function") return;
+  button.dataset.pointerDrag = "true";
+  button.draggable = false; // Do not enter the lower-frequency native drag event loop.
+  button.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || event.isPrimary === false || !datasetRecordCurrent(record)
+        || !Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) return;
+    endDatasetDrag();
+    record.suppressPointerClick = false;
+    datasetPointer = { id: event.pointerId, type: event.pointerType || "mouse", record, active: false,
+      startX: event.clientX, startY: event.clientY, x: event.clientX, y: event.clientY, paintedX: event.clientX };
+  });
+  button.addEventListener("lostpointercapture", (event) => {
+    if (datasetPointer && datasetPointer.id === event.pointerId) endDatasetDrag();
+  });
+}
+
+function endDatasetDrag() {
+  const pointer = datasetPointer;
+  datasetPointer = null; // Clear first: releasing capture can synchronously dispatch a loss event.
+  if (datasetPointerFrame !== null) cancelAnimationFrame(datasetPointerFrame);
+  datasetPointerFrame = null;
+  if (pointer && pointer.active) {
+    try { pointer.record.button.releasePointerCapture(pointer.id); } catch (ignored) { /* already released */ }
+  }
+  if (document.body) document.body.classList.remove("dataset-pointer-dragging");
+  if (datasetDrag) datasetDrag.button.classList.remove("dataset-dragging");
+  if (datasetDragGhost) datasetDragGhost.remove();
+  if (datasetDragImage) datasetDragImage.remove();
+  datasetDragGhost = null;
+  datasetDragImage = null;
+  datasetDrag = null;
+  datasetDragDepth = 0;
+  const zone = $("result-dropzone");
+  if (zone) zone.classList.remove("drag-ready", "drag-over");
+  renderDropControls();
+}
+
+function selectDataset(record, fromDrop = false, origin = null) {
+  if (!datasetRecordCurrent(record)) return false;
+  // Detach old, read-only history before staging another input, so an old SSE
+  // reply cannot appear to be the newly selected file's result. No worker runs.
+  ++catalogRequest;
+  closeJobStream();
+  currentJob = null;
+  rememberJob(null);
+  resetJobView();
+  els.files.querySelectorAll("button").forEach((button) => button.setAttribute("aria-pressed", "false"));
+  record.button.setAttribute("aria-pressed", "true");
+  selected = record.path;
+  session = null;
+  clearPlanCard();
+  els.file.textContent = record.name;
+  stagedDataset = { name: record.name, size: record.size };
+  showJobNotice("ready");
+  renderDatasetStage();
+  renderDropControls();
+  if (fromDrop) {
+    const zone = $("result-dropzone");
+    if (zone) {
+      if (datasetDropTimer !== null) clearTimeout(datasetDropTimer);
+      zone.classList.remove("drop-received");
+      zone.classList.add("drop-received");
+      datasetDropTimer = setTimeout(() => { zone.classList.remove("drop-received"); datasetDropTimer = null; }, 800);
+    }
+    els.prompt.focus({ preventScroll: true }); // Preserve both the instruction and the viewport.
+    animateDatasetLanding(origin);
+  }
+  return true;
+}
+
+function wireDatasetDrag(record) {
+  const button = record.button;
+  wireDatasetPointer(record);
+  button.addEventListener("dragstart", (event) => {
+    if (button.dataset.pointerDrag === "true") { event.preventDefault(); return; }
+    if (!datasetSelectionAllowed() || record.epoch !== backendContextEpoch
+        || record.generation !== fileCatalogRequest || datasetEntries.get(record.id) !== record || !event.dataTransfer) {
+      event.preventDefault(); return;
+    }
+    endDatasetDrag();
+    try {
+      event.dataTransfer.clearData();
+      event.dataTransfer.setData(DATASET_DRAG_TYPE, record.id);
+      event.dataTransfer.effectAllowed = "copy";
+    } catch (ignored) { event.preventDefault(); return; }
+    datasetDropNotice = "";
+    datasetDrag = record;
+    button.classList.add("dataset-dragging");
+    startDatasetDragGhost(record, event);
+    const zone = $("result-dropzone");
+    if (zone) zone.classList.add("drag-ready");
+    renderDropControls();
+  });
+  button.addEventListener("drag", moveDatasetDragGhost);
+  button.addEventListener("dragend", endDatasetDrag);
+}
+
+function setupDatasetDrop() {
+  const zone = $("result-dropzone");
+  if (!zone) return;
+  const valid = () => datasetDrag && datasetSelectionAllowed()
+    && datasetDrag.epoch === backendContextEpoch && datasetDrag.generation === fileCatalogRequest
+    && datasetEntries.get(datasetDrag.id) === datasetDrag;
+  zone.addEventListener("dragenter", (event) => {
+    event.preventDefault();
+    if (valid()) { datasetDragDepth++; zone.classList.add("drag-over"); }
+  });
+  zone.addEventListener("dragover", (event) => {
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = valid() ? "copy" : "none";
+  });
+  zone.addEventListener("dragleave", () => {
+    datasetDragDepth = Math.max(0, datasetDragDepth - 1);
+    if (!datasetDragDepth) zone.classList.remove("drag-over");
+  });
+  zone.addEventListener("drop", (event) => {
+    event.preventDefault(); event.stopPropagation();
+    const record = datasetDrag;
+    let offered = "";
+    try { offered = event.dataTransfer && event.dataTransfer.getData(DATASET_DRAG_TYPE); } catch (ignored) { /* reject */ }
+    const accepted = valid() && offered === record.id;
+    const origin = datasetDragGhost && typeof datasetDragGhost.getBoundingClientRect === "function"
+      ? datasetDragGhost.getBoundingClientRect() : null;
+    endDatasetDrag();
+    if (!accepted || !selectDataset(record, true, origin)) {
+      datasetDropNotice = record ? "数据源已经变化，请从左侧重新选择文件。"
+        : "这里只接受左侧当前数据源中的文件，不会上传电脑文件或打开外部链接。";
+      renderDropControls();
+    }
+  });
+  $("stage-focus").addEventListener("click", () => { if (datasetSelectionAllowed()) els.prompt.focus(); });
+  $("stage-remove").addEventListener("click", removeStagedDataset);
+  addEventListener("keydown", (event) => {
+    if (event.key === "Escape") { endDatasetDrag(); cancelDatasetLanding(); }
+  });
+  addEventListener("blur", () => { endDatasetDrag(); cancelDatasetLanding(); });
+  addEventListener("pointermove", moveDatasetPointer, { passive: false });
+  addEventListener("pointerup", finishDatasetPointer);
+  addEventListener("pointercancel", (event) => {
+    if (datasetPointer && datasetPointer.id === event.pointerId) endDatasetDrag();
+  });
+  addEventListener("dragover", moveDatasetDragGhost);
+  // Dropping an OS file must not navigate away from a running workbench.
+  for (const kind of ["dragover", "drop"]) addEventListener(kind, (event) => {
+    if (!event.dataTransfer || !Array.from(event.dataTransfer.types || []).includes("Files")) return;
+    event.preventDefault();
+    if (kind === "drop") {
+      endDatasetDrag();
+      datasetDropNotice = "这里只接受左侧当前数据源中的文件，不会上传电脑文件或打开外部链接。";
+      renderDropControls();
+    }
+  });
+}
+
 async function loadFiles() {
   const epoch = backendContextEpoch;
+  const generation = ++fileCatalogRequest;
+  endDatasetDrag();
   const response = await fetch("/api/files");
-  const payload = await response.json().catch(() => ({ files: [] }));
-  if (epoch !== backendContextEpoch) return;
+  const raw = await response.json().catch(() => null);
+  const payload = raw && typeof raw === "object" ? raw : { files: [] };
+  if (epoch !== backendContextEpoch || generation !== fileCatalogRequest) return;
   text(els.files);
-  (payload.files || []).forEach((entry) => {
+  datasetEntries.clear();
+  const files = Array.isArray(payload.files) ? payload.files.filter((entry) => entry && typeof entry.path === "string" && entry.path.trim()) : [];
+  files.forEach((entry, index) => {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "file";
+    button.className = "file dataset-file";
     button.setAttribute("aria-pressed", "false");
     const name = document.createElement("span");
     name.className = "name";
@@ -1331,25 +1787,28 @@ async function loadFiles() {
     name.title = entry.path;
     const size = document.createElement("span");
     size.className = "size";
-    size.textContent = entry.size_mb + " MB";
+    size.textContent = Number.isFinite(entry.size_mb) ? entry.size_mb + " MB" : t("文件大小未提供");
     button.appendChild(name);
     button.appendChild(size);
-    button.addEventListener("click", () => {
-      if (epoch !== backendContextEpoch || submissionPending || !jobsKnown || backendBusy) return;
-      els.files.querySelectorAll(".file").forEach((x) => x.setAttribute("aria-pressed", "false"));
-      button.setAttribute("aria-pressed", "true");
-      selected = entry.path;
-      session = null;
-      clearPlanCard();
-      els.file.textContent = name.textContent;
+    const record = { id: `${epoch}:${generation}:${index}`, epoch, generation, button,
+      path: entry.path, name: name.textContent, size: typeof entry.size_mb === "number" ? entry.size_mb : null };
+    datasetEntries.set(record.id, record);
+    button.addEventListener("click", (event) => {
+      if (record.suppressPointerClick && event.detail !== 0) {
+        record.suppressPointerClick = false;
+        event.preventDefault(); event.stopPropagation(); return;
+      }
+      record.suppressPointerClick = false;
+      selectDataset(record);
     });
+    wireDatasetDrag(record);
     els.files.appendChild(button);
   });
   // The listing is a bounded walk with a capped payload, so "these are the files on the machine"
   // has to say how much of it it is. Before this the panel showed 40 buttons while the server
   // reported 196 and the difference was invisible -- the one thing a bounded view must never imply.
   const total = Number(payload.count || 0);
-  const shown = (payload.files || []).length;
+  const shown = files.length;
   if (shown) {
     line(els.files, "dim", (total > shown
       ? t("共 {total} 个可分析文件，这里按大小列出前 {shown} 个")
@@ -1357,7 +1816,7 @@ async function loadFiles() {
       : t("共 {total} 个可分析文件，按大小排序").replace("{total}", total))
       + (payload.note ? " · " + payload.note : ""));
   }
-  if (!(payload.files || []).length) {
+  if (!shown) {
     line(els.files, "dim", payload.note || t("没有可分析的数据文件"));
   }
   syncJobControls();
@@ -1690,6 +2149,7 @@ els.release.addEventListener("click", async () => {
   }
 });
 
+setupDatasetDrop();
 followGlow();
 syncJobControls();
 renderJobChrome();
@@ -1760,24 +2220,45 @@ function layoutSelfTest() {
 }
 
 function followGlow() {
-  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const motion = DATASET_MOTION;
   const root = document.documentElement;
-  let x = innerWidth * 0.62;
-  let y = innerHeight * 0.28;
+  // Static CSS is sufficient when reduced motion is selected. Avoid a perpetual
+  // render loop: the glow wakes only while the pointer's target is changing.
+  let x = (Number(window.innerWidth) || 0) * 0.62;
+  let y = (Number(window.innerHeight) || 0) * 0.28;
   let tx = x;
   let ty = y;
+  let frameId = null;
+  const stopped = () => motion.matches || Boolean(document.hidden) || Boolean(datasetPointer && datasetPointer.active);
+  const schedule = () => { if (!stopped() && frameId === null) frameId = requestAnimationFrame(frame); };
   addEventListener("pointermove", (event) => {
     tx = event.clientX;
     ty = event.clientY;
+    schedule();
   }, { passive: true });
   const frame = () => {
+    frameId = null;
+    if (stopped()) return;
     x += (tx - x) * 0.07;
     y += (ty - y) * 0.07;
     root.style.setProperty("--mx", x + "px");
     root.style.setProperty("--my", y + "px");
-    requestAnimationFrame(frame);
+    if (Math.abs(tx - x) + Math.abs(ty - y) > 0.3) schedule();
   };
-  requestAnimationFrame(frame);
+  const syncMotion = () => {
+    const body = document.body;
+    if (body) {
+      if (document.hidden) body.classList.add("document-hidden");
+      else body.classList.remove("document-hidden");
+    }
+    if (stopped() && frameId !== null) { cancelAnimationFrame(frameId); frameId = null; }
+    if (motion.matches || document.hidden) cancelDatasetLanding();
+    if (document.hidden) endDatasetDrag();
+    schedule();
+  };
+  if (document.addEventListener) document.addEventListener("visibilitychange", syncMotion);
+  if (motion.addEventListener) motion.addEventListener("change", syncMotion);
+  syncMotion();
 }
 
 function reportLayout(payload) {

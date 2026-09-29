@@ -44,12 +44,6 @@ const STRINGS = {
     liveRate: "加速比",
     liveTime: "耗时",
     metricsNote: "此页不执行分析；真实指标在任务完成后于工作台展示。",
-    figureData: "数据格式",
-    figureCompute: "计算能力",
-    figureReport: "分析输出",
-    figureDataValue: "CSV · Parquet",
-    figureComputeValue: "CPU + GPU",
-    figureReportValue: "图表 · 报告",
   },
   en: {
     pageTitle: "Sign in · Data Workbench",
@@ -87,12 +81,6 @@ const STRINGS = {
     liveRate: "Speedup",
     liveTime: "Elapsed",
     metricsNote: "No analysis runs on this page. Actual metrics appear in the workbench after a task finishes.",
-    figureData: "Data formats",
-    figureCompute: "Compute support",
-    figureReport: "Analysis output",
-    figureDataValue: "CSV · Parquet",
-    figureComputeValue: "CPU + GPU",
-    figureReportValue: "Charts · Reports",
   },
 };
 
@@ -136,14 +124,6 @@ function applyStrings() {
   ["liveRows", "liveRate", "liveTime"].forEach((key, index) => {
     const node = document.getElementById("live-k" + index);
     if (node) node.textContent = s[key];
-  });
-  document.querySelectorAll("[data-fig]").forEach((node) => {
-    const key = ["figureData", "figureCompute", "figureReport"][Number(node.dataset.fig)];
-    node.textContent = s[key];
-  });
-  document.querySelectorAll("[data-figure-value]").forEach((node) => {
-    const key = ["figureDataValue", "figureComputeValue", "figureReportValue"][Number(node.dataset.figureValue)];
-    node.textContent = s[key];
   });
 }
 
@@ -294,7 +274,7 @@ startAtmosphere();
 
 function startAtmosphere() {
   const canvas = document.getElementById("dust");
-  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
   const root = document.documentElement;
   let width = window.innerWidth;
   let height = window.innerHeight;
@@ -311,12 +291,8 @@ function startAtmosphere() {
     root.style.setProperty("--my", glowY + "px");
   }
 
-  if (reduce) {
-    placeGlow();
-    return;
-  }
-
-  const ctx = canvas.getContext("2d");
+  let ctx = null;
+  let frameId = null;
   const specks = [];
   const COUNT = 84;
 
@@ -346,6 +322,7 @@ function startAtmosphere() {
       pointerX = homeX;
       pointerY = homeY;
     }
+    if (!ctx) return;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     canvas.width = Math.floor(width * dpr);
     canvas.height = Math.floor(height * dpr);
@@ -366,10 +343,9 @@ function startAtmosphere() {
     pointerY = homeY;
   });
   window.addEventListener("resize", resize);
-  resize();
-
   function frame() {
-    if (!document.hidden) {
+    frameId = null;
+    if (!document.hidden && !motion.matches) {
       const aimX = pointerInside ? pointerX : homeX;
       const aimY = pointerInside ? pointerY : homeY;
       glowX += (aimX - glowX) * 0.06;
@@ -408,8 +384,27 @@ function startAtmosphere() {
         ctx.arc(speck.x, speck.y, speck.r, 0, Math.PI * 2);
         ctx.fill();
       }
+      frameId = requestAnimationFrame(frame);
     }
-    requestAnimationFrame(frame);
   }
-  requestAnimationFrame(frame);
+
+  function syncMotion() {
+    const paused = document.hidden || motion.matches;
+    root.style.setProperty("--atmosphere-play", paused ? "paused" : "running");
+    if (paused) {
+      if (frameId !== null) cancelAnimationFrame(frameId);
+      frameId = null;
+      placeGlow();
+      return;
+    }
+    if (!ctx) {
+      ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      resize();
+    }
+    if (frameId === null) frameId = requestAnimationFrame(frame);
+  }
+  document.addEventListener("visibilitychange", syncMotion);
+  motion.addEventListener?.("change", syncMotion);
+  syncMotion();
 }

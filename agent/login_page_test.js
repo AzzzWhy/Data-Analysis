@@ -9,6 +9,7 @@ const vm = require("node:vm");
 
 const html = fs.readFileSync(path.join(__dirname, "gui", "login.html"), "utf8");
 const script = fs.readFileSync(path.join(__dirname, "gui", "login.js"), "utf8");
+const css = fs.readFileSync(path.join(__dirname, "gui", "login.css"), "utf8");
 let checks = 0;
 function check(value, expected, label) {
   assert.deepEqual(value, expected, label);
@@ -23,36 +24,37 @@ function element(textContent = "") {
   };
 }
 
-async function page(gate, { failure = false, status = 200, language = "zh-CN" } = {}) {
+async function page(gate, { failure = false, status = 200, language = "zh-CN", reduce = true, hidden = false } = {}) {
   const nodes = new Map();
   for (const match of html.matchAll(/\bid="([^"]+)"/g)) nodes.set(match[1], element());
   for (let i = 0; i < 3; i++) nodes.get("live-n" + i).textContent = "—";
-  const figures = [...html.matchAll(/data-fig="(\d)"/g)].map(match => {
-    const node = element();
-    node.dataset.fig = match[1];
-    return node;
-  });
-  const figureValues = [...html.matchAll(/data-figure-value="(\d)"/g)].map(match => {
-    const node = element();
-    node.dataset.figureValue = match[1];
-    return node;
-  });
   const requests = [], timers = [], redirects = [];
+  const frames = new Map(), properties = new Map(), documentListeners = {};
+  let nextFrame = 0, canvasDraws = 0, canvasContexts = 0;
+  const motion = { matches: reduce, addEventListener(event, handler) { this.onchange = handler; } };
+  nodes.get("dust").style = {};
+  nodes.get("dust").getContext = () => {
+    canvasContexts++;
+    return { setTransform() {}, clearRect() { canvasDraws++; }, beginPath() {}, arc() {}, fill() {} };
+  };
   let reply = { gate, failure, status };
   const context = vm.createContext({
     document: {
-      title: "", documentElement: { lang: "zh", style: { setProperty() {} } },
+      title: "", hidden, documentElement: { lang: "zh", style: { setProperty: (key, value) => properties.set(key, value) } },
       getElementById: id => nodes.get(id),
-      querySelectorAll: selector => selector === "[data-fig]" ? figures
-        : selector === "[data-figure-value]" ? figureValues : [],
+      querySelectorAll: () => [],
+      addEventListener: (event, handler) => { documentListeners[event] = handler; },
     },
     navigator: { language },
     window: {
       innerWidth: 1280, innerHeight: 800,
-      matchMedia: () => ({ matches: true }),
+      matchMedia: () => motion,
+      addEventListener() {},
       location: { replace: destination => redirects.push(destination) },
     },
     setTimeout: (...args) => timers.push(args),
+    requestAnimationFrame: callback => { frames.set(++nextFrame, callback); return nextFrame; },
+    cancelAnimationFrame: id => frames.delete(id),
     fetch: async (url, options) => {
       requests.push({ url, options });
       if (reply.failure) throw new Error("offline");
@@ -62,7 +64,16 @@ async function page(gate, { failure = false, status = 200, language = "zh-CN" } 
   });
   vm.runInContext(script, context, { filename: "login.js" });
   await new Promise(resolve => setImmediate(resolve));
-  return { nodes, context, requests, timers, redirects, figures, figureValues,
+  return { nodes, context, requests, timers, redirects, frames, properties,
+    get canvasContexts() { return canvasContexts; },
+    get canvasDraws() { return canvasDraws; },
+    setHidden(value) { context.document.hidden = value; documentListeners.visibilitychange(); },
+    setReduce(value) { motion.matches = value; motion.onchange(); },
+    runFrame() {
+      const [id, callback] = frames.entries().next().value;
+      frames.delete(id);
+      callback();
+    },
     setReply(next) { reply = { gate: next, failure: false, status: 200 }; } };
 }
 
@@ -71,6 +82,23 @@ async function main() {
   check([...html.matchAll(/id="live-n\d">—<\/b>/g)].length, 3, "all static measurement values are unavailable, not zero");
   check(/Math\.random|startMeters|setInterval/.test(script.split("function startAtmosphere()")[0]), false,
     "randomness must be restricted to decorative particles, not measurements");
+  const decoration = html.match(/<div class="figures" data-decoration="digits" aria-hidden="true">([\s\S]*?)<\/div>/);
+  check(Boolean(decoration), true, "number artwork is hidden from assistive technology");
+  const digits = [...decoration[1].matchAll(/<span class="figure f(\d)">([^<]+)<\/span>/g)];
+  check(digits.length, 6, "exactly six decorative number groups");
+  check(digits.every(match => /^\d+$/.test(match[2])), true, "decorations are only digits, without metric names or units");
+  check(/data-fig|data-figure-value|CSV|Parquet|CPU \+ GPU|图表 · 报告/.test(decoration[1]), false,
+    "old floating capability text is removed");
+  check(/@keyframes digit-breathe\s*\{[\s\S]*?scale\(\.78\)[\s\S]*?scale\(1\.14\)/.test(css), true,
+    "size changes use bounded transform scaling");
+  check([...css.matchAll(/\.f\d[^\n]*animation-duration:\s*([\d.]+)s/g)].every(match => Number(match[1]) >= 18), true,
+    "number animation cycles are slow");
+  check(/@media \(max-width: 980px\)\s*\{\s*\.figures\s*\{ display: none;/.test(css), true,
+    "narrow layouts keep decoration away from the login form");
+  check(/@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.figure[\s\S]*?animation: none !important/.test(css), true,
+    "reduced motion disables the CSS number animation");
+  check(/\.figure, \.motes i \{ animation-play-state: var\(--atmosphere-play, running\)/.test(css), true,
+    "decorative CSS animations pause when the page is hidden");
 
   const signin = await page({ mode: "signin" });
   check(signin.nodes.get("gate-form").hidden, false, "sign-in form visible");
@@ -84,7 +112,8 @@ async function main() {
   check(signin.nodes.get("metrics-note").textContent.includes("No analysis runs"), true, "metric provenance visible in English");
   check(signin.nodes.get("product-sub").textContent, "GPU acceleration & data analysis", "brand subtitle translated");
   check(signin.nodes.get("live-k1").textContent, "Speedup", "speedup label translated");
-  check(signin.figureValues[2].textContent, "Charts · Reports", "background capability labels translated");
+  check(/data-decoration|\.figures|\.figure/.test(script.split("function startAtmosphere()")[0]), false,
+    "language and authentication code never rewrite decorative digits");
   for (let i = 0; i < 3; i++) check(signin.nodes.get("live-n" + i).textContent, "—", "translation never invents a metric");
   const dictionaries = vm.runInContext("STRINGS", signin.context);
   check(Object.keys(dictionaries.zh).sort(), Object.keys(dictionaries.en).sort(), "translation keys complete");
@@ -118,7 +147,32 @@ async function main() {
   }
   const open = await page({ mode: "open" });
   check(open.redirects, ["/"], "open backend still enters workbench");
-  console.log(`PASS login page: ${checks} checks (honest metrics, bilingual copy, gate failure and recovery)`);
+  check(signin.frames.size, 0, "reduced motion does not start an animation frame loop");
+  check(signin.canvasContexts, 0, "reduced motion avoids allocating the canvas renderer");
+  const animated = await page({ mode: "signin" }, { reduce: false });
+  check(animated.frames.size, 1, "animated page owns only the existing canvas loop");
+  check(animated.properties.get("--atmosphere-play"), "running", "visible decorative CSS animation runs");
+  animated.runFrame();
+  check(animated.canvasDraws, 1, "existing canvas renders normally");
+  check(animated.frames.size, 1, "rendering schedules one successor, not a second loop");
+  animated.setHidden(true);
+  check(animated.frames.size, 0, "backgrounding cancels the pending canvas frame");
+  check(animated.properties.get("--atmosphere-play"), "paused", "backgrounding pauses decorative CSS motion");
+  animated.setHidden(false);
+  animated.setHidden(false);
+  check(animated.frames.size, 1, "restoring visibility resumes exactly one loop");
+  animated.setReduce(true);
+  check(animated.frames.size, 0, "enabling reduced motion live cancels canvas rendering");
+  check(animated.properties.get("--atmosphere-play"), "paused", "live reduced motion pauses CSS motion");
+  animated.setReduce(false);
+  check(animated.frames.size, 1, "disabling reduced motion live resumes a single loop");
+  const hiddenPage = await page({ mode: "signin" }, { reduce: false, hidden: true });
+  check(hiddenPage.frames.size, 0, "a hidden page never starts a rendering loop");
+  check(hiddenPage.canvasContexts, 0, "a hidden page defers canvas initialization");
+  hiddenPage.setHidden(false);
+  check(hiddenPage.frames.size, 1, "first reveal initializes one loop");
+  check(animated.requests.map(request => request.url), ["/api/gate"], "animation creates no backend work");
+  console.log(`PASS login page: ${checks} checks (decorative digits, motion lifecycle, honest metrics, bilingual gate)`);
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; });

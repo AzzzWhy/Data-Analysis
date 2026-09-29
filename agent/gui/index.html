@@ -51,7 +51,7 @@
       <span class="file-count" aria-label="可用文件">CSV</span>
     </div>
     <div id="files" class="files"></div>
-    <p class="hint sidebar-note">显示当前允许目录内可分析的数据文件。</p>
+    <p class="hint sidebar-note">将文件拖入分析区，再在下方输入指令。也可点击文件选择。</p>
 
     <div class="sidebar-divider"></div>
 
@@ -100,10 +100,23 @@
       </div>
     </div>
 
-    <section class="result-panel">
+    <section class="result-panel dataset-dropzone" id="result-dropzone" aria-label="分析结果与文件接收区">
       <div class="result-header">
         <div><span class="overline">Result</span><h2>分析结果</h2></div>
         <div class="run-summary"><span id="chip" class="chip muted">尚无结果</span><span id="elapsed">—</span></div>
+      </div>
+      <div class="drop-target-label" id="drop-target-label" data-dynamic>拖入数据 · 输入指令 · 开始分析</div>
+      <p class="hint drop-hint" id="drop-hint" role="status" aria-live="polite" data-dynamic></p>
+      <div class="dataset-stage" id="dataset-stage" hidden>
+        <button id="stage-remove" class="stage-remove" type="button" aria-label="移除所选文件（不删除源文件）" title="移除所选文件（不删除源文件）">×</button>
+        <div class="dataset-stage-icon" aria-hidden="true"><i></i><i></i><i></i></div>
+        <div class="dataset-stage-copy">
+          <span class="lt">待分析文件</span>
+          <strong id="staged-file-name" data-dynamic></strong>
+          <p id="staged-file-meta" data-dynamic></p>
+          <p class="hint">文件仍保留在当前计算后端。输入指令后才会开始分析。</p>
+          <button id="stage-focus" type="button" class="secondary small">输入分析指令</button>
+        </div>
       </div>
       <div id="result-placeholder" class="result-placeholder">
         <div class="placeholder-graphic" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>

@@ -307,3 +307,135 @@ body { padding-bottom: 188px; }   /* clearance under the docked composer, on eve
   .dz-copy { max-width: none; min-width: 0; }
   .field-pair { grid-template-columns: 1fr; }
 }
+
+/* Dataset motion: decoration belongs to individual panels, never to html/body or the
+   workspace. The fixed composer and dialogs therefore keep their viewport coordinates. */
+.sidebar, .inspector { position: relative; isolation: isolate; }
+.sidebar > *, .inspector > * { position: relative; z-index: 1; }
+.sidebar::before, .inspector::before {
+  content: ""; position: absolute; top: 14px; bottom: 14px; width: 1px; z-index: 0; pointer-events: none;
+  background: linear-gradient(180deg, transparent 14%, rgba(151,168,222,.16) 34%, rgba(169,190,238,.8) 50%, rgba(143,175,176,.28) 62%, transparent 84%);
+  opacity: .45; animation: panel-edge-flow 12s ease-in-out infinite alternate;
+}
+.sidebar::before { right: 0; }
+.inspector::before { left: 0; animation-direction: alternate-reverse; animation-duration: 15s; }
+.sidebar::after, .inspector::after {
+  content: ""; position: absolute; inset: 0 0 auto; height: 230px; z-index: 0; pointer-events: none;
+  background: radial-gradient(ellipse at 100% 0, rgba(126,147,211,.13), transparent 72%);
+  opacity: .45; animation: panel-light-breathe 9s ease-in-out infinite alternate;
+}
+.inspector::after { background: radial-gradient(ellipse at 0 0, rgba(143,175,176,.12), transparent 72%); animation-delay: -4s; }
+@keyframes panel-edge-flow { from { opacity: .3; transform: translateY(-3px) scaleY(.88); } to { opacity: .7; transform: translateY(3px) scaleY(.96); } }
+@keyframes panel-edge-horizontal { from { opacity: .3; transform: translateX(-3px) scaleX(.88); } to { opacity: .7; transform: translateX(3px) scaleX(.96); } }
+@keyframes panel-light-breathe { from { opacity: .35; } to { opacity: .85; } }
+#files .file { transition: background .18s ease, border-color .18s ease, box-shadow .18s ease, transform .18s ease, opacity .18s ease; }
+#files .file::before { transition: height .22s ease, background .18s ease, box-shadow .18s ease; }
+#files .file:hover:not(:disabled):not(.dataset-dragging) { transform: translateY(-1px); border-color: rgba(169,185,226,.2); box-shadow: 0 4px 12px rgba(3,6,14,.2); }
+#files .file[aria-pressed="true"] { border-color: rgba(153,171,223,.3); box-shadow: inset 0 1px 0 rgba(208,218,247,.055); }
+#files .file[aria-pressed="true"]::before { height: 24px; background: #afbae6; box-shadow: 0 0 9px rgba(156,177,240,.45); }
+#files .file:focus-visible { outline: 2px solid #acbce8; outline-offset: -2px; }
+#files .file[draggable="true"]:not(:disabled), #files .file[data-pointer-drag="true"]:not(:disabled) { cursor: grab; }
+#files .file[draggable="true"]:active:not(:disabled), #files .file[data-pointer-drag="true"]:active:not(:disabled) { cursor: grabbing; }
+#files .dataset-file { touch-action: pan-y; }
+body.dataset-pointer-dragging, body.dataset-pointer-dragging * { -webkit-user-select: none; user-select: none; cursor: grabbing !important; }
+#files .file.dataset-dragging { opacity: .5; transform: scale(.985); border-color: var(--gpu); background: rgba(143,175,176,.12); }
+#files .file:disabled { opacity: .5; cursor: not-allowed; transform: none; box-shadow: none; }
+.sidebar .session-card, .sidebar .plan-type, .inspector .log, .inspector button.secondary { transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease; }
+.sidebar .session-card:hover, .sidebar .plan-type:hover { transform: translateY(-2px); border-color: rgba(164,184,229,.34); box-shadow: 0 5px 16px rgba(3,6,14,.2); }
+.inspector .log:hover, .inspector .log:focus-within { border-color: rgba(164,184,229,.34); }
+.inspector button.secondary:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(3,6,14,.2); }
+.inspector button.secondary:focus-visible { outline: 2px solid #acbce8; outline-offset: 3px; }
+
+/* Inline target and edge-only halo leave charts, links and text selection accessible. */
+.dataset-dropzone { position: relative; isolation: isolate; transition: border-color .2s ease, box-shadow .2s ease; }
+.dataset-dropzone::before, .dataset-dropzone::after { content: ""; position: absolute; pointer-events: none; border-radius: inherit; }
+.dataset-dropzone::before { inset: 5px; border: 1px dashed transparent; transition: border-color .2s ease; }
+.dataset-dropzone::after { inset: 0; border: 2px solid transparent; opacity: 0; }
+.dataset-dropzone.drag-ready { border-color: rgba(162,182,236,.48); }
+.dataset-dropzone.drag-ready::before { border-color: rgba(162,182,236,.2); }
+.dataset-dropzone.drag-over { border-color: #a5bfdd; box-shadow: var(--shadow), 0 0 0 3px rgba(139,170,219,.13), inset 0 0 40px rgba(137,174,201,.06); }
+.dataset-dropzone.drag-over::before { border-color: rgba(162,195,218,.5); }
+.dataset-dropzone.drop-received::after { border-color: var(--gpu); animation: dataset-drop-ack .7s ease-out both; }
+.dataset-dropzone:focus-visible { outline: 2px solid #acbce8; outline-offset: 4px; }
+@keyframes dataset-drop-ack { from { opacity: .75; box-shadow: 0 0 0 0 rgba(143,175,176,.2); } to { opacity: 0; box-shadow: 0 0 0 9px rgba(143,175,176,0); } }
+#drop-target-label { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; padding: 5px 9px; margin: 0 0 8px; border: 1px dashed rgba(160,179,222,.3); border-radius: 7px; background: rgba(139,151,201,.04); color: var(--muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; transition: color .18s ease, background .18s ease, border-color .18s ease; }
+#drop-target-label::before { content: ""; flex: 0 0 6px; width: 6px; height: 6px; border-radius: 2px; border: 1px solid currentColor; opacity: .75; }
+.drag-ready #drop-target-label { color: #b9c9ed; border-color: rgba(160,185,235,.6); }
+.drag-over #drop-target-label { color: #c7e0e6; border-style: solid; border-color: rgba(160,202,213,.65); background: rgba(143,175,176,.12); }
+.drop-received #drop-target-label { color: #c7e0d9; border-color: rgba(159,201,183,.48); }
+#drop-hint { color: var(--muted); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+#drop-hint:empty { display: none; }
+.drag-over #drop-hint { color: #b7d0dd; }
+#drop-target-label[hidden], #drop-hint[hidden] { display: none; }
+
+/* A small staged file, not a second empty-results screen. Its motion means selected,
+   not executing; only the real task events may replace it with analysis results. */
+.dataset-stage { display: flex; align-items: center; gap: 17px; width: min(100%,430px); min-width: 0; margin: 24px auto; padding: 18px; border: 1px solid rgba(161,180,230,.3); border-radius: 14px; background: linear-gradient(120deg,rgba(39,49,78,.65),rgba(21,29,48,.7)); box-shadow: inset 0 1px 0 rgba(211,225,255,.05), 0 9px 24px rgba(3,6,14,.18); }
+.dataset-stage[hidden] { display: none; }
+.dataset-stage { position: relative; padding-right: 52px; }
+.stage-remove { position: absolute; top: 9px; right: 9px; display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 1px solid rgba(186,198,230,.16); border-radius: 8px; background: rgba(255,255,255,.035); color: #bdc8df; font: 22px/1 var(--sans); transition: color .15s ease, background .15s ease, border-color .15s ease; }
+.stage-remove:hover:not(:disabled) { color: #f2d4d8; border-color: rgba(227,160,168,.4); background: rgba(227,160,168,.1); }
+.stage-remove:focus-visible { outline: 2px solid #acbce8; outline-offset: 3px; }
+.stage-remove:disabled { opacity: .35; cursor: not-allowed; }
+/* The gesture's actual release position drives the JS landing animation. A CSS
+   entrance from a fixed offset would compete with it and make the file jump. */
+.dataset-stage.is-selected, .is-staged .dataset-stage { border-color: rgba(167,190,228,.43); }
+.dataset-stage-copy { flex: 1; min-width: 0; }
+.dataset-stage-copy > .lt { display: block; margin-bottom: 4px; color: #a8bbd7; font-size: 10px; }
+.dataset-stage-copy strong { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 650; }
+.dataset-stage-copy > p:not(.hint) { margin: 4px 0 0; color: var(--muted); font: 10px/1.6 var(--mono); overflow-wrap: anywhere; }
+.dataset-stage-copy .hint { margin: 7px 0 0; font-size: 10px; line-height: 1.6; }
+.dataset-stage-copy button { margin-top: 10px; }
+.dataset-stage-copy button:focus-visible { outline: 2px solid #acbce8; outline-offset: 3px; }
+.dataset-stage-icon { position: relative; flex: 0 0 47px; width: 47px; height: 59px; border: 1px solid rgba(183,207,245,.55); border-radius: 7px; background: linear-gradient(145deg,rgba(143,170,226,.25),rgba(79,105,151,.12)); clip-path: polygon(0 0,calc(100% - 13px) 0,100% 13px,100% 100%,0 100%); animation: staged-file-float 3.4s ease-in-out infinite alternate; }
+.dataset-stage-icon::before { content: ""; position: absolute; top: 0; right: 0; width: 13px; height: 13px; background: rgba(187,208,245,.25); border-left: 1px solid rgba(203,224,253,.4); border-bottom: 1px solid rgba(203,224,253,.4); border-radius: 0 0 0 3px; }
+.dataset-stage-icon::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(110deg,transparent 28%,rgba(219,233,255,.18) 48%,transparent 68%); animation: staged-file-sheen 4.4s ease-in-out infinite; }
+.dataset-stage-icon i { position: absolute; bottom: 12px; width: 5px; background: #aec0e9; border-radius: 2px 2px 0 0; }
+.dataset-stage-icon i:nth-child(1) { left: 10px; height: 12px; }
+.dataset-stage-icon i:nth-child(2) { left: 20px; height: 23px; background: #c3d6f3; }
+.dataset-stage-icon i:nth-child(3) { left: 30px; height: 17px; background: #9cbdc9; }
+@keyframes staged-file-float { from { transform: translateY(1px) rotate(-2deg); } to { transform: translateY(-3px) rotate(1deg); } }
+@keyframes staged-file-sheen { 0%,25% { opacity: 0; transform: translateX(-115%); } 42% { opacity: .8; } 75%,100% { opacity: 0; transform: translateX(115%); } }
+
+/* Each input frame owns the position: a transform transition would trail the
+   pointer and restart on every move. Only this short-lived ghost is promoted. */
+.dataset-drag-ghost { position: fixed; left: 0; top: 0; z-index: 70; width: min(250px,calc(100vw - 24px)); pointer-events: none; user-select: none; transform: translate3d(var(--drag-x,0px),var(--drag-y,0px),0); will-change: transform; animation: dataset-pickup .12s ease-out both; }
+@keyframes dataset-pickup { from { opacity: .35; } to { opacity: 1; } }
+.dataset-drag-ghost *, .dataset-drag-ghost::before, .dataset-drag-ghost::after { pointer-events: none; }
+.dataset-drag-ghost-card { display: flex; align-items: center; gap: 12px; padding: 13px 15px; border: 1px solid rgba(170,195,239,.68); border-radius: 12px; background: linear-gradient(125deg,#26334d,#182237); color: var(--ink); box-shadow: 0 16px 32px rgba(2,6,15,.36), inset 0 1px 0 rgba(212,227,255,.12); transform-origin: 25% 80%; transform: translateY(-4px) rotate(var(--drag-tilt,0deg)) scale(1.015); transition: opacity .16s ease-out, box-shadow .18s ease-out; }
+.dataset-drag-ghost .dataset-stage-icon { flex-basis: 35px; width: 35px; height: 44px; animation: none; }
+.dataset-drag-ghost .dataset-stage-icon::after { animation: none; opacity: .4; }
+.dataset-drag-ghost .dataset-stage-icon i:nth-child(1) { left: 6px; height: 9px; }
+.dataset-drag-ghost .dataset-stage-icon i:nth-child(2) { left: 14px; height: 18px; }
+.dataset-drag-ghost .dataset-stage-icon i:nth-child(3) { left: 22px; height: 13px; }
+.dataset-drag-ghost .dataset-stage-icon i { bottom: 8px; width: 4px; }
+.dataset-drag-ghost .dataset-stage-copy strong { font-size: 12px; }
+.dataset-drag-image { position: fixed; top: 0; left: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; overflow: hidden; }
+body.document-hidden .sidebar, body.document-hidden .inspector,
+body.document-hidden .sidebar::before, body.document-hidden .sidebar::after,
+body.document-hidden .inspector::before, body.document-hidden .inspector::after,
+body.document-hidden .dataset-dropzone::after, body.document-hidden .dataset-stage, body.document-hidden .dataset-stage-icon,
+body.document-hidden .dataset-stage-icon::after, body.document-hidden .dataset-drag-ghost-card,
+body.document-hidden #pulse, body.document-hidden .placeholder-graphic span { animation-play-state: paused; }
+@media (max-width: 1180px) {
+  .inspector::before { inset: 0 20px auto; width: auto; height: 1px; background: linear-gradient(90deg,transparent 14%,rgba(151,168,222,.16) 34%,rgba(169,190,238,.8) 50%,rgba(143,175,176,.28) 62%,transparent 84%); animation-name: panel-edge-horizontal; }
+}
+@media (max-width: 760px) {
+  .sidebar::before, .inspector::before { inset: auto 16px 0; width: auto; height: 1px; background: linear-gradient(90deg,transparent 14%,rgba(151,168,222,.16) 34%,rgba(169,190,238,.8) 50%,rgba(143,175,176,.28) 62%,transparent 84%); animation-name: panel-edge-horizontal; }
+  .sidebar::after, .inspector::after { height: 180px; }
+  .dataset-dropzone .result-header, .dataset-dropzone .run-summary { flex-wrap: wrap; gap: 10px; line-height: 1.5; }
+  #drop-target-label { font-size: 10px; padding: 5px 7px; }
+  .dataset-stage { gap: 12px; padding: 14px 48px 14px 14px; margin: 20px auto; }
+  .dataset-stage-copy button { max-width: 100%; white-space: normal; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sidebar::before, .sidebar::after, .inspector::before, .inspector::after,
+  .dataset-dropzone.drop-received::after, .drop-received .dataset-stage, .dataset-stage-icon, .dataset-stage-icon::after,
+  .dataset-drag-ghost, .dataset-drag-ghost-card, #pulse[data-busy="1"] { animation: none; }
+  #files .file, #files .file::before, .sidebar .session-card, .sidebar .plan-type,
+  .inspector .log, .inspector button.secondary, .dataset-dropzone, .dataset-dropzone::before,
+  #drop-target-label, .dataset-drag-ghost, .dataset-drag-ghost-card, .stage-remove { transition: none; }
+  #files .file:hover:not(:disabled):not(.dataset-dragging), #files .file.dataset-dragging, .sidebar .session-card:hover,
+  .sidebar .plan-type:hover, .inspector button.secondary:hover:not(:disabled),
+  button.primary:hover:not(:disabled), button.danger:active, .dataset-stage-icon, .dataset-drag-ghost-card { transform: none; }
+}
