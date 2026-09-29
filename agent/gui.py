@@ -31,9 +31,11 @@ import mimetypes
 import os
 import secrets
 import sys
+import tempfile
 import threading
 import time
 from collections import deque
+from dataclasses import replace
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -46,6 +48,7 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
 import skills  # noqa: E402
+from execution_outcome import tool_result_failed  # noqa: E402
 
 # The model layer is a separate dependency from the analysis layer. Importing it must not be a
 # condition for serving a page: on a machine that has not installed requirements.txt the workbench
@@ -87,7 +90,7 @@ DEFAULT_PORT = 8765
 EVENT_BUFFER = 200          # a reload re-attaches and replays; it is not a run log
 # The one build stamp every page shows ({{BUILD}} in the html files). Bump it per release; a
 # tag that says which page you are looking at is worth nothing if it lags the code it names.
-BUILD_TAG = "guiv2 · b8"
+BUILD_TAG = "guiv2 · b10"
 # How many finished runs stay replayable. Each one holds its whole transcript and result payload,
 # and the dict was never trimmed: a workbench left open for a day accumulated one per question.
 JOB_HISTORY = 20
@@ -163,14 +166,49 @@ def load_gate_credential() -> tuple[bytes, int, bytes] | None:
     """
     try:
         data = json.loads(gate_file().read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return None
+        if data.get("setup_required") is True:
+            return None
         salt = bytes.fromhex(data["salt"])
         digest = bytes.fromhex(data["digest"])
         iterations = int(data.get("iterations", GATE_KDF_ITERATIONS))
-    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, json.JSONDecodeError):
         return None
     if len(salt) < 8 or len(digest) != 32 or iterations < 1:
         return None
     return salt, iterations, digest
+
+
+def load_gate_setup_required() -> bool:
+    """An explicit reset must not silently reopen a loopback gate after restart."""
+    try:
+        data = json.loads(gate_file().read_text(encoding="utf-8"))
+        return isinstance(data, dict) and data.get("setup_required") is True
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def _write_gate_record(payload: dict) -> None:
+    """Replace one gate record atomically; failed writes retain the old credential."""
+    target = gate_file()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=target.parent,
+                                         prefix=".gate-", suffix=".tmp", delete=False) as output:
+            temporary = Path(output.name)
+            json.dump(payload, output, indent=2)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, target)
+        temporary = None
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def _is_loopback(ip: str) -> bool:
@@ -180,8 +218,9 @@ def _is_loopback(ip: str) -> bool:
 def _gate_mode(server) -> str:
     """One of 'signin', 'setup' or 'open', computed from live server state.
 
-    A launch-time --token or a stored password makes the gate 'signin'. Without either,
-    a loopback binding stays 'open' (the workbench you started for yourself), while a
+    A launch-time --token or a stored password makes the gate 'signin'. An explicit
+    reset or a gateway-required gate makes it 'setup' until a password is created.
+    Otherwise a loopback binding stays 'open' (the workbench you started for yourself), while a
     remote binding becomes 'setup': nothing unauthenticated is served, the first visit
     from the server's own machine claims the password, and everyone else waits.
     """
@@ -189,11 +228,46 @@ def _gate_mode(server) -> str:
         return "signin"
     if getattr(server, "gate_credential", None) is not None:
         return "signin"
+    if getattr(server, "require_setup", False):
+        return "setup"
     if server.server_address[0] in ("127.0.0.1", "::1"):
         return "open"
     if os.environ.get("GPU_GUI_ALLOW_REMOTE") == "1":
         return "open"
     return "setup"
+
+
+def _reset_origin_allowed(server, headers) -> bool:
+    """Reject cross-site reset posts, including simple form posts to loopback.
+
+    No Origin remains useful to a CLI and the nonce-checked local gateway. A
+    browser Origin must match the literal HTTP authority and actual bound port;
+    unlike the gateway, this endpoint has no nonce to justify repairing one.
+    """
+    def authority(value: str, *, origin: bool):
+        if not value or any(character.isspace() for character in value) or "\\" in value:
+            return None
+        try:
+            parsed = urlparse(value if origin else "http://" + value)
+            if (parsed.scheme != "http" or not parsed.hostname or parsed.username is not None
+                    or parsed.password is not None or parsed.path or parsed.params
+                    or parsed.query or parsed.fragment):
+                return None
+            return parsed.hostname.lower(), parsed.port if parsed.port is not None else 80
+        except ValueError:
+            return None
+
+    hosts = headers.get_all("Host")
+    if not hosts or len(hosts) != 1:
+        return False
+    target = authority(hosts[0], origin=False)
+    if target is None or target[1] != server.server_address[1]:
+        return False
+    if server.server_address[0] in ("127.0.0.1", "::1"):
+        if target[0] != "localhost" and not _is_loopback(target[0]):
+            return False
+    origins = headers.get_all("Origin")
+    return origins is None or (len(origins) == 1 and authority(origins[0], origin=True) == target)
 
 
 def _probe_config_dir() -> bool:
@@ -324,13 +398,17 @@ class Job:
     """
 
     def __init__(self, kind: str, label: str):
-        self.id = f"j{int(time.time() * 1000):x}-{threading.get_ident():x}"
+        self.id = "j" + secrets.token_hex(16)
         self.kind = kind            # "ask" (model-driven) or "run" (direct tool call)
         self.label = label
         self.events: deque = deque(maxlen=EVENT_BUFFER)
         self.sequence = 0
         self.rounds = 0
         self.done = False
+        self.status = "running"
+        self.started_at = time.time()
+        self.finished_at = None
+        self.tool_failures = 0
         self.condition = threading.Condition()
         self.started = time.perf_counter()
 
@@ -338,11 +416,22 @@ class Job:
         with self.condition:
             self.sequence += 1
             self.events.append((self.sequence, name, payload))
-
-    def finish(self) -> None:
-        with self.condition:
-            self.done = True
             self.condition.notify_all()
+
+    def finish(self, status: str = "succeeded") -> None:
+        with self.condition:
+            self.status = status
+            self.done = True
+            self.finished_at = time.time()
+            self.condition.notify_all()
+
+    def summary(self) -> dict:
+        with self.condition:
+            return {"id": self.id, "kind": self.kind, "label": self.label,
+                    "status": self.status, "done": self.done,
+                    "started_at": self.started_at, "finished_at": self.finished_at,
+                    "sequence": self.sequence,
+                    "first_sequence": self.events[0][0] if self.events else 0}
 
     def since(self, cursor: int):
         """(events after cursor, finished). Blocks briefly instead of busy-polling."""
@@ -404,13 +493,15 @@ class Workbench:
     """
 
     def __init__(self, model_override: str | None = None):
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         self.busy = False
         self.jobs: dict[str, Job] = {}
+        self.instance_id = secrets.token_hex(16)
         self.agent = None
         self.config_ready = False
         self.missing_fields: list[str] = []      # filled once a config file could be read
         self.remember_key = False
+        self._config = None  # Runtime-only credentials; never serialized in state/jobs.
         self.model = None
         # `--model` is a launch-time override and the only thing allowed to outrank the file. It has
         # to be remembered separately: `apply_settings` used to reconfigure with `self.model` -- the
@@ -443,14 +534,18 @@ class Workbench:
         status = self.session_status()
         return {**self.session_doc(status), "reused": decision_is_warm(self.last_decision)}
 
-    def _configure(self, model_override: str | None) -> None:
+    def _configure(self, model_override: str | None, config=None) -> None:
+        self.agent = None
+        self.config_ready = False
+        self.last_error = ""
         if Agent is None or load_config is None:
             return
         try:
-            config = load_config()
+            config = replace(config) if config is not None else load_config()
         except Exception as exc:
-            self.last_error = f"connection settings unreadable: {exc}"
+            self.last_error = f"connection settings unreadable: {type(exc).__name__}"
             return
+        self._config = replace(config)
         if model_override:
             config.model = model_override
         self.config_ready = bool(config.ready)
@@ -472,11 +567,20 @@ class Workbench:
         self.remember_key = bool(getattr(config, "remember_key", False))
         if self.config_ready:
             try:
-                self.agent = Agent(build_client(config), verbose=False, model=config.model)
+                self.agent = Agent(build_client(config), verbose=False, model=config.model,
+                                   reuse_one_shot=True)
             except Exception as exc:
-                self.last_error = f"model client could not start: {type(exc).__name__}: {exc}"
+                self.config_ready = False
+                self.last_error = f"model client could not start: {type(exc).__name__}"
 
     def apply_settings(self, patch: dict) -> dict:
+        # Do not replace the Agent while its in-flight turn is emitting events.
+        with self.lock:
+            if self.busy:
+                return {"ok": False, "error": "busy: wait for the current analysis before changing settings"}
+            return self._apply_settings(patch)
+
+    def _apply_settings(self, patch: dict) -> dict:
         """Write connection settings through api_config, then rebuild the agent.
 
         The key is accepted once and never returned. The response reports whether one is stored,
@@ -486,8 +590,16 @@ class Workbench:
         """
         if load_config is None or save_config is None:
             return {"ok": False, "error": f"settings layer unavailable: {AGENT_IMPORT_ERROR}"}
+        if not isinstance(patch, dict):
+            return {"ok": False, "error": "settings must be an object"}
+        for field in ("base_url", "api_key", "model", "language"):
+            if field in patch and not isinstance(patch[field], str):
+                return {"ok": False, "error": f"{field} must be text"}
+        for field in ("remember_key", "skip_setup"):
+            if field in patch and not isinstance(patch[field], bool):
+                return {"ok": False, "error": f"{field} must be a boolean"}
         try:
-            config = load_config()
+            config = replace(self._config) if self._config is not None else load_config()
         except Exception as exc:
             return {"ok": False, "error": f"could not read current settings: {exc}"}
         was = (config.base_url, config.model, config.api_key, config.skip_setup,
@@ -514,29 +626,13 @@ class Workbench:
         for field in ("model", "skip_setup", "remember_key", "language"):
             if field in patch:
                 setattr(config, field, patch[field])
-        if patch.get("api_key") and not config.remember_key:
-            # The workbench rebuilds its client from disk (`_configure` calls `load_config`), so a
-            # key that is not persisted cannot be used here at all -- say that, rather than
-            # implying a memory-only session the GUI does not have. And do not let this submission
-            # downgrade remember_key either: `save_config` writes the key only while the flag is
-            # true (api_config.py:104), so persisting the flag as false would rewrite
-            # connection.json with no key in it and delete a credential that was already working.
-            warning = ("api_key was discarded: without 记住密钥 / Remember key nothing is written, "
-                       "and the workbench reads its credential from disk, so an unpersisted key "
-                       "cannot be used here. To replace the stored key, submit again with Remember "
-                       "key ticked; to stop keeping the stored plaintext key, change that checkbox "
-                       "on its own.")
-            if config.base_url == was[0]:
-                config.remember_key = was[4]
-                config.api_key = was[2]
-        elif patch.get("api_key"):
-            config.api_key = str(patch["api_key"])
-        elif was[4] and not config.remember_key:
-            # Turning the checkbox off really does delete the stored plaintext key, which is the
-            # safe reading of "don't remember" but must not surprise the operator at the next ask.
-            warning = ("remember_key off removes the stored plaintext key from connection.json: "
-                       "the question box closes until a key is saved again or GPU_API_KEY was "
-                       "exported before this server started.")
+        if patch.get("api_key", "").strip():
+            config.api_key = patch["api_key"].strip()
+        config.model = config.model.strip()
+        if config.api_key and not config.remember_key:
+            warning = ("密钥仅在当前后端进程内存中使用，不保存到磁盘；后端重启后需重新输入。"
+                       if config.language == "zh" else
+                       "The key is used in backend process memory only, not on disk; enter it again after a backend restart.")
 
         try:
             if (config.base_url, config.model, config.api_key, config.skip_setup,
@@ -548,7 +644,16 @@ class Workbench:
             # save_config validates the language and refuses anything but zh/en.
             return {"ok": False, "error": f"settings not saved: {type(exc).__name__}: {exc}"}
 
-        self._configure(self.model_override)
+        previous = self._config
+        if (self.agent is not None and previous is not None
+                and (previous.base_url, previous.model, previous.api_key) ==
+                    (config.base_url, config.model, config.api_key)):
+            # Presentation/persistence preferences must not erase conversation history.
+            self._config = replace(config)
+            self.language = config.language
+            self.remember_key = config.remember_key
+        else:
+            self._configure(self.model_override, config=config)
         response = {
             "ok": True,
             "base_url": config.base_url,
@@ -576,7 +681,7 @@ class Workbench:
         if load_config is None or normalize_url is None or APIConfig is None or discover_models is None:
             return {"ok": False, "error": f"settings layer unavailable: {AGENT_IMPORT_ERROR}"}
         try:
-            config = load_config()
+            config = replace(self._config) if self._config is not None else load_config()
         except Exception as exc:
             return {"ok": False, "error": f"could not read current settings: {exc}"}
         raw = str(body.get("base_url") or "").strip() or config.base_url
@@ -692,6 +797,25 @@ class Workbench:
 
     # -- running things ----------------------------------------------------------------
 
+    def job_catalog(self, job_id: str | None = None) -> dict:
+        # Reading history never starts/touches the analysis worker or executes a tool.
+        with self.lock:
+            if job_id is not None:
+                job = self.jobs.get(job_id)
+                return {"instance_id": self.instance_id,
+                        "job": job.summary() if job else None}
+            jobs = [job.summary() for job in reversed(list(self.jobs.values()))]
+            return {"instance_id": self.instance_id, "busy": self.busy,
+                    "active_job_id": next((job["id"] for job in jobs if not job["done"]), None),
+                    "jobs": jobs}
+
+    def _complete_job(self, job: Job, status: str, **payload) -> None:
+        with self.lock:
+            job.emit("done", {**payload, "status": status, "success": status == "succeeded"})
+            job.finish(status)
+            self.busy = False
+            self._prune_jobs()
+
     def _acquire(self, kind: str, label: str):
         if self.busy:
             return None
@@ -718,6 +842,17 @@ class Workbench:
             del self.jobs[job_id]
 
     def release(self, timeout: float = WORKER_TIMEOUT_SECONDS) -> dict:
+        with self.lock:
+            if self.busy:
+                return {"ok": False, "error": "busy: wait for the current analysis before releasing sessions"}
+            self.busy = True
+        try:
+            return self._release(timeout)
+        finally:
+            with self.lock:
+                self.busy = False
+
+    def _release(self, timeout: float) -> dict:
         """Close sessions AND drop warm frames, off-thread, with our own deadline.
 
         skills.release_all_sessions_and_cache() already re-reads the after-counts; what it cannot
@@ -726,11 +861,21 @@ class Workbench:
         """
         result = call_with_timeout(skills.release_all_sessions_and_cache, timeout)
         if not result.get("error"):
-            self.busy = False
             result["state"] = self.session_doc(self.session_status())
         return result
 
     def reset_all(self) -> dict:
+        with self.lock:
+            if self.busy:
+                return {"ok": False, "error": "busy: wait for the current analysis before resetting"}
+            self.busy = True
+        try:
+            return self._reset_all()
+        finally:
+            with self.lock:
+                self.busy = False
+
+    def _reset_all(self) -> dict:
         """Return this machine's workbench state to out-of-the-box, and say exactly what
         that means.
 
@@ -743,11 +888,13 @@ class Workbench:
         copy says so rather than implying a wiped disk.
         """
         result = call_with_timeout(skills.release_all_sessions_and_cache, WORKER_TIMEOUT_SECONDS)
-        if result.get("error"):
-            return {"ok": False, "error": result["error"]}
+        if not isinstance(result, dict) or tool_result_failed(result):
+            error = result.get("error") if isinstance(result, dict) else None
+            return {"ok": False, "error": error if isinstance(error, str) and error.strip()
+                    else "could not release resident sessions and warm cache"}
         done = ["resident sessions and warm cache released"]
-        self.busy = False
         self.jobs.clear()
+        self.instance_id = secrets.token_hex(16)
         self.artifact_roots = set()
         for env_dir in (os.environ.get("DEMO_DATA_DIR"),):
             if env_dir:
@@ -784,6 +931,8 @@ class Workbench:
         Argument names are filtered against the target's own signature, so an HTTP body cannot
         reach a parameter the tool does not declare.
         """
+        started = time.perf_counter()
+        status = "failed"
         try:
             fn = getattr(skills, tool)
             accepted = inspect.signature(fn).parameters
@@ -793,25 +942,26 @@ class Workbench:
             job.rounds += 1
             job.emit("tool_call", {"round": job.rounds, "name": tool, "args": clean,
                                    "dropped_args": dropped, "source": "direct"})
-            started = time.perf_counter()
+            tool_started = time.perf_counter()
             raw = fn(**clean)
-            seconds = time.perf_counter() - started
+            seconds = time.perf_counter() - tool_started
             try:
                 parsed = json.loads(raw)
             except (TypeError, json.JSONDecodeError):
                 parsed = {"success": False, "error": "tool returned a non-JSON payload"}
+            if not isinstance(parsed, dict):
+                parsed = {"success": False, "error": "tool returned a non-object payload"}
             job.emit("tool_result", {"round": job.rounds, "name": tool, "args": clean,
                                      "result": parsed, "chip": chip_state(parsed),
                                      "seconds": round(seconds, 3)})
             self._absorb_result(parsed)
             job.emit("session", self.session_event())
-            job.emit("done", {"seconds": round(seconds, 3), "source": "direct"})
+            status = "failed" if tool_result_failed(parsed) else "succeeded"
         except Exception as exc:
             job.emit("error", {"message": f"{type(exc).__name__}: {exc}"})
-            job.emit("done", {"seconds": 0.0})
         finally:
-            job.finish()
-            self.busy = False
+            self._complete_job(job, status, seconds=round(time.perf_counter() - started, 3),
+                               source="direct")
 
     def start_ask(self, text: str, file: str | None = None):
         """Begin a model-driven turn. `file`, when given, is stated to the model as context.
@@ -823,48 +973,66 @@ class Workbench:
         if Agent is None:
             return None, (f"model client is not available: {AGENT_IMPORT_ERROR}. "
                           f"Install it with: pip install -r requirements.txt")
-        if self.agent is None:
-            return None, (self.last_error or "no API base URL, key and model are configured. "
-                                             "Set them with agent_main.py --configure or the "
-                                             "GPU_API_* environment variables.")
         prompt = text
         if file:
             resolved = file
             prompt = (f"{text}\n\n"
                       f"[workbench] the dataset selected in the interface is: {resolved}")
-        job = self._acquire("ask", prompt[:120])
-        if job is None:
-            return None, "busy"
+        with self.lock:
+            if self.agent is None:
+                return None, (self.last_error or "no API base URL, key and model are configured. "
+                                                 "Set them in Connection settings.")
+            job = self._acquire("ask", prompt[:120])
+            if job is None:
+                return None, "busy"
+            agent = self.agent
         job.emit("prompt", {"text": prompt, "file": file or ""})
-        thread = threading.Thread(target=self._run_ask, args=(job, prompt), daemon=True)
+        thread = threading.Thread(target=self._run_ask, args=(job, prompt, agent), daemon=True)
         thread.start()
         return job, ""
 
-    def _run_ask(self, job: Job, text: str) -> None:
+    def _run_ask(self, job: Job, text: str, agent) -> None:
         """Drive one real Agent turn, streaming text to `event` and tool payloads to `result`."""
         started = time.perf_counter()
+        status = "failed"
+        reason = ""
+        outcome_error = ""
         try:
-            self.agent.event_sink = lambda line: job.emit("trace", {"line": line})
-            self.agent.result_sink = self._make_result_sink(job)
+            agent.event_sink = lambda line: job.emit("trace", {"line": line})
+            agent.result_sink = self._make_result_sink(job)
             job.emit("phase", {"phase": "thinking"})
-            answer = self.agent.run(text)
+            answer = agent.run(text)
+            outcome = getattr(agent, "last_run_outcome", None)
+            # Legacy adapters without an outcome are unknown, not proven successful.
+            if isinstance(outcome, dict) and outcome.get("status") in {"succeeded", "failed", "partial"}:
+                status = outcome["status"]
+                reason = outcome.get("reason", "")
+                if isinstance(outcome.get("error"), str):
+                    outcome_error = outcome["error"]  # Agent has already redacted secrets.
+                if type(outcome.get("tool_failures")) is int:
+                    job.tool_failures = max(job.tool_failures, outcome["tool_failures"])
+            else:
+                status, reason = "partial", "unknown_outcome"
+            if job.tool_failures and status == "succeeded":
+                status, reason = "partial", "tool_failures"
             job.emit("answer", {"text": answer})
             job.emit("session", self.session_event())
-            job.emit("done", {"seconds": round(time.perf_counter() - started, 3)})
         except Exception as exc:
             # safe_error strips the API key out of the message; an exception text that echoes a
             # request header must never reach the browser or the event log.
-            job.emit("error", {"message": self.agent.safe_error(exc)})
-            job.emit("done", {"seconds": round(time.perf_counter() - started, 3)})
+            job.emit("error", {"message": agent.safe_error(exc)})
+            status, reason = "failed", "exception"
         finally:
-            self.agent.event_sink = None
-            self.agent.result_sink = None
-            job.finish()
-            self.busy = False
+            agent.event_sink = None
+            agent.result_sink = None
+            self._complete_job(job, status, seconds=round(time.perf_counter() - started, 3),
+                               reason=reason, error=outcome_error, tool_failures=job.tool_failures)
 
     def _make_result_sink(self, job: Job):
         def sink(name: str, payload: dict, seconds: float) -> None:
             job.rounds += 1
+            if tool_result_failed(payload):
+                job.tool_failures += 1
             # The chip is computed here, once, from the real decision record. The browser renders
             # what it is handed and never re-derives an engine label -- two implementations of
             # "was this the GPU, and was that on purpose" is how the two views drift apart.
@@ -1016,8 +1184,7 @@ class Handler(BaseHTTPRequestHandler):
                    "salt": salt.hex(), "digest": digest.hex(),
                    "created": time.strftime("%Y-%m-%dT%H:%M:%S")}
         try:
-            gate_file().parent.mkdir(parents=True, exist_ok=True)
-            gate_file().write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            _write_gate_record(payload)
         except OSError as exc:
             return self._json(500, {"error": f"could not store the password digest in "
                                              f"{gate_file()}: {exc}. The config directory "
@@ -1025,28 +1192,37 @@ class Handler(BaseHTTPRequestHandler):
                                              f"GPU_ANALYSIS_CONFIG) at one that is, and "
                                              f"restart."})
         self.server.gate_credential = (salt, GATE_KDF_ITERATIONS, digest)
+        self.server.require_setup = False
         self._issue_session()
 
     def _reset(self) -> None:
         """Erase this machine's workbench state; Workbench.reset_all states the boundary."""
-        result = self.workbench.reset_all()
-        if not result.get("ok"):
-            return self._json(500, result)
-        cleared = list(result.get("reset", []))
-        if getattr(self.server, "gate_credential", None) is not None:
-            try:
-                gate_file().unlink(missing_ok=True)
-            except OSError as exc:
-                return self._json(500, {"ok": False,
-                                        "error": f"could not remove the gate file: {exc}"})
-            self.server.gate_credential = None
-            cleared.append("gate password cleared; the next loopback visit sets a new one")
-        elif getattr(self.server, "token_digest", None) is not None:
-            cleared.append("gate stays on: its password was given at launch (--token), "
-                           "not in the browser")
-        self.server.sessions = {}
-        cleared.append("sign-in sessions invalidated")
-        self._json(200, {"ok": True, "reset": cleared})
+        if not _reset_origin_allowed(self.server, self.headers):
+            return self._json(403, {"ok": False, "error": "reset request origin is not trusted"})
+        # Keep admission closed through the gate write, not merely while the
+        # worker/config reset runs. reset_all uses the same reentrant lock.
+        with self.workbench.lock:
+            result = self.workbench.reset_all()
+            if not result.get("ok"):
+                return self._json(409 if result.get("error", "").startswith("busy:") else 500, result)
+            cleared = list(result.get("reset", []))
+            if getattr(self.server, "token_digest", None) is not None:
+                cleared.append("gate stays on: its password was given at launch (--token), "
+                               "not in the browser")
+            else:
+                try:
+                    _write_gate_record({"setup_required": True})
+                except OSError as exc:
+                    return self._json(500, {"ok": False, "reset": cleared,
+                        "error": "workbench reset ran, but the password gate was not changed: "
+                                 f"could not persist first-run setup ({type(exc).__name__})"})
+                self.server.gate_credential = None
+                self.server.require_setup = True
+                cleared.append("gate password cleared; first-run setup is required, including after restart")
+            self.server.sessions = {}
+            cleared.append("sign-in sessions invalidated")
+            self._json(200, {"ok": True, "reset": cleared, "gate_mode": _gate_mode(self.server)},
+                       {"Set-Cookie": "dws=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict"})
 
     def _logout(self) -> None:
         """Retire the session named by the caller's cookie and expire the cookie.
@@ -1153,6 +1329,16 @@ class Handler(BaseHTTPRequestHandler):
             kind = "text/css; charset=utf-8" if url.path.endswith(".css") else \
                 "application/javascript; charset=utf-8"
             return self._static(url.path.lstrip("/"), kind)
+        if url.path == "/api/auth":
+            return self._json(200, {"authorized": True})
+        if url.path == "/api/jobs":
+            query = parse_qs(url.query, keep_blank_values=True)
+            job_id = query.get("job", [None])[0]
+            catalog = wb.job_catalog(job_id)
+            if job_id is not None and catalog["job"] is None:
+                return self._json(404, {"error": "job is no longer available",
+                                        "instance_id": wb.instance_id})
+            return self._json(200, catalog)
         if url.path == "/api/state":
             payload = wb.engine_state()
             payload["auth_required"] = _gate_mode(self.server) != "open"
@@ -1165,7 +1351,9 @@ class Handler(BaseHTTPRequestHandler):
                 payload = {"success": False, "error": f"{type(exc).__name__}: {exc}"}
             return self._json(200 if payload.get("success") else 400, payload)
         if url.path == "/api/events":
-            return self._events(parse_qs(url.query).get("job", [""])[0])
+            query = parse_qs(url.query, keep_blank_values=True)
+            return self._events(query.get("job", [""])[0],
+                                query.get("after", ["0"])[0], query.get("instance", [None])[0])
         if url.path == "/artifact":
             target = wb.resolve_artifact((parse_qs(url.query).get("path") or [""])[0])
             if target is None:
@@ -1194,7 +1382,8 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/api/reset":
             return self._reset()
         if url.path == "/api/session/release":
-            return self._json(200, wb.release())
+            result = wb.release()
+            return self._json(409 if result.get("error", "").startswith("busy:") else 200, result)
         if url.path == "/api/shutdown":
             self._json(202, {"ok": True})
             threading.Thread(target=self.workbench.shutdown, daemon=True).start()
@@ -1209,8 +1398,9 @@ class Handler(BaseHTTPRequestHandler):
             job, problem = wb.start_ask(text, body.get("file"))
             if job is None:
                 code = 409 if problem == "busy" else 503
-                return self._json(code, {"error": problem})
-            return self._json(202, {"job_id": job.id})
+                return self._json(code, {"error": problem, "instance_id": wb.instance_id,
+                                        "active_job_id": wb.job_catalog()["active_job_id"]})
+            return self._json(202, {"job_id": job.id, "instance_id": wb.instance_id})
         if url.path == "/api/run":
             body = self._body()
             if body is None:
@@ -1219,8 +1409,9 @@ class Handler(BaseHTTPRequestHandler):
                                                body.get("args") or {})
             if job is None:
                 code = 409 if problem == "busy" else 400
-                return self._json(code, {"error": problem})
-            return self._json(202, {"job_id": job.id,
+                return self._json(code, {"error": problem, "instance_id": wb.instance_id,
+                                        "active_job_id": wb.job_catalog()["active_job_id"]})
+            return self._json(202, {"job_id": job.id, "instance_id": wb.instance_id,
                                     "note": "direct tool call, no model involved"})
         if url.path == "/api/models":
             if "api_key" in parse_qs(url.query):
@@ -1263,7 +1454,8 @@ class Handler(BaseHTTPRequestHandler):
         patch = self._body()
         if patch is None:
             return
-        return self._json(200, self.workbench.apply_settings(patch))
+        result = self.workbench.apply_settings(patch)
+        return self._json(409 if result.get("error", "").startswith("busy:") else 200, result)
 
     def _static(self, name: str, content: str) -> None:
         root = GUI_DIR.resolve()
@@ -1277,22 +1469,33 @@ class Handler(BaseHTTPRequestHandler):
             body = body.replace(b"{{BUILD}}", BUILD_TAG.encode("utf-8"))
         self._send(200, body, content)
 
-    def _events(self, job_id: str) -> None:
-        job = self.workbench.jobs.get(job_id)
+    def _events(self, job_id: str, after: str = "0", instance: str | None = None) -> None:
+        with self.workbench.lock:
+            if instance is not None and instance != self.workbench.instance_id:
+                return self._json(409, {"error": "backend instance changed; reload task history"})
+            job = self.workbench.jobs.get(job_id)
         if job is None:
             return self._json(404, {"error": f"no such job: {job_id}"})
+        raw_cursor = self.headers.get("Last-Event-ID", after)
+        if not raw_cursor.isascii() or not raw_cursor.isdecimal() or len(raw_cursor) > 20:
+            return self._json(400, {"error": "event cursor must be a nonnegative integer"})
+        cursor = int(raw_cursor)
+        if cursor > job.sequence:
+            return self._json(400, {"error": "event cursor is ahead of this job"})
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "close")
         self.end_headers()
-        cursor = 0
         try:
             while True:
                 fresh, finished = job.since(cursor)
+                if fresh and fresh[0][0] > cursor + 1:
+                    notice = {"first_sequence": fresh[0][0], "requested_after": cursor}
+                    self.wfile.write(("event: replay_gap\ndata: " + json.dumps(notice) + "\n\n").encode())
                 for sequence, name, payload in fresh:
                     cursor = sequence
-                    frame = f"event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    frame = f"id: {sequence}\nevent: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
                     self.wfile.write(frame.encode("utf-8"))
                     self.wfile.flush()
                 if not fresh:
@@ -1327,8 +1530,9 @@ def make_server(port: int = DEFAULT_PORT, host: str = "127.0.0.1",
     A token, when given, is stored only as its sha256 digest, on the server instance.
     """
     workbench = Workbench(model_override=model)
-    Handler.workbench = workbench
-    httpd = ThreadingHTTPServer((host, port), Handler)
+    # Separate registries even when several backends share one Python process.
+    bound_handler = type("WorkbenchHandler", (Handler,), {"workbench": workbench})
+    httpd = ThreadingHTTPServer((host, port), bound_handler)
     httpd.daemon_threads = True
     # Two credential sources: a launch-time --token (sha256, in memory only) and the
     # browser-set gate.json password (salted PBKDF2, on disk). Either arms the gate;
@@ -1336,6 +1540,7 @@ def make_server(port: int = DEFAULT_PORT, host: str = "127.0.0.1",
     # headless tests can run gated and ungated servers side by side.
     httpd.token_digest = hashlib.sha256(token.encode("utf-8")).digest() if token else None
     httpd.gate_credential = load_gate_credential() if token is None else None
+    httpd.require_setup = load_gate_setup_required() if token is None else False
     httpd.sessions = {}                # sid -> expiry; survives exactly as long as the process
     workbench.httpd = httpd
     return httpd, workbench

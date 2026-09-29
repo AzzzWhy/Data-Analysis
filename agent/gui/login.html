@@ -12,12 +12,12 @@
 <div class="glow" id="glow" aria-hidden="true"></div>
 <div class="motes" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
 <div class="figures" aria-hidden="true">
-  <div class="figure f1"><small data-fig="0"></small><b data-meter="rows">12,840,221</b></div>
-  <div class="figure f2"><small data-fig="1"></small><b data-meter="rate">3.88×</b></div>
-  <div class="figure f3"><small data-fig="2"></small><b data-meter="time">2.63s</b></div>
-  <div class="figure f4"><small data-fig="0"></small><b data-meter="rows">8,420,118</b></div>
-  <div class="figure f5"><small data-fig="1"></small><b data-meter="rate">2.46×</b></div>
-  <div class="figure f6"><small data-fig="2"></small><b data-meter="time">1.84s</b></div>
+  <div class="figure f1"><small data-fig="0">数据格式</small><b data-figure-value="0">CSV · Parquet</b></div>
+  <div class="figure f2"><small data-fig="1">计算能力</small><b data-figure-value="1">CPU + GPU</b></div>
+  <div class="figure f3"><small data-fig="2">分析输出</small><b data-figure-value="2">图表 · 报告</b></div>
+  <div class="figure f4"><small data-fig="0">数据格式</small><b data-figure-value="0">CSV · Parquet</b></div>
+  <div class="figure f5"><small data-fig="1">计算能力</small><b data-figure-value="1">CPU + GPU</b></div>
+  <div class="figure f6"><small data-fig="2">分析输出</small><b data-figure-value="2">图表 · 报告</b></div>
 </div>
 <div class="vignette" aria-hidden="true"></div>
 <button type="button" id="lang" class="lang">English</button>
@@ -42,20 +42,21 @@
         </span>
         <div class="product-copy">
           <strong>Data Workbench</strong>
-          <span>AI 数据分析</span>
+          <span id="product-sub">GPU 加速与数据分析</span>
         </div>
       </div>
     </header>
 
-    <div class="live" aria-hidden="true">
-      <div><span id="live-k0"></span><b id="live-n0">0</b></div>
-      <div><span id="live-k1"></span><b id="live-n1">0</b></div>
-      <div><span id="live-k2"></span><b id="live-n2">0</b></div>
+    <div class="live" aria-describedby="metrics-note">
+      <div><span id="live-k0">行数</span><b id="live-n0">—</b></div>
+      <div><span id="live-k1">加速比</span><b id="live-n1">—</b></div>
+      <div><span id="live-k2">耗时</span><b id="live-n2">—</b></div>
     </div>
+    <p id="metrics-note" class="metrics-note">此页不执行分析；真实指标在任务完成后于工作台展示。</p>
 
     <form id="gate-form" class="gate-body" hidden novalidate>
       <h1 id="t-title">设置访问密码</h1>
-      <p id="t-sub" class="gate-sub">第一次打开请设置访问密码。设置之后，再次打开才需要输入它。</p>
+      <p id="t-sub" class="gate-sub">当前所连后端尚未设置访问密码，请先完成设置。此密码不是 SSH 密码。</p>
 
       <div class="field">
         <label class="lt" for="password" id="t-label">访问密码</label>
@@ -73,7 +74,8 @@
     <div id="gate-waiting" class="gate-body" hidden>
       <h1 id="t-wait-title">等待初始设置</h1>
       <p id="t-wait-sub" class="gate-sub">这份服务还没有设置访问密码。请在运行它的那台机器上打开本页面，完成首次设置后，这里即可登录。</p>
-      <div class="waiting-note"><span class="spinner" aria-hidden="true"></span><span id="t-wait-note">正在等待管理员设置密码…</span></div>
+      <div class="waiting-note" id="waiting-note"><span class="spinner" aria-hidden="true"></span><span id="t-wait-note">正在等待管理员设置密码…</span></div>
+      <button type="button" id="gate-retry" class="primary" hidden>重试连接</button>
     </div>
 
     <footer class="gate-foot">

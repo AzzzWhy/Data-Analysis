@@ -456,6 +456,8 @@ def main() -> int:
                                "model": "chosen-model", "remember_key": True,
                                "skip_setup": True, "language": "zh"}, method="PATCH")
         check("settings accepted", code == 200 and saved.get("ok") is True, json.dumps(saved)[:160])
+        check("GUI conversations enable the existing warm-worker route",
+              getattr(wb.agent, "reuse_one_shot", False) is True)
         def leaks(payload):
             """A field literally named api_key, or the secret anywhere in the payload.
 
@@ -482,6 +484,7 @@ def main() -> int:
                                                            if k != "api_key"})[:160])
         check("and the second response does not carry one either", not leaks(moved),
               json.dumps(moved)[:200])
+        check("switching providers also removes the old runtime client", wb.agent is None)
         code, refused = request("/api/settings?api_key=sneaky", {"language": "en"},
                                 method="PATCH")
         check("a key in the query string is refused outright", code == 400,
@@ -491,9 +494,9 @@ def main() -> int:
               code == 200 and bad.get("ok") is False, json.dumps(bad)[:140])
         code, noKey = request("/api/settings",
                               {"api_key": "temp-only", "remember_key": False}, method="PATCH")
-        check("a key offered without consent to persist it warns truthfully",
-              noKey.get("ok") is True and "discarded" in noKey.get("warning", "")
-              and "disk" in noKey.get("warning", ""), json.dumps(noKey)[:200])
+        check("a key offered without consent to persist it is retained only in memory",
+              noKey.get("ok") is True and bool(noKey.get("warning"))
+              and wb._config.api_key == "temp-only", json.dumps(noKey)[:200])
         check("and it is genuinely not on disk",
               "temp-only" not in Path(scratch_cfg).read_text(encoding="utf-8"))
 
@@ -516,10 +519,8 @@ def main() -> int:
               json.loads(Path(scratch_cfg).read_text(encoding="utf-8"))["base_url"] != "http://remote.example/v1")
         request("/api/settings", {"language": "zh"}, method="PATCH")
 
-        # Regression for the 2026-09-28 review finding: the submission above also carried
-        # remember_key=false, and persisting that flag made `save_config` write a key-less file
-        # (api_config.py:104), deleting a credential the operator already had working. Refusing one
-        # key must not be an excuse to rewrite the whole file.
+        # Explicitly switching to memory-only removes any previously persisted key but keeps
+        # the newly supplied key usable for the current backend process.
         code, again = request("/api/settings",
                               {"base_url": "https://first.example/v1", "api_key": secret,
                                "model": "chosen-model", "remember_key": True,
@@ -529,20 +530,23 @@ def main() -> int:
         code, off = request("/api/settings", {"api_key": "offered-no-consent",
                                              "remember_key": False}, method="PATCH")
         kept = json.loads(Path(scratch_cfg).read_text(encoding="utf-8"))
-        check("the stored key survives a submission that refuses a new one",
-              kept.get("api_key") == secret, json.dumps({k: v for k, v in kept.items()
+        check("memory-only selection removes the previously stored plaintext key",
+              not kept.get("api_key"), json.dumps({k: v for k, v in kept.items()
                                                          if k != "api_key"})[:160])
-        check("remember_key is not downgraded as a side effect", kept.get("remember_key") is True)
+        check("remember_key follows the explicit selection", kept.get("remember_key") is False)
         check("the offered key still never reaches disk",
               "offered-no-consent" not in Path(scratch_cfg).read_text(encoding="utf-8"))
-        check("and the question box stays open on the surviving credential",
-              off.get("config_ready") is True, json.dumps(off)[:160])
+        check("and the question box uses the new memory-only credential",
+              off.get("config_ready") is True and wb._config.api_key == "offered-no-consent",
+              json.dumps(off)[:160])
 
         stamp = os.stat(scratch_cfg).st_mtime_ns
+        same_agent = wb.agent
         code, noop = request("/api/settings", {"language": "zh"}, method="PATCH")
         check("a submit that changes nothing leaves the file byte-identical and unstamped",
               os.stat(scratch_cfg).st_mtime_ns == stamp
               and noop.get("ok") is True)
+        check("preference-only saves preserve the active conversation", wb.agent is same_agent)
 
         code, drop = request("/api/settings", {"remember_key": False}, method="PATCH")
         check("turning the checkbox off on its own does delete the plaintext key",
@@ -550,16 +554,30 @@ def main() -> int:
               json.dumps({k: v for k, v in json.loads(
                   Path(scratch_cfg).read_text(encoding="utf-8")).items()
                   if k != "api_key"})[:160])
-        check("and it says so instead of leaving the operator to discover it",
-              "removes the stored plaintext key" in drop.get("warning", ""),
+        check("and it describes the lifetime instead of silently discarding the key",
+              bool(drop.get("warning")),
               json.dumps(drop)[:200])
         code, named = request("/api/state")
-        check("the state then names the one missing field, instead of guessing all three",
-              named.get("config_ready") is False
-              and named.get("missing_fields") == ["api_key"]
+        check("the runtime stays ready without putting its credential in state",
+              named.get("config_ready") is True
+              and named.get("missing_fields") == []
+              and "offered-no-consent" not in json.dumps(named)
               and bool(named.get("model")),
               json.dumps({k: named.get(k) for k in ("config_ready", "missing_fields",
                                                     "model")})[:160])
+        restarted = gui.Workbench()
+        check("a fresh backend cannot recover a memory-only key",
+              not restarted.config_ready and "api_key" in restarted.missing_fields)
+        before_busy = wb.agent
+        wb.busy = True
+        try:
+            code, busy_settings = request("/api/settings", {"model": "not-applied"}, method="PATCH")
+            check("settings cannot replace an agent during a running analysis",
+                  busy_settings.get("ok") is False and wb.agent is before_busy)
+        finally:
+            wb.busy = False
+        code, malformed = request("/api/settings", {"remember_key": "false"}, method="PATCH")
+        check("a string boolean cannot accidentally persist a credential", malformed.get("ok") is False)
 
         # The semantics above are deliberate and now pinned. What was still missing is the form:
         # app.js submits `remember_key` verbatim from a checkbox that nothing ever prefilled, so
@@ -873,7 +891,11 @@ expect("after reset the gate is back to first-run setup",
        json.loads(body).get("mode") == "setup", body[:60])
 code, _, _ = hit(fresh, "/api/state", cookie="dws=" + sid2)
 expect("every session died with the reset", code == 401, f"code {code}")
-expect("the gate file left the disk with the credential", not gui.gate_file().exists())
+gate_record = json.loads(gui.gate_file().read_text(encoding="utf-8"))
+expect("the reset marker remains without any credential",
+       gate_record == {"setup_required": True}
+       and not any(key in gate_record for key in ("salt", "digest", "password", "token"))
+       and PASSWORD not in gui.gate_file().read_text(encoding="utf-8"))
 
 for srv in (plain, guard, fresh):
     srv.shutdown()
@@ -887,14 +909,16 @@ sys.exit(1 if failures else 0)
     try:
         probe = subprocess.run([sys.executable, "-c", probe_src], capture_output=True,
                                text=True, timeout=300, encoding="utf-8", errors="replace",
-                               cwd=str(HERE))
+                               cwd=str(HERE), env=env)
         prc, pout = probe.returncode, (probe.stdout or "")
     except (OSError, subprocess.TimeoutExpired) as exc:
         prc, pout = 2, f"probe could not run: {type(exc).__name__}: {exc}"
     for line in pout.splitlines():
         print(line)
     if probe is not None and probe.stderr:
-        print(probe.stderr.strip()[:400])
+        # The exception type and final cause are at the end of a traceback;
+        # retaining only the first 400 characters hid the useful diagnosis.
+        print(probe.stderr.strip()[-4000:])
     last = next((ln for ln in pout.splitlines()[::-1] if ln.strip()), "")
     check("the token gate holds on a real server, and never leaks to a tokenless one",
           prc == 0, f"exit {prc}; {last[:120]}")

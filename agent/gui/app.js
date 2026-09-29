@@ -5,9 +5,8 @@
  *     real execution_decision, every memory figure comes from the worker's own list reply, and
  *     every number comes from a tool result. If a field is absent, the row is left empty rather
  *     than filled with something plausible.
- *   - Nothing is polled. The worker's list command prunes its own cache before answering, so a
- *     timer here would expire the frames it was trying to display. The card updates after a run
- *     or an explicit release, and only then.
+ *   - Worker cache state is not polled. Bounded job-status checks recover a dropped event stream;
+ *     they query the in-memory job registry, never the worker's cache-pruning list command.
  *
  * No innerHTML with engine data, and no inline styles: the CSP serves this file with
  * script-src 'self' and style-src 'self', and the escape-first rule the report generator uses
@@ -38,6 +37,21 @@ let canAsk = false;       // whether /api/state says a configured client exists
 let agentReady = false;   // whether the model client import itself worked
 let notReadyHint = "";    // why sending is gated, in the words renderState already chose
 let logVisible = true;    // the execution drawer
+let backendInstance = null;
+let activeJobId = null;
+let currentJob = null;
+let jobSummaries = [];
+let jobsKnown = false;
+let backendBusy = false;
+let submissionPending = false;
+let jobNotice = "checking";
+let jobPhase = "checking";
+let reconnectTimer = null;
+let recoveryChecks = 0;
+let catalogRequest = 0;
+let backendContextEpoch = 0;
+const JOB_BOOKMARK_KEY = "gpu-workbench:last-job:v1";
+const JOB_TERMINAL = new Set(["succeeded", "failed", "partial"]);
 
 /* ---------------------------------------------------------------- text helpers */
 
@@ -66,6 +80,26 @@ function cell(row, value, numeric) {
 /* ------------------------------------------------------------------- chrome i18n */
 
 let I18N = {};
+// The frontend may connect to an older remote backend. Keep only the new labels here as
+// fallbacks so these safety explanations stay bilingual without deploying remote code.
+const LOCAL_I18N = {
+  "模型连接设置": "Model connection settings",
+  "模型服务地址": "Model service URL",
+  "模型服务访问密钥": "Model service access key",
+  "密钥不会回显到浏览器。更换模型服务地址会清除上一服务商的密钥与模型。": "Keys are never returned to the browser. Changing the model service URL clears the previous provider key and model.",
+  "本地部署：地址由当前计算后端访问。选择远端后，127.0.0.1 指远端机器，不是这台电脑。SSH 连接不是模型接口。": "Local deployment: the selected compute backend accesses this URL. When remote is selected, 127.0.0.1 means the remote machine, not this PC. An SSH connection is not a model API.",
+  "使用 OpenAI 兼容的 /v1 地址，例如 Ollama：http://127.0.0.1:11434/v1；vLLM：http://127.0.0.1:8000/v1。按实际部署修改主机与端口。": "Use an OpenAI-compatible /v1 URL, e.g. Ollama: http://127.0.0.1:11434/v1; vLLM: http://127.0.0.1:8000/v1. Adjust the host and port to match your deployment.",
+  "无鉴权的本地模型服务可填 local 作为密钥占位，无需云服务密钥；启用了鉴权则填写该模型服务的访问密钥。": "For a local model service without authentication, enter local as a placeholder; no cloud key is needed. If authentication is enabled, use that model service access key.",
+  "重置后将进入设置新访问密码页。退出登录不会清除配置，不需要重置。": "Reset opens the page for setting a new access password. Signing out keeps your configuration and does not require a reset.",
+  "重置只作用于当前本机后端；远端模式下须先在“计算连接”中选择“使用本机”。": "Reset applies only to this local backend. In remote mode, select Use local in Compute connection first.",
+  "当前使用远端后端，禁止在此重置。请先在“计算连接”中选择“使用本机”。": "Reset is blocked while using a remote backend. Select Use local in Compute connection first.",
+  "请再次确认重置。重置后将进入设置新访问密码页；只想退出登录请使用“退出”。": "Confirm reset again. You will be asked to set a new access password. To sign out only, use Sign out.",
+  "正在核对计算位置与重置权限…": "Checking compute location and reset authorization…",
+  "无法核对重置权限，未发送重置请求。请检查连接或重新登录后再试。": "Cannot verify reset authorization; no reset request was sent. Check the connection or sign in again before retrying.",
+  "正在重置，请勿重复提交…": "Resetting. Do not submit again…",
+  "重置未确认成功（HTTP {status}），未自动重试。请刷新检查；若仍需重置，请重新确认。": "Reset was not confirmed successful (HTTP {status}); it was not retried. Refresh to check, then confirm again only if a reset is still needed.",
+  "无法确认重置结果，未自动重试。请先刷新检查，不要立即重复重置。": "The reset outcome is unknown and was not retried. Refresh to check before attempting another reset.",
+};
 let LANG = "zh";
 // The title is the one piece of chrome that lives outside the DOM tree, so the sweep below can
 // never reach it. Capture the authored value once and re-localise from that, not from whatever
@@ -75,7 +109,7 @@ const ORIGINAL_TITLE = document.title;
 /* Labels only. Model prose and engine values never pass through this table -- translating a
    model's answer in the frontend would be fabricating a translation it did not produce. */
 function t(key) {
-  return (LANG === "en" && I18N[key]) ? I18N[key] : key;
+  return LANG === "en" ? (I18N[key] || LOCAL_I18N[key] || key) : key;
 }
 
 function applyChrome() {
@@ -87,6 +121,9 @@ function applyChrome() {
     // select used to be rewritten here and the control vanished with it, which silently broke
     // the tool form. Only leaf nodes are ever translated.
     if (node.children.length) return;
+    // This hint is a dynamic server response, not a label. Its initial empty text must never
+    // become a cached label that erases settings success/errors on the following state refresh.
+    if (node === $("set-msg") || node.dataset.dynamic !== undefined) return;
     if (node.closest && node.closest("#set-model")) return;
     if (node.dataset.label === undefined) node.dataset.label = node.textContent.trim();
     const translated = t(node.dataset.label);
@@ -98,6 +135,7 @@ function applyChrome() {
   $("prompt").placeholder = LANG === "en"
     ? "e.g. Compare total and average revenue by region" : "例如：按地区统计 revenue 的总和与均值";
   $("goal").placeholder = t("例如：找出 revenue 离群点的成因");
+  $("set-key").placeholder = t("留空沿用当前密钥；不记住时仅本次服务有效");
   $("drawer-toggle").textContent = logVisible ? t("收起") : t("展开");
   const modelPlaceholder = $("set-model").querySelector("option[value='']");
   if (modelPlaceholder) modelPlaceholder.textContent = t("请选择模型");
@@ -110,6 +148,8 @@ function applyChrome() {
   // them from the cached list rather than replaying the reply, which would double the off-plan
   // rows.
   renderPlanRows();
+  renderJobChrome();
+  renderResetControls();
 }
 
 /* The engine sends one of a closed set of state tokens. They go through the same table as every
@@ -223,7 +263,7 @@ function setChip(chip) {
    three-way conjunction (api_config.py:23), so `config_ready: false` alone cannot tell the operator
    whether to type a key or pick a model -- and the browser covered all three cases with one fixed
    sentence, in two nearly identical copies. Field names only, never values. */
-const FIELD_LABELS = { base_url: "API 地址", model: "模型", api_key: "API 密钥" };
+const FIELD_LABELS = { base_url: "模型服务地址", model: "模型", api_key: "模型服务访问密钥" };
 
 function missingFieldNames(state) {
   const fields = Array.isArray(state.missing_fields) ? state.missing_fields : [];
@@ -314,12 +354,14 @@ function renderSession(doc) {
   if (!doc) return;
   const wedged = Boolean(doc.error);
   const active = (doc.sessions_detail || [])[0] || null;
-  els.card.dataset.state = wedged ? "unknown" : (active ? "active" : "released");
+  const hasActive = Boolean(active) || doc.sessions > 0;
+  const warm = !hasActive && doc.sessions === 0 && doc.warm_frames > 0;
+  els.card.dataset.state = wedged ? "unknown" : (hasActive ? "active" : (warm ? "warm" : "released"));
   // Status text goes through the chrome table like every other label; the worker's own words
   // are quoted verbatim elsewhere and are never translated.
   els.state.textContent = wedged ? t("worker 未响应")
-    : (active ? t("active（会话打开中）")
-      : (doc.sessions ? t("active（会话打开中）") : t("cold / released")));
+    : (hasActive ? t("active（会话打开中）")
+      : (warm ? (LANG === "en" ? "warm (data cached)" : "warm（数据已缓存）") : t("cold / released")));
   els.count.textContent = doc.sessions === null ? "未知" : doc.sessions;
   els.steps.textContent = active ? active.steps : "—";
   els.mb.textContent = active
@@ -331,17 +373,44 @@ function renderSession(doc) {
   // covers the case where the worker did not answer at all.
   els.frames.textContent = doc.warm_frames === null ? "未知" : doc.warm_frames + " 帧";
   els.hint.textContent = wedged ? doc.error
-    : (doc.reused ? "上一次结果来自复用，未重新读盘。" : "保留帧只报数量与总字节：worker 的 list 不报每个帧是哪个文件。");
+    : (warm ? (LANG === "en"
+      ? "The session is closed, but its data remains in the warm cache. Reopen it to reuse the cached data."
+      : "会话已关闭，数据仍在热缓存中；继续分析可重新打开并复用。")
+      : (doc.reused ? "上一次结果来自复用，未重新读盘。" : "保留帧只报数量与总字节：worker 的 list 不报每个帧是哪个文件。"));
 }
 
 /* ------------------------------------------------------------------- results */
+
+const isRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+
+/* Direct analysis wraps operations in `result`; resident steps return them at the top level,
+   and resident auto wraps them in `auto`. Read only known operation blocks, never recursively
+   dump the reply: transport metadata, paths and credentials are not analysis table cells. */
+function analysisBlocks(result) {
+  if (!isRecord(result)) return {};
+  const inner = isRecord(result.result) ? result.result : {};
+  const sources = [result, result.auto, inner, inner.auto].filter(isRecord);
+  const blocks = {};
+  for (const source of sources) {
+    for (const key of ["profile", "summary", "groupby", "outliers", "corr"]) {
+      if (isRecord(source[key])) blocks[key] = source[key];
+    }
+  }
+  return blocks;
+}
+
+function resultFailed(result) {
+  if (!isRecord(result)) return true;
+  const inner = isRecord(result.result) ? result.result : {};
+  return [result, inner].some((item) => item.success === false || item.ok === false || Boolean(item.error));
+}
 
 /* KPI tiles are built from fields the engine actually emitted. A field that is not there produces
    no tile -- the strip gets shorter, it never fills a gap with a plausible zero. */
 function renderKpis(result) {
   const decision = result.execution_decision || {};
   const observed = decision.observed || {};
-  const inner = result.result || {};
+  const inner = analysisBlocks(result);
   const tiles = [];
   const add = (label, value, unit) => {
     if (value === null || value === undefined || value === "") return;
@@ -351,7 +420,8 @@ function renderKpis(result) {
   add("扫描行数", typeof result.rows_scanned === "number"
     ? result.rows_scanned.toLocaleString() : result.rows_scanned);
   add("引擎", result.engine || observed.actual_backend);
-  if (typeof result.seconds === "number") add("本次耗时", result.seconds.toFixed(2), "s");
+  const elapsed = result.seconds ?? result.step_seconds;
+  if (typeof elapsed === "number") add("本次耗时", elapsed.toFixed(3), "s");
   if (typeof observed.compute_seconds === "number"
       && observed.compute_seconds !== result.seconds) {
     add("纯计算", observed.compute_seconds.toFixed(3), "s");
@@ -359,10 +429,14 @@ function renderKpis(result) {
   if (inner.groupby && inner.groupby.groups !== undefined) {
     add("分组数", inner.groupby.groups);
   }
-  if (inner.outliers && inner.outliers.results) {
-    const total = Object.values(inner.outliers.results)
-      .reduce((sum, entry) => sum + (entry && entry.outlier_count || 0), 0);
-    if (total) add("离群点", total.toLocaleString());
+  if (inner.outliers && isRecord(inner.outliers.results)) {
+    const entries = Object.values(inner.outliers.results);
+    const counts = entries.filter(isRecord).map((entry) => entry.count ?? entry.outlier_count)
+      .filter((count) => typeof count === "number" && Number.isFinite(count) && count >= 0);
+    // Counts are per-column observations, not distinct rows: a row may appear in two columns.
+    if (counts.length && counts.length === entries.length) {
+      add("离群值（各列合计）", counts.reduce((sum, count) => sum + count, 0).toLocaleString());
+    }
   }
   if (result.steps_this_session !== undefined) add("步数", result.steps_this_session);
   if (typeof result.resident_mb === "number" && result.resident_mb > 0) {
@@ -473,34 +547,51 @@ function renderPlanRows() {
   }
 }
 
-function renderToolResult(payload) {
-  const result = payload.result || {};
-  const chip = payload.chip;
-  els.elapsed.textContent = (payload.seconds !== undefined ? payload.seconds.toFixed(2) : "?") + "s";
+function renderToolResult(payload, { historical = false } = {}) {
+  const result = isRecord(payload.result) ? payload.result : null;
+  let chip = payload.chip;
+  els.elapsed.textContent = (typeof payload.seconds === "number" ? payload.seconds.toFixed(3) : "?") + "s";
   // Direct runs carry their own args here; model-driven runs already printed the call in the
   // trace line, so re-printing it with an empty argument object would be a duplicate that
   // looks like the model called the tool with nothing.
   if (payload.args && Object.keys(payload.args).length) {
     line(els.log, "tool", `-> ${payload.name}(${JSON.stringify(payload.args)})`);
   }
-  if (result.success === false) {
+  if (resultFailed(result)) {
     // "no result yet" would claim the run is still pending when it actually failed. The engine
     // made no statement about hardware here, so the chip says the one true thing instead.
     els.chip.className = "chip bad";
     els.chip.textContent = "运行失败";
-    els.chip.title = String(result.error || "");
-    line(els.log, "bad", `   FAILED ${result.error || ""}`);
-    if (result.hint) line(els.log, "dim", `   hint: ${result.hint}`);
+    const failure = result || {};
+    const inner = isRecord(failure.result) ? failure.result : {};
+    els.chip.title = String(failure.error || inner.error || "");
+    line(els.log, "bad", `   FAILED ${failure.error || inner.error || "invalid tool result"}`);
+    if (failure.hint) line(els.log, "dim", `   hint: ${failure.hint}`);
+    // Old success tables must never look like the outcome of this failed request.
+    text(els.kpis);
+    text(els.tables);
+    text(els.answer);
+    els.answer.hidden = true;
+    renderArtifacts({});
+    if (els.placeholder) els.placeholder.hidden = true;
+    line(els.tables, "bad", LANG === "en" ? "The analysis failed; no current result is available."
+      : "本次分析失败，没有可展示的新结果。");
     return;
   }
   if (els.placeholder) els.placeholder.hidden = true;
+  if (result.closed !== undefined) {
+    chip = { class: "muted", label: LANG === "en" ? "Session closed" : "会话已关闭",
+      note: LANG === "en"
+        ? "This describes the latest tool operation, not a missing analysis result."
+        : "这里显示的是最近一次工具操作，并不表示分析结果缺失。" };
+  }
   setChip(chip);
-  const engine = result.engine || (result.execution_decision || {}).actual_backend;
+  const engine = result.engine || (result.execution_decision || {}).actual_backend || "—";
   line(els.log, "ok", `   OK engine=${engine} rows=${result.rows_scanned ?? "?"} ` +
-       `${result.seconds ?? payload.seconds ?? "?"}s`);
+       `${result.seconds ?? result.step_seconds ?? payload.seconds ?? "?"}s`);
   if (chip && chip.note) line(els.log, "reason", `   ${chip.label}: ${chip.note}`);
   renderKpis(result);
-  if (result.plan) renderPlan(result.plan);
+  if (result.plan && !historical) renderPlan(result.plan);
   renderArtifacts(result);
   renderTables(result);
 }
@@ -599,14 +690,14 @@ function renderChartTabs(charts) {
 }
 
 function renderArtifacts(result) {
-  const charts = Array.isArray(result.charts) ? result.charts : [];
+  const charts = Array.isArray(result.charts) ? result.charts.filter((path) => typeof path === "string") : [];
   const loose = renderChartTabs(charts);
   // Cleared before the early return, not after: a second result whose charts all found a tab used
   // to leave the first result's artifacts parked down here, so the same SVG showed twice.
   text(els.charts);
   if (!loose.length && !result.report) return;
   loose.forEach((path) => els.charts.appendChild(svgBox(path)));
-  if (result.report) {
+  if (typeof result.report === "string" && result.report) {
     const a = document.createElement("a");
     a.textContent = "打开报告 report.md";
     a.href = "/artifact?path=" + encodeURIComponent(result.report);
@@ -617,33 +708,86 @@ function renderArtifacts(result) {
 }
 
 function renderTables(result) {
-  const inner = result.result || {};
+  const inner = analysisBlocks(result);
   const blocks = [];
+  const fields = (value, keys) => Object.fromEntries(keys.map((key) => [key, value[key]]));
+  const entries = (value) => isRecord(value) ? Object.entries(value).filter(([, row]) => isRecord(row)) : [];
+  if (inner.profile) {
+    const profile = inner.profile;
+    const names = Array.isArray(profile.columns) ? profile.columns
+      : Object.keys(isRecord(profile.dtypes) ? profile.dtypes : {});
+    blocks.push(["profile", names.map((column) => ({ column,
+      dtype: (profile.dtypes || {})[column], nulls: (profile.null_counts || {})[column],
+    }))]);
+    if (Array.isArray(profile.preview)) blocks.push(["preview", profile.preview]);
+  }
   if (inner.groupby && Array.isArray(inner.groupby.top_k)) {
     blocks.push(["groupby by " + inner.groupby.by, inner.groupby.top_k]);
   }
-  if (inner.summary && inner.summary.stats) {
-    const rows = Object.entries(inner.summary.stats).map(([column, s]) => ({
-      column, mean: s.mean, median: s.median, min: s.min, max: s.max, nulls: s.nulls,
+  if (inner.summary) {
+    const rows = entries(inner.summary.stats).map(([column, s]) => ({
+      column, ...fields(s, ["count", "mean", "std", "min", "q1", "median", "q3", "max", "nulls"]),
     }));
     blocks.push(["summary", rows]);
   }
-  if (!blocks.length) return;
+  if (inner.outliers) {
+    blocks.push(["outliers", entries(inner.outliers.results).map(([column, s]) => ({
+      column, count: s.count ?? s.outlier_count,
+      ...fields(s, ["valid_count", "pct", "q1", "q3", "iqr", "lower_bound", "upper_bound", "fence_ties_excluded"]),
+    }))]);
+  }
+  if (inner.corr) {
+    if (Array.isArray(inner.corr.pairs)) blocks.push(["correlation pairs", inner.corr.pairs
+      .filter(isRecord).map((row) => fields(row, ["a", "b", "corr"]))]);
+    if (isRecord(inner.corr.matrix)) {
+      const matrixRows = entries(inner.corr.matrix);
+      const names = new Set(matrixRows.flatMap(([, values]) => Object.keys(values)));
+      let rowLabel = "column";
+      while (names.has(rowLabel)) rowLabel = "(" + rowLabel + ")";
+      blocks.push(["correlation matrix",
+        matrixRows.map(([column, values]) => ({ [rowLabel]: column, ...values }))]);
+    }
+  }
+  // Clear even when this response has no tables; otherwise a report/close/failed result can
+  // inherit numerical tables belonging to a different query or dataset.
   text(els.tables);
-  blocks.forEach(([title, rows]) => {
-    if (!rows.length) return;
+  blocks.forEach(([title, values]) => {
+    const rows = values.filter(isRecord);
     const h = document.createElement("div");
     h.className = "cap";
     h.textContent = title;
     els.tables.appendChild(h);
+    if (!rows.length) {
+      line(els.tables, "dim", LANG === "en" ? "No rows were returned for this operation."
+        : "本次操作没有返回数据行。");
+      return;
+    }
+    // The union keeps later optional fields aligned with their header, even when an earlier
+    // row omits them. Bound rendering, not computation; tell users if the view was truncated.
+    const keys = [...new Set(rows.flatMap((row) => Object.keys(row)))].slice(0, 40);
+    const visible = rows.slice(0, 100);
+    if (rows.length > visible.length || rows.some((row) => Object.keys(row).some((key) => !keys.includes(key)))) {
+      line(els.tables, "dim", LANG === "en"
+        ? `Display limited to ${visible.length} of ${rows.length} returned rows and ${keys.length} columns.`
+        : `仅展示返回结果 ${rows.length} 行中的 ${visible.length} 行，最多 ${keys.length} 列。`);
+    }
     const table = document.createElement("table");
     const head = table.createTHead().insertRow();
-    Object.keys(rows[0]).forEach((key) => cell(head, key, false));
-    rows.forEach((row) => {
+    keys.forEach((key) => {
+      const th = document.createElement("th");
+      th.scope = "col";
+      th.textContent = key;
+      head.appendChild(th);
+    });
+    visible.forEach((row) => {
       const tr = table.insertRow();
-      Object.entries(row).forEach(([key, value]) =>
+      keys.forEach((key) => {
+        const value = row[key];
+        // Never stringify arbitrary nested objects; they can contain transport-only details.
+        if (value !== null && typeof value === "object") return cell(tr, undefined, false);
         cell(tr, typeof value === "number" ? value.toLocaleString(undefined,
-              { maximumFractionDigits: 4 }) : value, typeof value === "number"));
+              { maximumSignificantDigits: 12 }) : value, typeof value === "number");
+      });
     });
     els.tables.appendChild(table);
   });
@@ -689,88 +833,455 @@ function buildArgs() {
 
 function trackSession(payload) {
   const result = payload.result || {};
+  if (resultFailed(result)) return;
   if (result.session_id) {
     session = result.session_id;
     // A fresh session with no goal has no plan. Leaving the previous one on screen would show
     // steps this session never had.
     if (!result.plan) clearPlanCard();
   }
-  if ((els.tool.value === "dataset_session" && els.sessionOp.value === "close")
+  if ((payload.name === "dataset_session" && payload.args && payload.args.operation === "close")
       || result.closed !== undefined) {
     session = null;
     clearPlanCard();
   }
 }
 
-function attach(jobId) {
+/* ----------------------------------------------------- recoverable job viewer */
+
+const jobText = (zh, en) => LANG === "en" ? en : zh;
+const JOB_LABELS = {
+  checking: ["正在检查任务状态…", "Checking task status…"],
+  ready: ["任务状态已确认，可以开始分析。", "Task state verified. Ready to analyze."],
+  running: ["任务运行中，正在接收执行记录。", "Task running; receiving events."],
+  submitting: ["正在提交；请勿重复发送。", "Submitting; please do not send again."],
+  submission_failed: ["本次提交未成功确认，输入已保留；没有自动重复发送。", "Submission was not confirmed. Your input is preserved; it was not resent."],
+  reconnecting: ["连接中断，正在重连；后台任务可能仍在运行，不会自动重跑。", "Connection lost. Reconnecting; the task may still be running. It will not be rerun."],
+  unavailable: ["暂时无法确认任务状态。请重新连接；不会自动重复执行。", "Task status is unavailable. Reconnect to verify it; no automatic rerun."],
+  busy: ["后端正忙，等待现有操作完成后刷新状态。", "Backend busy. Refresh after its current operation finishes."],
+  succeeded: ["任务成功完成。", "Task succeeded."],
+  failed: ["任务失败，请查看执行记录。", "Task failed. See the execution log."],
+  partial: ["任务部分完成或结果未完全确认，请查看执行记录。", "Task partially completed or its outcome is unconfirmed. See the execution log."],
+  expired: ["任务历史已失效或被清理，不能恢复旧结果。", "This task is no longer retained. Its old results cannot be restored."],
+  restarted: ["后端已重启或切换，没有恢复旧后端的任务。", "Backend restarted or changed. Tasks from the old backend were not restored."],
+};
+
+function jobLabel(status) {
+  const pair = JOB_LABELS[status] || JOB_LABELS.partial;
+  return jobText(pair[0], pair[1]);
+}
+
+function shortJobLabel(status) {
+  const labels = { running: ["运行中", "Running"], succeeded: ["成功", "Succeeded"],
+    failed: ["失败", "Failed"], partial: ["部分", "Partial"] };
+  const pair = labels[status] || ["未确认", "Unknown"];
+  return jobText(pair[0], pair[1]);
+}
+
+function readJobBookmark() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(JOB_BOOKMARK_KEY));
+    return saved && typeof saved.instance_id === "string" && typeof saved.job_id === "string"
+      ? { instance_id: saved.instance_id, job_id: saved.job_id } : null;
+  } catch (ignored) { return null; }
+}
+
+function rememberJob(job) {
+  // No question, file path, credential or event body is persisted in the browser.
+  try {
+    if (job) sessionStorage.setItem(JOB_BOOKMARK_KEY, JSON.stringify({ instance_id: job.instance, job_id: job.id }));
+    else sessionStorage.removeItem(JOB_BOOKMARK_KEY);
+  } catch (ignored) { /* storage-disabled browsers still work for the current page */ }
+}
+
+function cancelJobReconnect() {
+  if (reconnectTimer !== null) clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+}
+
+function closeJobStream() {
+  cancelJobReconnect();
   if (stream) stream.close();
-  stream = new EventSource("/api/events?job=" + encodeURIComponent(jobId));
-  // Handlers must act on the stream they were registered for, not on the global. A late event on
-  // an already-finished stream would otherwise close the *next* run's connection, or -- once the
-  // global had been nulled -- throw inside the handler and leave the buttons locked.
-  const me = stream;
-  stream.addEventListener("prompt", (e) => {
-    // Echo exactly what the model received, including the appended file line, so the context
-    // added on the operator's behalf is visible rather than implied.
-    const body = JSON.parse(e.data);
-    line(els.log, "dim", `   发给模型的原文：${body.text}`);
+  stream = null;
+}
+
+function syncJobControls() {
+  const blocked = submissionPending || !jobsKnown || backendBusy;
+  els.run.disabled = blocked;
+  els.ask.disabled = blocked; // When idle, an unconfigured model still opens its settings form.
+  els.files.querySelectorAll("button").forEach((button) => { button.disabled = blocked; });
+  const reset = $("reset-all");
+  if (reset) reset.dataset.taskBusy = String(submissionPending || backendBusy);
+  renderResetControls();
+  setBusy(submissionPending || backendBusy);
+}
+
+function renderJobChrome() {
+  const status = $("job-status");
+  if (status) {
+    let message = jobLabel(jobNotice);
+    if (currentJob && currentJob.truncated) message += jobText(
+      " 较早的执行记录已截断，当前仅显示保留下来的结果。",
+      " Earlier events were truncated; only retained results are shown.");
+    if (currentJob && currentJob.outcomeDetail) message += " " + currentJob.outcomeDetail;
+    status.textContent = message;
+  }
+  const reconnect = $("job-reconnect");
+  if (reconnect) {
+    reconnect.textContent = jobText("重新连接任务", "Reconnect task");
+    reconnect.hidden = !["unavailable", "reconnecting", "busy"].includes(jobNotice);
+  }
+  if (jobPhase) {
+    const labels = {
+      checking: ["检查中", "Checking"], ready: ["待命", "Ready"], running: ["执行中", "Running"],
+      submitting: ["提交中", "Submitting"], reconnecting: ["重连中", "Reconnecting"],
+      submission_failed: ["提交未确认", "Submission unconfirmed"],
+      unavailable: ["状态未知", "Status unknown"], busy: ["后端忙", "Backend busy"],
+      succeeded: ["成功", "Succeeded"], failed: ["失败", "Failed"], partial: ["部分完成", "Partial"],
+      expired: ["历史已失效", "History expired"], restarted: ["后端已更换", "Backend changed"],
+    };
+    const pair = labels[jobPhase] || labels.partial;
+    els.phase.textContent = jobText(pair[0], pair[1]);
+    els.phase.dataset.label = els.phase.textContent;
+  }
+  if ($("job-history-title")) $("job-history-title").textContent = jobText("任务历史", "Task history");
+  if ($("job-history-note")) $("job-history-note").textContent = jobText(
+    "仅保留当前后端进程内最近 20 项任务，重启后清空。历史回放不会重新执行分析。",
+    "The current backend retains at most 20 tasks in memory. Restart clears them. Viewing history never reruns analysis.");
+  if ($("refresh-jobs")) $("refresh-jobs").textContent = jobText("刷新历史", "Refresh history");
+  renderJobHistory();
+}
+
+function showJobNotice(notice) {
+  jobNotice = notice;
+  jobPhase = notice;
+  renderJobChrome();
+}
+
+function renderJobHistory() {
+  const list = $("job-list");
+  if (!list) return;
+  text(list);
+  for (const job of jobSummaries) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "file";
+    button.dataset.dynamic = "";
+    button.setAttribute("aria-pressed", String(Boolean(currentJob && currentJob.id === job.id)));
+    button.disabled = submissionPending || Boolean(activeJobId && activeJobId !== job.id);
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = String(job.label || job.kind || job.id);
+    const state = document.createElement("span");
+    state.className = "size";
+    state.textContent = shortJobLabel(job.status);
+    state.title = jobLabel(job.status);
+    button.appendChild(name);
+    button.appendChild(state);
+    const instance = backendInstance;
+    button.addEventListener("click", () => {
+      if (instance !== backendInstance || submissionPending || (activeJobId && activeJobId !== job.id)) return;
+      attach(job.id, instance, { summary: job });
+    });
+    list.appendChild(button);
+  }
+  if (!jobSummaries.length) line(list, "dim", jobText("暂无可恢复的任务记录。", "No retained tasks to restore."));
+}
+
+function resetJobView() {
+  text(els.log);
+  text(els.answer);
+  els.answer.hidden = true;
+  text(els.kpis);
+  text(els.tables);
+  renderArtifacts({});
+  // The plan belongs to the live compute session, not to whichever historical job is viewed.
+  setChip(null);
+  els.elapsed.textContent = "—";
+  if (els.placeholder) els.placeholder.hidden = false;
+}
+
+async function readJobCatalog() {
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), 8000) : null;
+  try {
+    const response = await fetch("/api/jobs", { cache: "no-store", ...(controller ? { signal: controller.signal } : {}) });
+    const data = await response.json();
+    if (!response.ok || !isRecord(data) || typeof data.instance_id !== "string" || !Array.isArray(data.jobs)) {
+      throw new Error(`Task status HTTP ${response.status}`);
+    }
+    return data;
+  } finally { if (timer !== null) clearTimeout(timer); }
+}
+
+function adoptJobCatalog(data) {
+  const changed = Boolean(backendInstance && backendInstance !== data.instance_id);
+  if (changed) {
+    closeJobStream();
+    currentJob = null;
+    session = null;
+    selected = null;
+    canAsk = false;
+    agentReady = false;
+    backendContextEpoch++;
+    text(els.files);
+    els.file.textContent = t("未选择数据文件");
+    els.model.textContent = "—";
+    clearPlanCard();
+    renderSession({ sessions: null, warm_frames: null, warm_cache_mb: null,
+      error: jobText("后端已更换，正在读取当前会话状态。", "Backend changed. Reading its current session state.") });
+    rememberJob(null);
+    resetJobView();
+    loadFiles().catch(() => {});
+    refreshState().catch(() => {});
+  }
+  backendInstance = data.instance_id;
+  jobSummaries = data.jobs.filter((job) => isRecord(job) && typeof job.id === "string");
+  activeJobId = typeof data.active_job_id === "string" ? data.active_job_id : null;
+  backendBusy = Boolean(data.busy || activeJobId);
+  jobsKnown = true;
+  syncJobControls();
+  renderJobHistory();
+  return changed;
+}
+
+function finishJob(status, job = currentJob) {
+  if (!job || currentJob !== job) return;
+  ++catalogRequest; // A previously requested running snapshot cannot roll this terminal state back.
+  job.status = JOB_TERMINAL.has(status) ? status : "partial";
+  job.done = true;
+  closeJobStream();
+  if (activeJobId === job.id) activeJobId = null;
+  backendBusy = Boolean(activeJobId);
+  jobsKnown = true;
+  jobSummaries = jobSummaries.map((item) => item.id === job.id ? { ...item, status: job.status, done: true } : item);
+  showJobNotice(job.status);
+  syncJobControls();
+}
+
+/* A fresh page always replays from zero: persisting the cursor but not the result DOM would
+   produce a blank screen. Live reconnections reuse only this page's in-memory sequence. */
+async function recoverJobs({ restoreSaved = true, manual = false } = {}) {
+  const request = ++catalogRequest;
+  const bookmark = restoreSaved ? readJobBookmark() : null;
+  if (manual) recoveryChecks = 0;
+  try {
+    const data = await readJobCatalog();
+    if (request !== catalogRequest) return false;
+    const changed = adoptJobCatalog(data);
+    let candidate = jobSummaries.find((job) => job.id === activeJobId);
+    if (!candidate && currentJob && currentJob.instance === backendInstance) {
+      candidate = jobSummaries.find((job) => job.id === currentJob.id);
+    }
+    if (!candidate && bookmark && bookmark.instance_id === backendInstance) {
+      candidate = jobSummaries.find((job) => job.id === bookmark.job_id);
+    }
+    if (candidate) {
+      const same = currentJob && currentJob.id === candidate.id && currentJob.instance === backendInstance;
+      if (same && candidate.done && currentJob.lastSequence >= Number(candidate.sequence || 0)) {
+        finishJob(candidate.status);
+      } else if (!same || manual || !stream || stream.readyState === 2 || jobNotice !== "running") {
+        attach(candidate.id, backendInstance, { summary: candidate, reset: !same });
+      }
+    } else {
+      const stale = currentJob || bookmark;
+      closeJobStream();
+      currentJob = null;
+      rememberJob(null);
+      if (stale) resetJobView();
+      showJobNotice(backendBusy ? "busy" : (changed || (bookmark && bookmark.instance_id !== backendInstance)
+        ? "restarted" : (stale ? "expired" : "ready")));
+      syncJobControls();
+    }
+    return true;
+  } catch (err) {
+    if (request !== catalogRequest) return false;
+    jobsKnown = false;
+    showJobNotice("unavailable");
+    syncJobControls();
+    return false;
+  }
+}
+
+function scheduleJobRecovery(job) {
+  if (reconnectTimer !== null || currentJob !== job) return;
+  if (recoveryChecks >= 3) {
+    closeJobStream();
+    showJobNotice("unavailable");
+    syncJobControls();
+    return;
+  }
+  reconnectTimer = setTimeout(async () => {
+    reconnectTimer = null;
+    if (currentJob !== job) return;
+    recoveryChecks++;
+    await recoverJobs({ restoreSaved: false });
+    if (currentJob === job && ["unavailable", "reconnecting"].includes(jobNotice)) scheduleJobRecovery(job);
+  }, 1000 * (2 ** recoveryChecks));
+}
+
+function attach(jobId, instance = backendInstance, { summary = null, reset = true } = {}) {
+  if (!jobId || !instance) { jobsKnown = false; showJobNotice("unavailable"); syncJobControls(); return; }
+  const previous = currentJob;
+  closeJobStream();
+  ++catalogRequest; // A status request started for an older viewer must not overwrite this one.
+  const same = !reset && previous && previous.id === jobId && previous.instance === instance;
+  const job = same ? previous : { id: jobId, instance, lastSequence: 0, truncated: false };
+  if (!same) {
+    resetJobView();
+    recoveryChecks = 0;
+  }
+  job.status = summary ? summary.status : "running";
+  job.done = Boolean(summary && summary.done);
+  job.historical = Boolean(summary && summary.done);
+  currentJob = job;
+  rememberJob(job);
+  if (!job.done) { activeJobId = job.id; backendBusy = true; }
+  showJobNotice(job.done ? job.status : "running");
+  syncJobControls();
+  const url = "/api/events?job=" + encodeURIComponent(jobId) + "&instance=" + encodeURIComponent(instance)
+    + "&after=" + job.lastSequence;
+  const me = new EventSource(url);
+  stream = me;
+  const valid = () => stream === me && currentJob === job;
+  const receive = (kind, handler) => me.addEventListener(kind, (event) => {
+    if (!valid()) return;
+    if (kind === "error" && !(typeof event.data === "string" && event.data.trim())) return;
+    const sequence = Number(event.lastEventId);
+    if (Number.isInteger(sequence) && sequence > 0 && sequence <= job.lastSequence) return;
+    let body;
+    try {
+      body = JSON.parse(event.data);
+      if (!isRecord(body)) throw new Error("invalid event payload");
+    }
+    catch (err) {
+      line(els.log, "bad", jobText("无法读取一条任务事件，结果可能不完整。", "A task event could not be read; results may be incomplete."));
+      job.truncated = true;
+      renderJobChrome();
+      return;
+    }
+    if (Number.isInteger(sequence) && sequence > 0) job.lastSequence = sequence;
+    recoveryChecks = 0;
+    handler(body, event);
   });
-  stream.addEventListener("phase", (e) => { setPhase(JSON.parse(e.data).phase); });
-  stream.addEventListener("trace", (e) => {
-    const body = JSON.parse(e.data);
-    line(els.log, body.line.includes("FAILED") ? "bad" : "dim", body.line);
+  me.addEventListener("open", () => {
+    if (!valid()) return;
+    cancelJobReconnect();
+    jobsKnown = true;
+    showJobNotice(job.done ? job.status : "running");
+    syncJobControls();
   });
-  stream.addEventListener("tool_call", (e) => {
-    const body = JSON.parse(e.data);
-    if (body.dropped_args && body.dropped_args.length) {
-      line(els.log, "bad", `   已忽略未知参数：${body.dropped_args.join(", ")}`);
+  receive("prompt", (body) => line(els.log, "dim", `   ${jobText("发给模型的原文", "Prompt sent to model")}: ${body.text}`));
+  receive("phase", (body) => { if (!job.done) { jobPhase = null; setPhase(body.phase); } });
+  receive("trace", (body) => line(els.log, String(body.line).includes("FAILED") ? "bad" : "dim", String(body.line || "")));
+  receive("tool_call", (body) => {
+    if (Array.isArray(body.dropped_args) && body.dropped_args.length) {
+      line(els.log, "bad", `   ${jobText("已忽略未知参数", "Unknown arguments ignored")}: ${body.dropped_args.join(", ")}`);
     }
   });
-  stream.addEventListener("tool_result", (e) => {
-    const body = JSON.parse(e.data);
-    trackSession(body);
-    renderToolResult(body);
+  receive("tool_result", (body) => {
+    if (!job.historical) trackSession(body);
+    renderToolResult(body, { historical: job.historical });
   });
-  stream.addEventListener("answer", (e) => {
-    const body = JSON.parse(e.data);
+  receive("answer", (body) => {
     if (els.placeholder) els.placeholder.hidden = true;
     els.answer.hidden = false;
     renderMarkdown(els.answer, body.text);
   });
-  stream.addEventListener("session", (e) => renderSession(JSON.parse(e.data)));
-  stream.addEventListener("error", (e) => {
-    // A transport failure carries no `data`, so the parse below only ever yields the server's own
-    // error event; collapsing the two into one line hid which half broke. Either way the run is
-    // over as far as this viewer can tell, and `done` may never arrive -- without the unlock and
-    // the close here, one dropped tunnel locked both submit buttons until a page reload, and the
-    // browser kept re-attaching to a job that had finished.
-    let reason = null;
-    try { reason = JSON.parse(e.data).message; } catch (ignored) {}
-    line(els.log, "bad", reason ? `!! ${reason}` : "!! 连接中断（服务端未给出原因）");
-    setPhase("连接中断");
-    me.close();
-    if (stream === me) stream = null;
-    setBusy(false);
-    els.run.disabled = false;
-    els.ask.disabled = false;   // the pending look carries the config state; busy no longer does
+  receive("session", (body) => { if (!job.historical) renderSession(body); });
+  // replay_gap is a control event, not a replayed task event; its id may equal the prior cursor.
+  me.addEventListener("replay_gap", (event) => {
+    if (!valid()) return;
+    job.truncated = true;
+    renderJobChrome();
+    line(els.log, "bad", jobText("较早执行记录已截断；未收到的结果不会被补造。", "Earlier events were truncated; missing results cannot be reconstructed."));
   });
-  stream.addEventListener("done", () => {
-    setPhase("完成");
-    setBusy(false);
-    els.run.disabled = false;
-    els.ask.disabled = false;
-    me.close();
-    if (stream === me) stream = null;
+  receive("error", (body) => {
+    // Server errors are task evidence, not a broken transport. Only done/catalog ends the task.
+    line(els.log, "bad", `!! ${body.message || body.error || jobText("任务发生错误", "Task error")}`);
+  });
+  me.addEventListener("error", (event) => {
+    if (!valid() || (typeof event.data === "string" && event.data.trim())) return;
+    jobsKnown = false;
+    showJobNotice("reconnecting");
+    syncJobControls();
+    // Keep EventSource open: it reconnects with Last-Event-ID. Status checks are bounded and
+    // never submit a new task. A later successful event is de-duplicated by its sequence.
+    scheduleJobRecovery(job);
+  });
+  receive("done", (body) => {
+    const status = body.status === "succeeded" && body.success === true && !body.error ? "succeeded"
+      : (body.status === "failed" ? "failed" : "partial");
+    const detail = [];
+    if (typeof body.error === "string" && body.error) detail.push(body.error);
+    if (Number.isInteger(body.tool_failures) && body.tool_failures > 0) detail.push(jobText(
+      `本次含 ${body.tool_failures} 次失败的工具调用；即使后续恢复，也不记为完全成功。`,
+      `This run included ${body.tool_failures} failed tool call(s); recovery does not make it a fully successful run.`));
+    if (typeof body.reason === "string" && body.reason) detail.push(jobText("原因：", "Reason: ") + body.reason);
+    job.outcomeDetail = detail.join(" ");
+    if (job.outcomeDetail) line(els.log, status === "succeeded" ? "dim" : "bad", job.outcomeDetail);
+    finishJob(status, job);
   });
 }
 
-async function post(path, body, method) {
-  const response = await fetch(path, {
-    method: method || "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body || {}),
-  });
-  return { status: response.status, data: await response.json().catch(() => ({})) };
+async function post(path, body, method, timeoutMs = 0) {
+  const controller = timeoutMs && typeof AbortController === "function" ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  try {
+    const response = await fetch(path, {
+      method: method || "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+      ...(controller ? { signal: controller.signal } : {}),
+    });
+    return { status: response.status, data: await response.json().catch(() => ({})) };
+  } finally { if (timer !== null) clearTimeout(timer); }
+}
+
+async function submitJob(path, body) {
+  if (submissionPending) return false;
+  if (!jobsKnown || backendBusy) {
+    await recoverJobs({ restoreSaved: false });
+    if (!jobsKnown || backendBusy) return false;
+  }
+  submissionPending = true;
+  showJobNotice("submitting");
+  syncJobControls();
+  try {
+    const { status, data } = await post(path, body, "POST", 15000);
+    if (status === 202 && isRecord(data) && typeof data.job_id === "string" && typeof data.instance_id === "string") {
+      if (backendInstance && backendInstance !== data.instance_id) {
+        adoptJobCatalog({ instance_id: data.instance_id, jobs: [], active_job_id: null, busy: false });
+      }
+      backendInstance = data.instance_id;
+      activeJobId = data.job_id;
+      backendBusy = true;
+      jobsKnown = true;
+      const summary = { id: data.job_id, kind: path === "/api/ask" ? "agent" : "tool",
+        label: body.text || body.tool, status: "running", done: false };
+      jobSummaries = [summary, ...jobSummaries.filter((job) => job.id !== summary.id)].slice(0, 20);
+      attach(data.job_id, data.instance_id, { summary });
+      return true;
+    }
+    line(els.log, "bad", `!! ${isRecord(data) && data.error ? data.error : `HTTP ${status}`}`);
+    // Rejected or uncertain submissions leave the question intact. A 409 reconnects to the
+    // existing task; it never retries the POST or silently queues the question a second time.
+    await recoverJobs({ restoreSaved: false });
+    if (jobsKnown && !backendBusy) showJobNotice("submission_failed");
+    return false;
+  } catch (err) {
+    jobsKnown = false;
+    line(els.log, "bad", jobText(
+      "提交结果未确认；正在查询后端现有任务，不会自动重复发送。问题仍保留在输入框。",
+      "Submission was not confirmed. Checking existing backend tasks without resending; your question is preserved."));
+    await recoverJobs({ restoreSaved: false });
+    if (jobsKnown && !backendBusy) showJobNotice("submission_failed");
+    return false;
+  } finally {
+    submissionPending = false;
+    syncJobControls();
+    renderJobHistory();
+  }
 }
 
 async function run() {
@@ -778,14 +1289,7 @@ async function run() {
     line(els.log, "bad", "!! 先在左侧选择一个数据文件");
     return;
   }
-  els.run.disabled = true;
-  setPhase("提交中");
-  const { status, data } = await post("/api/run", { tool: els.tool.value, args: buildArgs() });
-  if (status === 409) { els.run.disabled = false; return line(els.log, "bad", "!! 已有一次运行在进行中"); }
-  if (status >= 400) { els.run.disabled = false; return line(els.log, "bad", `!! ${data.error || status}`); }
-  line(els.log, "dim", `\n— ${data.note || "direct tool call"}: ${els.tool.value}`);
-  setBusy(true);
-  attach(data.job_id);
+  await submitJob("/api/run", { tool: els.tool.value, args: buildArgs() });
 }
 
 /* The model-driven path. The submit can arrive before a client is configured -- the input is
@@ -802,27 +1306,19 @@ async function ask() {
   }
   const question = els.prompt.value.trim();
   if (!question) return;
-  els.prompt.value = "";
-  els.ask.disabled = true;
-  setPhase("提交中");
   const body = { text: question };
   if (selected) body.file = selected;
-  const { status, data } = await post("/api/ask", body);
-  if (status === 409) { els.ask.disabled = false; return line(els.log, "bad", "!! 已有一次运行在进行中"); }
-  if (status >= 400) {
-    els.ask.disabled = false;
-    return line(els.log, "bad", `!! ${data.error || status}`);
-  }
-  line(els.log, "dim", `\n— 提问：${question}`);
-  setBusy(true);
-  attach(data.job_id);
+  const accepted = await submitJob("/api/ask", body);
+  if (accepted && els.prompt.value.trim() === question) els.prompt.value = "";
 }
 
 /* -------------------------------------------------------------------- startup */
 
 async function loadFiles() {
+  const epoch = backendContextEpoch;
   const response = await fetch("/api/files");
   const payload = await response.json().catch(() => ({ files: [] }));
+  if (epoch !== backendContextEpoch) return;
   text(els.files);
   (payload.files || []).forEach((entry) => {
     const button = document.createElement("button");
@@ -839,10 +1335,12 @@ async function loadFiles() {
     button.appendChild(name);
     button.appendChild(size);
     button.addEventListener("click", () => {
+      if (epoch !== backendContextEpoch || submissionPending || !jobsKnown || backendBusy) return;
       els.files.querySelectorAll(".file").forEach((x) => x.setAttribute("aria-pressed", "false"));
       button.setAttribute("aria-pressed", "true");
       selected = entry.path;
       session = null;
+      clearPlanCard();
       els.file.textContent = name.textContent;
     });
     els.files.appendChild(button);
@@ -862,6 +1360,7 @@ async function loadFiles() {
   if (!(payload.files || []).length) {
     line(els.files, "dim", payload.note || t("没有可分析的数据文件"));
   }
+  syncJobControls();
 }
 
 els.tool.addEventListener("change", () => {
@@ -869,6 +1368,8 @@ els.tool.addEventListener("change", () => {
 });
 $("runner").addEventListener("submit", (event) => { event.preventDefault(); run(); });
 $("asker").addEventListener("submit", (event) => { event.preventDefault(); ask(); });
+$("refresh-jobs").addEventListener("click", () => recoverJobs({ manual: true }));
+$("job-reconnect").addEventListener("click", () => recoverJobs({ manual: true }));
 
 $("drawer-toggle").addEventListener("click", () => {
   logVisible = !logVisible;
@@ -905,32 +1406,98 @@ $("logout").addEventListener("click", async () => {
    button into its armed state -- a second click inside that window is intent, anything
    else is not. On success the gate password and this session are already gone, so the
    redirect lands on first-run setup rather than on a stale screen. */
+let resetMessageKey = "";
+let resetMessageValues = {};
+function renderResetControls() {
+  const button = $("reset-all"), message = $("reset-msg");
+  if (button) {
+    // The connection dialog and the reset request own separate locks. Neither may release
+    // the other's lock while polling, switching language, or finishing a failed request.
+    button.disabled = button.dataset.remoteBlocked === "true" || button.dataset.resetBusy === "true"
+      || button.dataset.taskBusy === "true";
+    button.textContent = t(button.dataset.resetArmed === "true" ? "再点一次确认擦除" : "恢复初始状态");
+  }
+  if (message) {
+    let value = t(resetMessageKey);
+    for (const [key, replacement] of Object.entries(resetMessageValues)) value = value.replace(`{${key}}`, String(replacement));
+    message.textContent = value;
+  }
+}
+function resetFeedback(key, values = {}) {
+  resetMessageKey = key;
+  resetMessageValues = values;
+  renderResetControls();
+}
+async function resetRequest(path, options = {}) {
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timeout = controller ? setTimeout(() => controller.abort(), 15000) : null;
+  try {
+    const response = await fetch(path, { ...options, cache: "no-store", ...(controller ? { signal: controller.signal } : {}) });
+    return { status: response.status, data: await response.json().catch(() => null) };
+  } finally { if (timeout !== null) clearTimeout(timeout); }
+}
 (() => {
   const button = $("reset-all");
   let timer = null;
   button.addEventListener("click", async () => {
+    if (button.disabled || button.dataset.resetBusy === "true") return;
     if (timer === null) {
       button.classList.add("armed");
-      button.textContent = t("再点一次确认擦除");
+      button.dataset.resetArmed = "true";
+      resetFeedback("请再次确认重置。重置后将进入设置新访问密码页；只想退出登录请使用“退出”。");
       timer = setTimeout(() => {
         timer = null;
         button.classList.remove("armed");
-        button.textContent = t("恢复初始状态");
+        button.dataset.resetArmed = "false";
+        resetFeedback("");
       }, 4000);
       return;
     }
     clearTimeout(timer);
     timer = null;
-    button.disabled = true;
-    const { status, data } = await post("/api/reset", {});
-    if (status === 200 && data && data.ok) {
-      window.location.replace("/");
-      return;
-    }
-    button.disabled = false;
+    button.dataset.resetArmed = "false";
+    button.dataset.resetBusy = "true";
     button.classList.remove("armed");
-    button.textContent = t("恢复初始状态");
-    line(els.log, "bad", `!! ${(data && data.error) || `HTTP ${status}`}`);
+    let sent = false;
+    resetFeedback("正在核对计算位置与重置权限…");
+    try {
+      const probe = await resetRequest("/api/backend");
+      const headers = { "Content-Type": "application/json" };
+      // Only a confirmed 404 identifies a standalone backend. A failed/malformed gateway
+      // probe must never degrade into an unguarded destructive request.
+      if (probe.status !== 404) {
+        if (probe.status !== 200 || !probe.data || !["local", "remote"].includes(probe.data.mode)) {
+          resetFeedback("无法核对重置权限，未发送重置请求。请检查连接或重新登录后再试。");
+          return;
+        }
+        button.dataset.remoteBlocked = String(probe.data.mode === "remote");
+        if (probe.data.mode === "remote") {
+          resetFeedback("当前使用远端后端，禁止在此重置。请先在“计算连接”中选择“使用本机”。");
+          return;
+        }
+        if (typeof probe.data.csrf_token !== "string" || !probe.data.csrf_token.trim()) {
+          resetFeedback("无法核对重置权限，未发送重置请求。请检查连接或重新登录后再试。");
+          return;
+        }
+        headers["X-GWB-CSRF"] = probe.data.csrf_token;
+      }
+      resetFeedback("正在重置，请勿重复提交…");
+      sent = true;
+      // No automatic retry, even on CSRF rejection: this action destroys configuration.
+      const { status, data } = await resetRequest("/api/reset", { method: "POST", headers, body: "{}" });
+      if (status === 200 && data && data.ok === true) {
+        window.location.replace("/");
+        return;
+      }
+      resetFeedback("重置未确认成功（HTTP {status}），未自动重试。请刷新检查；若仍需重置，请重新确认。", { status });
+    } catch (error) {
+      resetFeedback(sent
+        ? "无法确认重置结果，未自动重试。请先刷新检查，不要立即重复重置。"
+        : "无法核对重置权限，未发送重置请求。请检查连接或重新登录后再试。");
+    } finally {
+      button.dataset.resetBusy = "false";
+      renderResetControls();
+    }
   });
 })();
 
@@ -973,6 +1540,15 @@ $("open-settings").addEventListener("click", async () => {
 $("cancel").addEventListener("click", () => veil.classList.remove("open"));
 addEventListener("keydown", (event) => { if (event.key === "Escape") veil.classList.remove("open"); });
 
+function settingsAppliedMessage(data) {
+  const names = missingFieldNames(data);
+  const status = data.config_ready ? t("设置已应用，提问框已可用。")
+    : t("设置已应用，但提问框还不可用，缺少：{fields}").replace("{fields}", names || t("未知项"));
+  // Runtime-only credentials are usable without being persisted. Preserve the server's warning
+  // about their lifetime while still reporting the actual readiness, not the checkbox state.
+  return status + (data.warning ? " " + data.warning : "");
+}
+
 $("settings").addEventListener("submit", async (event) => {
   event.preventDefault();
   const patch = {
@@ -989,11 +1565,7 @@ $("settings").addEventListener("submit", async (event) => {
     $("set-msg").textContent = t("未保存：") + (data.error || data.message || status);
     return;
   }
-  const names = missingFieldNames(data);
-  $("set-msg").textContent = data.warning
-    ? t("已保存。") + data.warning
-    : (data.config_ready ? t("已保存，提问框已可用。")
-       : t("已保存，但提问框还不可用，缺少：{fields}").replace("{fields}", names || t("未知项")));
+  $("set-msg").textContent = settingsAppliedMessage(data);
   $("set-key").value = "";
   await refreshState();
 });
@@ -1067,7 +1639,9 @@ $("set-model").addEventListener("change", () => {
 });
 
 async function refreshState() {
+  const epoch = backendContextEpoch;
   const state = await fetch("/api/state").then((r) => r.json()).catch(() => null);
+  if (epoch !== backendContextEpoch) return null;
   if (state) {
     renderState(state);
     $("set-url").value = state.base_url || "";
@@ -1080,22 +1654,48 @@ async function refreshState() {
   }
   return state;
 }
-els.release.addEventListener("click", async () => {
-  const { data } = await post("/api/session/release");
-  session = null;
-  if (data.error) {
-    line(els.log, "bad", `!! 释放失败：${data.error}`);
-  } else {
-    const freed = data.bytes_freed_mb ? `，约 ${data.bytes_freed_mb} MB` : "";
-    line(els.log, "ok", `释放：关闭 ${data.closed} 个会话，丢弃 ${data.warm_frames_dropped} 个保留帧${freed}；` +
-         `之后 ${data.sessions_after} 会话 / ${data.warm_frames_after} 帧`);
+function applyReleaseResponse(status, data) {
+  const doc = isRecord(data) ? data : {};
+  const counters = ["closed", "warm_frames_dropped", "sessions_after", "warm_frames_after"];
+  const verified = counters.every((key) => Number.isInteger(doc[key]) && doc[key] >= 0)
+    && doc.sessions_after === 0 && doc.warm_frames_after === 0;
+  if (status < 200 || status >= 300 || resultFailed(data)
+      || (isRecord(doc.detail) && resultFailed(doc.detail))
+      || (isRecord(doc.state) && Boolean(doc.state.error)) || !verified) {
+    const reason = doc.error || (doc.detail || {}).error || (doc.state || {}).error
+      || (status < 200 || status >= 300 ? `HTTP ${status}` : "未确认全部会话与缓存已释放");
+    line(els.log, "bad", `!! 释放失败：${reason}`);
+    return false;
   }
-  if (data.state) renderSession({ ...data.state, reused: false });
+  // Only an acknowledged release may discard the id. A busy 409 or a failed worker call leaves
+  // the resident frame alive; clearing its id here would strand it and break the next analysis.
+  session = null;
+  clearPlanCard();
+  const freed = doc.bytes_freed_mb ? `，约 ${doc.bytes_freed_mb} MB` : "";
+  line(els.log, "ok", `释放：关闭 ${doc.closed} 个会话，丢弃 ${doc.warm_frames_dropped} 个保留帧${freed}；` +
+       `之后 ${doc.sessions_after} 会话 / ${doc.warm_frames_after} 帧`);
+  if (isRecord(doc.state)) renderSession({ ...doc.state, reused: false });
+  return true;
+}
+
+els.release.addEventListener("click", async () => {
+  els.release.disabled = true;
+  try {
+    const { status, data } = await post("/api/session/release");
+    applyReleaseResponse(status, data);
+  } catch (err) {
+    line(els.log, "bad", `!! 释放失败：${err.message || err}`);
+  } finally {
+    els.release.disabled = false;
+  }
 });
 
 followGlow();
-loadFiles();
-fetch("/api/state").then((r) => r.json()).then(renderState)
+syncJobControls();
+renderJobChrome();
+recoverJobs();
+loadFiles().catch(() => {});
+refreshState()
   .then(() => setTimeout(layoutSelfTest, 900))
   .catch(() => {});
 

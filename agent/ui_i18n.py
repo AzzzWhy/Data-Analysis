@@ -107,6 +107,12 @@ STRINGS = {
     '本机不可观测（需 cuDF）': 'Not observable here (needs cuDF)',
     '暂无产物': 'No artifacts yet', '暂无结果表': 'No result tables yet',
     '留空表示不修改': 'Leave empty to keep unchanged',
+    '离群值（各列合计）': 'Outlier values (sum across columns)',
+    '留空沿用当前密钥；不记住时仅本次服务有效': 'Leave blank to retain the current key; without Remember it lasts until the service restarts',
+    '设置已应用，提问框已可用。': 'Settings applied. You can now ask a question.',
+    '设置已应用，但提问框还不可用，缺少：{fields}': 'Settings applied, but questions are still unavailable. Missing: {fields}',
+    '将密钥保存到当前后端的明文配置文件': 'Save the key in a plaintext config on the selected backend',
+    '不勾选时仅在当前后端进程内存中使用，重启后需重新输入。本地无鉴权模型的密钥可填 local。': 'Unchecked: use the key only in backend process memory; enter it again after a restart. For a local model without authentication, enter local.',
 
     # The chart viewer and the key row. Tab labels are matched against the artifact names the report
     # generator actually writes (groupby_bar / groupby_line / corr_heatmap / outliers_bar), so a kind
@@ -156,6 +162,22 @@ STRINGS = {
     '数据初始化': 'Data reset',
     '恢复初始状态': 'Restore initial state',
     '再点一次确认擦除': 'Click again to confirm the wipe',
+    '模型连接设置': 'Model connection settings',
+    '模型服务地址': 'Model service URL',
+    '模型服务访问密钥': 'Model service access key',
+    '密钥不会回显到浏览器。更换模型服务地址会清除上一服务商的密钥与模型。': 'Keys are never returned to the browser. Changing the model service URL clears the previous provider key and model.',
+    '本地部署：地址由当前计算后端访问。选择远端后，127.0.0.1 指远端机器，不是这台电脑。SSH 连接不是模型接口。': 'Local deployment: the selected compute backend accesses this URL. When remote is selected, 127.0.0.1 means the remote machine, not this PC. An SSH connection is not a model API.',
+    '使用 OpenAI 兼容的 /v1 地址，例如 Ollama：http://127.0.0.1:11434/v1；vLLM：http://127.0.0.1:8000/v1。按实际部署修改主机与端口。': 'Use an OpenAI-compatible /v1 URL, e.g. Ollama: http://127.0.0.1:11434/v1; vLLM: http://127.0.0.1:8000/v1. Adjust the host and port to match your deployment.',
+    '无鉴权的本地模型服务可填 local 作为密钥占位，无需云服务密钥；启用了鉴权则填写该模型服务的访问密钥。': 'For a local model service without authentication, enter local as a placeholder; no cloud key is needed. If authentication is enabled, use that model service access key.',
+    '重置后将进入设置新访问密码页。退出登录不会清除配置，不需要重置。': 'Reset opens the page for setting a new access password. Signing out keeps your configuration and does not require a reset.',
+    '重置只作用于当前本机后端；远端模式下须先在“计算连接”中选择“使用本机”。': 'Reset applies only to this local backend. In remote mode, select Use local in Compute connection first.',
+    '当前使用远端后端，禁止在此重置。请先在“计算连接”中选择“使用本机”。': 'Reset is blocked while using a remote backend. Select Use local in Compute connection first.',
+    '请再次确认重置。重置后将进入设置新访问密码页；只想退出登录请使用“退出”。': 'Confirm reset again. You will be asked to set a new access password. To sign out only, use Sign out.',
+    '正在核对计算位置与重置权限…': 'Checking compute location and reset authorization…',
+    '无法核对重置权限，未发送重置请求。请检查连接或重新登录后再试。': 'Cannot verify reset authorization; no reset request was sent. Check the connection or sign in again before retrying.',
+    '正在重置，请勿重复提交…': 'Resetting. Do not submit again…',
+    '重置未确认成功（HTTP {status}），未自动重试。请刷新检查；若仍需重置，请重新确认。': 'Reset was not confirmed successful (HTTP {status}); it was not retried. Refresh to check, then confirm again only if a reset is still needed.',
+    '无法确认重置结果，未自动重试。请先刷新检查，不要立即重复重置。': 'The reset outcome is unknown and was not retried. Refresh to check before attempting another reset.',
     '浏览器扩展改写了页面根样式（transform/filter），底部输入栏将不固定：请用无痕窗口（Ctrl+Shift+N）打开本页验证。':
         'A browser extension rewrote this page\'s root styling (transform/filter), so the '
         'bottom composer will not stay pinned. Verify in an incognito window (Ctrl+Shift+N).',

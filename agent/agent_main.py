@@ -42,6 +42,7 @@ from api_config import create_client, load_config, save_config
 import skills
 from skills import load_skill_definitions, skill_func_map
 from external_tools import ExternalTools, DEFINITIONS as EXTERNAL_DEFINITIONS
+from execution_outcome import tool_result_failed
 
 MODEL_NAME = os.environ.get('GPU_API_MODEL') or os.environ.get('OPENAI_MODEL') or os.environ.get('STEPFUN_MODEL', 'step-3.7-flash')
 BASE_URL = os.environ.get('GPU_API_BASE_URL') or os.environ.get('OPENAI_BASE_URL') or os.environ.get('STEPFUN_BASE_URL', 'https://api.stepfun.com/step_plan/v1')
@@ -482,6 +483,7 @@ class Agent:
         # record as data. It is never allowed to break an analysis -- see the guard in _run_inner.
         self.result_sink = result_sink
         self.reuse_one_shot = reuse_one_shot
+        self.last_run_outcome = {"status": "failed", "reason": "not_started", "tool_failures": 0}
         self.messages: list[dict] = [{"role": "system", "content": _system_prompt()}]
         # Control condition for the comparison experiment: the same model, same prompt, no skills.
         # Nothing else changes, so any difference in the answer is attributable to the tools rather
@@ -548,19 +550,49 @@ class Agent:
                 print(line, flush=True)
 
     def run(self, user_query: str) -> str:
-        """Answer one question. Active sessions close; bounded frames may stay warm."""
+        """Return CLI-compatible text and publish this turn's structured outcome."""
+        self.last_run_outcome = {"status": "failed", "reason": "incomplete", "tool_failures": 0}
         if self.client is None or not self.model:
-            return '[model call failed] 尚未配置 API 地址、密钥与模型。请输入 /settings 打开连接设置。'
+            error = '尚未配置 API 地址、密钥与模型。请输入 /settings 打开连接设置。'
+            self._outcome("failed", reason="not_configured", error=error)
+            return f'[model call failed] {error}'
         try:
             return self._run_inner(user_query)
+        except BaseException as exc:
+            # Preserve the exception contract for callers, but never leave a
+            # previous successful turn's state attached to a failed new run.
+            self._outcome("failed", reason="unhandled_exception", error=self.safe_error(exc))
+            raise
         finally:
             # Structural guarantee rather than a prompt request. The model is asked to call
             # close, and usually does, but a leaked active session is unsafe. The worker can
             # retain a bounded, expiring GPU frame for the next question.
-            released = skills.close_all_sessions()
-            if released.get("closed"):
-                self.log(f"  [session] auto-closed {released['closed']} session(s) left open"
-                         f" (the model did not call close)")
+            try:
+                released = skills.close_all_sessions()
+                if not isinstance(released, dict) or tool_result_failed(released):
+                    detail = released.get("error") if isinstance(released, dict) else None
+                    raise RuntimeError(str(detail or "session cleanup was not confirmed"))
+                if released.get("closed"):
+                    self.log(f"  [session] auto-closed {released['closed']} session(s) left open"
+                             f" (the model did not call close)")
+            except Exception as exc:
+                # Cleanup must neither overwrite a primary exception nor turn
+                # an otherwise useful answer into an unobservable resource leak.
+                error = self.safe_error(exc)
+                previous = self.last_run_outcome
+                primary_error = previous.get("error")
+                self._outcome("failed" if previous["status"] == "failed" else "partial",
+                              reason=previous.get("reason") or "cleanup_failed",
+                              error=(f"{primary_error}; cleanup: {error}" if primary_error else error))
+                self.log(f"  [session error] {error}")
+
+    def _outcome(self, status: str, *, reason: str | None = None, error: str | None = None):
+        outcome = {"status": status, "tool_failures": self.last_run_outcome.get("tool_failures", 0)}
+        if reason:
+            outcome["reason"] = reason
+        if error:
+            outcome["error"] = error
+        self.last_run_outcome = outcome
 
     def _run_inner(self, user_query: str) -> str:
         self.messages.append({"role": "user", "content": user_query})
@@ -582,6 +614,7 @@ class Agent:
             except Exception as exc:
                 # A model/transport failure must not kill the session or lose the history.
                 error = self.safe_error(exc)
+                self._outcome("failed", reason="model_api_error", error=error)
                 self.log(f"  [api error] {error}")
                 if "tool" in str(exc).lower():
                     self.log("  [hint] this model may not support function calling. "
@@ -590,6 +623,7 @@ class Agent:
                 return f"[model call failed] {error}"
 
             if not response.choices:
+                self._outcome("failed", reason="model_empty_response", error="Model returned no choices")
                 return "[model call failed] empty response"
             message = response.choices[0].message
             tool_calls = getattr(message, "tool_calls", None)
@@ -597,7 +631,14 @@ class Agent:
             # ---- no tool call: this is the final answer ----
             if not tool_calls:
                 content = message.content or ""
+                if not isinstance(content, str) or not content.strip():
+                    self._outcome("failed", reason="model_empty_answer", error="Model returned no final answer")
+                    return "[model call failed] empty final answer"
                 self.messages.append({"role": "assistant", "content": content})
+                failures = self.last_run_outcome["tool_failures"]
+                self._outcome("partial" if failures else "succeeded",
+                              reason="tool_failure" if failures else None,
+                              error=f"{failures} tool call(s) reported failure" if failures else None)
                 return content
 
             # ---- tool call(s): echo the assistant turn, then execute each one ----
@@ -625,8 +666,10 @@ class Agent:
                 # otherwise have parsed the same payload a second time.
                 try:
                     parsed = json.loads(result)
-                except json.JSONDecodeError:
+                except (json.JSONDecodeError, TypeError):
                     parsed = None
+                if not isinstance(parsed, dict) or tool_result_failed(parsed):
+                    self.last_run_outcome["tool_failures"] += 1
                 if self.result_sink is not None and isinstance(parsed, dict):
                     try:
                         self.result_sink(name, parsed, seconds)
@@ -642,13 +685,24 @@ class Agent:
 
         # Loop budget exhausted: report what happened instead of spinning forever.
         self.log(f"  [warn] hit the tool-round limit ({MAX_TOOL_ROUNDS})")
+        self._outcome("partial", reason="tool_round_limit",
+                      error=f"Tool round limit ({MAX_TOOL_ROUNDS}) reached")
         try:
             final = self.client.chat.completions.create(
                 model=self.model, messages=self.messages)
+            if not final.choices:
+                self._outcome("failed", reason="model_summary_empty_response",
+                              error="Model returned no summary choices after the tool round limit")
+                return f"[tool round limit {MAX_TOOL_ROUNDS} reached, no summary could be generated] empty response"
             content = final.choices[0].message.content or ""
+            if not isinstance(content, str) or not content.strip():
+                self._outcome("failed", reason="model_summary_empty_answer",
+                              error="Model returned no summary after the tool round limit")
+                return f"[tool round limit {MAX_TOOL_ROUNDS} reached, no summary could be generated] empty answer"
             self.messages.append({"role": "assistant", "content": content})
             return content
         except Exception as exc:
+            self._outcome("failed", reason="model_summary_error", error=self.safe_error(exc))
             return (f"[tool round limit {MAX_TOOL_ROUNDS} reached, no summary could be generated] "
                     f"{self.safe_error(exc)}")
 

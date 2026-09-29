@@ -85,7 +85,7 @@ button { cursor: pointer; }
 }
 .figure b {
   display: block;
-  font: 560 clamp(22px, 2.5vw, 40px)/1 var(--mono);
+  font: 560 clamp(18px, 1.8vw, 28px)/1.2 var(--mono);
   font-variant-numeric: tabular-nums;
   letter-spacing: -.02em;
 }
@@ -184,6 +184,10 @@ button.lang:hover { color: var(--paper); border-color: rgba(186, 198, 230, .32);
   font: 600 16px/1.15 var(--mono);
   font-variant-numeric: tabular-nums;
 }
+.metrics-note {
+  margin: 10px 32px 0;
+  color: var(--slate-1); font-size: 11px; line-height: 1.45;
+}
 
 .gate-body { display: flex; flex-direction: column; padding: 18px 32px 8px; }
 .gate-body[hidden] { display: none; }
@@ -280,6 +284,7 @@ button.primary[data-ok="1"] {
   border: 2px solid rgba(255, 255, 255, .16); border-top-color: var(--violet);
   animation: spin .8s linear infinite;
 }
+.waiting-note[hidden], #gate-retry[hidden] { display: none; }
 
 .gate-foot {
   padding: 8px 32px 22px;
@@ -300,6 +305,7 @@ button.primary[data-ok="1"] {
   .gate { padding: 64px 16px 40px; }
   .gate-head, .gate-body, .gate-foot, .live { padding-left: 22px; padding-right: 22px; }
   .live { margin-left: 22px; margin-right: 22px; }
+  .metrics-note { margin-left: 22px; margin-right: 22px; }
   h1 { font-size: 23px; }
   button.lang { top: 14px; right: 14px; }
 }

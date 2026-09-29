@@ -11,7 +11,7 @@ const STRINGS = {
   zh: {
     pageTitle: "登录 · Data Workbench",
     title: "欢迎回来",
-    sub: "输入访问密码，进入数据分析工作台。",
+    sub: "输入当前所连后端的访问密码，进入数据分析工作台。",
     label: "密码",
     placeholder: "输入访问密码",
     label2: "再输入一次",
@@ -19,7 +19,7 @@ const STRINGS = {
     submit: "登录",
     submitSetup: "设置密码并进入",
     setupTitle: "设置访问密码",
-    setupSub: "第一次打开请设置访问密码。设置之后，再次打开才需要输入它。",
+    setupSub: "当前所连后端尚未设置访问密码，请先完成设置。此密码不是 SSH 密码。",
     setupLabel: "访问密码",
     setupPlaceholder: "至少 8 位",
     checking: "验证中…",
@@ -32,18 +32,29 @@ const STRINGS = {
     ok: "已解锁，正在进入…",
     saved: "已保存，正在进入…",
     foot: "密码只在请求体中传输 · 会话保留 7 天 · 服务重启后失效",
-    footSetup: "密码只保存在这台电脑上，不会上传。之后每次打开都要再输入一次。",
+    footSetup: "密码提交至当前所连后端，仅保存加盐哈希；本机与远程后端的访问密码相互独立。",
     waitTitle: "等待初始设置",
     waitSub: "这份服务还没有设置访问密码。请在运行它的那台机器上打开本页面，完成首次设置后，这里即可登录。",
     waitNote: "正在等待管理员设置密码…",
+    unavailableTitle: "暂时无法确认连接",
+    unavailableSub: "无法获取当前后端的登录状态。请检查计算连接或重试，不会将连接故障视为首次设置。",
+    retry: "重试连接",
+    productSub: "GPU 加速与数据分析",
     liveRows: "行数",
-    liveRate: "加速",
+    liveRate: "加速比",
     liveTime: "耗时",
+    metricsNote: "此页不执行分析；真实指标在任务完成后于工作台展示。",
+    figureData: "数据格式",
+    figureCompute: "计算能力",
+    figureReport: "分析输出",
+    figureDataValue: "CSV · Parquet",
+    figureComputeValue: "CPU + GPU",
+    figureReportValue: "图表 · 报告",
   },
   en: {
     pageTitle: "Sign in · Data Workbench",
     title: "Welcome back",
-    sub: "Enter the access password to open the workbench.",
+    sub: "Enter the connected backend's access password to open the workbench.",
     label: "Password",
     placeholder: "Enter the password",
     label2: "Type it once more",
@@ -51,7 +62,7 @@ const STRINGS = {
     submit: "Sign in",
     submitSetup: "Set password and enter",
     setupTitle: "Set an access password",
-    setupSub: "First open: choose an access password. The next open is the one that asks for it.",
+    setupSub: "The connected backend has no access password yet. Set one to continue. This is not the SSH password.",
     setupLabel: "Access password",
     setupPlaceholder: "At least 8 characters",
     checking: "Checking…",
@@ -64,13 +75,24 @@ const STRINGS = {
     ok: "Unlocked, entering…",
     saved: "Saved, entering…",
     foot: "Sent in the request body only · the session lasts 7 days · a restart clears it",
-    footSetup: "The password stays on this computer and is never uploaded. Every later visit asks for it again.",
+    footSetup: "Sent to the connected backend and stored as a salted hash. Local and remote backends have separate access passwords.",
     waitTitle: "Waiting for first-run setup",
     waitSub: "This server has no access password yet. Open this page on the machine running it, finish the first-run setup, and signing in works here.",
     waitNote: "Waiting for the operator to set the password…",
+    unavailableTitle: "Connection not confirmed",
+    unavailableSub: "Cannot read the backend's sign-in state. Check the compute connection or retry. A connection failure does not mean first-run setup.",
+    retry: "Retry connection",
+    productSub: "GPU acceleration & data analysis",
     liveRows: "Rows",
-    liveRate: "Speed",
+    liveRate: "Speedup",
     liveTime: "Elapsed",
+    metricsNote: "No analysis runs on this page. Actual metrics appear in the workbench after a task finishes.",
+    figureData: "Data formats",
+    figureCompute: "Compute support",
+    figureReport: "Analysis output",
+    figureDataValue: "CSV · Parquet",
+    figureComputeValue: "CPU + GPU",
+    figureReportValue: "Charts · Reports",
   },
 };
 
@@ -85,13 +107,15 @@ const confirmField = document.getElementById("confirm-field");
 const msg = document.getElementById("gate-msg");
 const submit = document.getElementById("gate-submit");
 const langButton = document.getElementById("lang");
+const retryButton = document.getElementById("gate-retry");
 
-let mode = "setup";        // signin | setup | waiting | open
+let mode = "loading";      // signin | setup | waiting | unavailable | open
 let busy = false;
 
 function applyStrings() {
   const s = STRINGS[lang];
   const settingUp = mode === "setup";
+  const unavailable = mode === "unavailable";
   document.title = settingUp ? s.setupTitle : s.pageTitle;
   document.documentElement.lang = lang;
   document.getElementById("t-title").textContent = settingUp ? s.setupTitle : s.title;
@@ -99,9 +123,12 @@ function applyStrings() {
   document.getElementById("t-label").textContent = settingUp ? s.setupLabel : s.label;
   document.getElementById("t-label2").textContent = s.label2;
   document.getElementById("t-foot").textContent = settingUp ? s.footSetup : s.foot;
-  document.getElementById("t-wait-title").textContent = s.waitTitle;
-  document.getElementById("t-wait-sub").textContent = s.waitSub;
+  document.getElementById("t-wait-title").textContent = unavailable ? s.unavailableTitle : s.waitTitle;
+  document.getElementById("t-wait-sub").textContent = unavailable ? s.unavailableSub : s.waitSub;
   document.getElementById("t-wait-note").textContent = s.waitNote;
+  document.getElementById("product-sub").textContent = s.productSub;
+  document.getElementById("metrics-note").textContent = s.metricsNote;
+  retryButton.textContent = s.retry;
   input.placeholder = settingUp ? s.setupPlaceholder : s.placeholder;
   confirmInput.placeholder = s.placeholder2;
   if (!busy) submit.textContent = settingUp ? s.submitSetup : s.submit;
@@ -111,7 +138,11 @@ function applyStrings() {
     if (node) node.textContent = s[key];
   });
   document.querySelectorAll("[data-fig]").forEach((node) => {
-    const key = ["liveRows", "liveRate", "liveTime"][Number(node.dataset.fig)] || "liveRows";
+    const key = ["figureData", "figureCompute", "figureReport"][Number(node.dataset.fig)];
+    node.textContent = s[key];
+  });
+  document.querySelectorAll("[data-figure-value]").forEach((node) => {
+    const key = ["figureDataValue", "figureComputeValue", "figureReportValue"][Number(node.dataset.figureValue)];
     node.textContent = s[key];
   });
 }
@@ -119,7 +150,7 @@ function applyStrings() {
 langButton.addEventListener("click", () => {
   lang = lang === "zh" ? "en" : "zh";
   applyStrings();
-  if (mode !== "waiting") input.focus();
+  if (mode === "signin" || mode === "setup") input.focus();
 });
 
 function showError(text, armed) {
@@ -144,9 +175,11 @@ function nudge() {
 
 function setMode(next) {
   mode = next;
-  if (next === "waiting") {
+  if (next === "waiting" || next === "unavailable") {
     form.hidden = true;
     waiting.hidden = false;
+    retryButton.hidden = next !== "unavailable";
+    document.getElementById("waiting-note").hidden = next === "unavailable";
     applyStrings();
     return;
   }
@@ -162,11 +195,13 @@ function setMode(next) {
 }
 
 async function boot() {
+  retryButton.disabled = true;
   let gate = null;
   try {
     const response = await fetch("/api/gate");
     gate = response.ok ? await response.json() : null;
-  } catch (err) { /* the page itself loaded; show first-run setup and let a later submit fail honestly */ }
+  } catch (err) { /* A failed request does not tell us whether a password exists. */ }
+  retryButton.disabled = false;
   if (gate && gate.mode === "open") {
     window.location.replace("/");
     return;
@@ -175,11 +210,15 @@ async function boot() {
     setMode("waiting");
     return;
   }
-  // No answer yet still means first open: ask them to choose a password.
-  // A stored password is the only thing that turns the next open into sign-in.
-  setMode(gate && gate.mode === "signin" ? "signin" : "setup");
+  if (!gate || !["signin", "setup"].includes(gate.mode)) {
+    setMode("unavailable");
+    return;
+  }
+  setMode(gate.mode);
   input.focus();
 }
+
+retryButton.addEventListener("click", boot);
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -252,55 +291,6 @@ panel.addEventListener("animationend", (event) => {
 applyStrings();
 boot();
 startAtmosphere();
-startMeters();
-
-function startMeters() {
-  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-  function format(kind, value) {
-    const locale = lang === "zh" ? "zh-CN" : "en-US";
-    if (kind === "rows") return Math.round(value).toLocaleString(locale);
-    if (kind === "rate") return value.toFixed(2) + "×";
-    return value.toFixed(2) + "s";
-  }
-
-  function clamp(kind, value) {
-    if (kind === "rows") return Math.max(180000, value);
-    if (kind === "rate") return Math.min(8, Math.max(1.05, value));
-    return Math.min(9.5, Math.max(0.35, value));
-  }
-
-  function step(kind, value) {
-    const dir = Math.random() < 0.5 ? -1 : 1;
-    if (kind === "rows") return value + dir * (800 + Math.floor(Math.random() * 6400));
-    if (kind === "rate") return value + dir * (0.05 + Math.random() * 0.22);
-    return value + dir * (0.04 + Math.random() * 0.28);
-  }
-
-  const items = [
-    { el: document.getElementById("live-n0"), kind: "rows", value: 12840221 },
-    { el: document.getElementById("live-n1"), kind: "rate", value: 3.88 },
-    { el: document.getElementById("live-n2"), kind: "time", value: 2.63 },
-  ];
-  document.querySelectorAll("[data-meter]").forEach((el) => {
-    const kind = el.dataset.meter;
-    const value = kind === "rows" ? 2500000 + Math.random() * 14000000
-      : kind === "rate" ? 1.3 + Math.random() * 4.2
-      : 0.7 + Math.random() * 3.6;
-    items.push({ el, kind, value });
-  });
-
-  items.forEach((item) => {
-    item.el.textContent = format(item.kind, item.value);
-    if (reduce) return;
-    const again = () => {
-      item.value = clamp(item.kind, step(item.kind, item.value));
-      item.el.textContent = format(item.kind, item.value);
-      setTimeout(again, 650 + Math.random() * 2400);
-    };
-    setTimeout(again, 400 + Math.random() * 2200);
-  });
-}
 
 function startAtmosphere() {
   const canvas = document.getElementById("dust");
