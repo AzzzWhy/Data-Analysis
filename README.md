@@ -197,6 +197,19 @@ python agent/report_service.py --output-root reports/service
 
 前两行见 [核心验收记录](docs/FINAL_CORE_DEPLOYMENT.md)，第三行见 [公开数据测试](docs/new-public-data-20260929/README.md)。各记录包含测量配置、口径及数值检查；不可跨行混用冷态 CPU 与热态 GPU 来计算加速比。
 
+### GB10 测试数据：辅助核验资料
+
+2026 年 9 月 30 日从 GB10 只读采集了指定测试目录的[文件清单与复核方法](docs/gb10-dataset-inventory-20260930/README.md)。共记录 **49 个文件、28,242,762,577 字节**；其中包括原始归档和派生副本，并非 49 份独立数据集。
+
+| 测试数据 | 本次核对的规模 | 对应实验 |
+| --- | ---: | --- |
+| TLC 2017 全年出租车数据 | 12 个月 Parquet 合计 113,500,327 行；两份二列派生表各为 113,500,327 行 | [大数据核心验收](docs/FINAL_CORE_DEPLOYMENT.md) |
+| Gas Sensor Array Drift | 13,910 行 | [八组公开数据测试](docs/new-public-data-20260929/README.md) |
+| Online Retail II | 1,067,371 行 | [八组公开数据测试](docs/new-public-data-20260929/README.md) |
+| SUSY | 5,000,000 行 | [八组公开数据测试](docs/new-public-data-20260929/README.md) |
+
+上述行数来自 Parquet 元数据；三份公开数据的文件哈希与仓库此前保存的来源记录一致。清单另含不同规模及行列形状的 CSV，**本次未重新逐行计数或重跑性能测试**。目录清单用于核对数据文件，速度与结果一致性仍以各实验记录为准。原始大数据保留在 GB10，仓库只提供脱敏[清单 JSON](docs/gb10-dataset-inventory-20260930/inventory.json)和[采集脚本](scripts/dataset_inventory.py)。
+
 - 上表不包含模型规划、网络和最终回答的耗时。
 - 小数据可能 CPU 更快，自动模式选 CPU 是合理结果。
 - 引擎显示 `cudf` 不代表已经测过加速倍数；没有匹配 CPU 基线时显示未测量。
