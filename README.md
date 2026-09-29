@@ -1,799 +1,268 @@
-# GPU加速与数据分析
+# GPU 加速与数据分析
 
-![GPU加速与数据分析图标](assets/app-icon.svg)
+![GPU 加速与数据分析图标](assets/app-icon.svg)
 
-[使用说明（中文 / English）](docs/USAGE.md) · [User guide](docs/USAGE.md#english)
+一个面向本地表格数据的分析 Agent。模型理解问题、选择工具并解释结果；本机 Python 工具执行全量统计，根据任务和环境使用 pandas/CPU、RAPIDS cuDF/GPU，或 CPU 读取后转 GPU 计算。
 
-[Local optimization implementation and validation](docs/OPTIMIZATION.md)
+支持自然语言对话、已规划的批量分析和固定报表。项目用于第三届 NVIDIA DGX Spark 黑客松 Agent Skills 赛道，当前 `main` 包含统一后的对话与批量执行核心。
 
-[外部 Skill / MCP 自动发现与调用（配置、权限与测试）](docs/EXTERNAL_TOOLS.md)
+A local data-analysis agent with CPU/GPU routing, reusable analysis workers and batch reports. The model chooses tools; local Python code computes statistics over all relevant rows. See the [English user guide](docs/USAGE.md#english).
 
-[更快的执行：常驻工作进程、批量分析与耗时口径](docs/FAST_EXECUTION.md)
+[使用说明](docs/USAGE.md) · [统一执行入口](docs/UNIFIED_EXECUTION.md) · [最新核心验收](docs/FINAL_CORE_DEPLOYMENT.md) · [公开数据测试](docs/new-public-data-20260929/README.md) · [GUI 对接约定](docs/GUI_CORE_CONTRACT.md)
 
-[GB10 复测与真实 1.135 亿行实验](docs/POST_CACHE_AND_PUBLIC_DATA_RESULTS.md)
-[最后一轮 GB10 算法与端到端优化对照](docs/FINAL_ROUND_RESULTS.md)
-[七档规模与冷/热最快路径复测](docs/ALL_SCALES_RESULTS.md)
-[最新核心部署与真实 Agent 验收](docs/FINAL_CORE_DEPLOYMENT.md) · [GUI 核心接口约定](docs/GUI_CORE_CONTRACT.md)
-[三份新公开数据与八组 CPU/GPU/自动选路测试](docs/new-public-data-20260929/README.md)
+## 能做什么
 
-[CPU 加载＋GPU 计算：三个独立开发分支](docs/HYBRID_BRANCHES.md)
+| 能力 | 当前实现 |
+| --- | --- |
+| 基础统计 | 数据画像、描述统计、单列分组聚合、Pearson 相关性、IQR 异常值检测，以及组合分析 `auto` |
+| 自然语言分析 | 支持工具调用的模型选择操作与参数，读取工具结果后生成回答 |
+| 多步探索 | `dataset_session` 在会话内复用数据帧，记录计划进度与计划外步骤 |
+| 已知任务批量执行 | `analyze_batch` 接收同一文件的 1～8 项分析，读取所需列的并集，并共享可复用的精确统计 |
+| 固定报表 | 单份计划、多份计划队列和常驻报表服务；定时触发由外部调度器负责 |
+| 本地导出 | 按所选入口生成 Markdown 报告、JSON 结果、CSV 表格或 SVG 图表；另有 HTML 报告构建脚本 |
+| 终端交互 | CLI 和可选 Textual TUI，支持连接设置、文件选择、日志及中英文界面 |
+| 外部扩展 | 发现已安装的 Skill 和已配置的 MCP 服务，调用明确启用和授权的能力 |
 
-> 当前统一实现：`main` / `codex/hybrid-unified`，合并原热工作与批量分支。Agent 对话使用热工作进程；固定报表和已规划分析使用一次读取的批量执行，多份报表使用有界多进程队列。GPU 计算许可跨队列、热会话与单次 CLI 共享。定时触发由系统调度器负责。[统一入口与用法](docs/UNIFIED_EXECUTION.md) · [GB10 部署与验收](docs/GB10_UNIFIED_DEPLOYMENT.md) · [同数据新旧对照](docs/hybrid-evidence/unified-tlc-20260928/README.md)。
+支持 CSV/TSV、Parquet、JSON/JSONL 和 Excel 输入，但各格式的加载路径不同。CSV/Parquet 可使用原生 GPU 读取；JSON/JSONL、Excel 通过 pandas 读取。Parquet 通常需要 `pyarrow`，`.xlsx` 需要 `openpyxl`；旧 `.xls` 文件需要 pandas 对应的读取依赖。当前混合加载路径仅支持满足约束的数值型 Parquet 投影，不支持任意文本或时间列。
 
-A tool-calling agent that runs exact statistical analysis over large local datasets. On a
-configured NVIDIA GPU it can use RAPIDS cuDF; otherwise it reports the actual pandas/CPU path.
-The model decides what to compute and writes the answer from local tool results. Whole dataset
-files are not uploaded; user questions, paths, statistical summaries and bounded previews or
-outlier examples returned by tools do reach the selected model provider.
+“全量”指统计操作覆盖相关列的全部行，不表示把所有行、分组或异常样例返回给模型。Top-K 和预览会限制展示范围；从部分排名不能推断未展示分组的数值或全局最小值。
 
-Submitted to the third NVIDIA DGX Spark Hackathon, Agent Skills track.
+## 快速开始
 
-## Newly verified evidence
+### 安装与交互式运行
 
-Interactive SSH sessions open a conversation-first terminal inspired by Claude Code's
-restrained interaction style: warm accents, scrollable Markdown answers, a fixed prompt,
-actual CPU/GPU status and elapsed time. This is still the project's existing analysis agent,
-not a Claude integration. Install `pip install -r requirements-tui.txt`, then run
-`python agent/agent_main.py`. Use `/file /absolute/server/path.csv` to select a file, or
-`/file` / F3 to open the normally hidden file drawer (Enter confirms; Esc closes).
-Paths refer to existing files on the machine running the agent (the SSH server when connected
-remotely); this does not upload local files.
-Enter sends your question. Ctrl+O / F2 / `/logs` toggles execution details; `/help` / F1
-shows help. Ctrl+L / F4 focuses the prompt; Ctrl+Q / F10 / `/quit` exits safely.
-Choose 中文 / English in connection settings, or switch the TUI with `/language zh`,
-`/language en` or F6. This translates interface controls, not model answers or raw logs.
-The previous sidebar and classic layouts are preserved at commits `c5bd101` and `1e6e16b`.
-On narrow terminals the layout adapts. `--plain`, non-TTY input and `--ask` retain the original
-CLI behavior. Ctrl+Q waits for any running analysis and memory cleanup before exiting; it does
-not pretend to cancel an in-flight CUDA/API operation.
-Test the interface without API calls: `python agent/tui_test.py` (requires the optional UI dependency).
-
-## API connection and startup setup
-
-Starting an interactive agent opens connection settings before analysis. Enter an
-OpenAI-compatible API **base URL**, a masked API key, and a model. Click **读取此地址的模型列表**
-to query that endpoint's `/models`, then select a returned model. If the provider does not
-support model listing, type the model ID manually. A listed model is not necessarily suitable:
-the analysis agent needs Chat Completions with tool/function calling. Native Anthropic Messages,
-Gemini-native APIs and Responses-only models are not adapters implemented by this change.
-
-Use **暂时跳过** to keep current settings for this run. **忽略，不再提示** saves the skip
-preference without applying unfinished form values. Alternatively, check **以后不再弹出启动设置**
-when saving a complete configuration. The dialog continues to appear on future interactive
-launches until the user disables it; it does not require a connection to open.
-`/settings` or F5 always reopens it, and `--configure` overrides the startup skip preference.
-The basic terminal fallback supports a hidden-key setup wizard and `/settings` too.
-Non-interactive `--ask` and piped input never launch a setup prompt.
-
-The header shows the selected model and API host, not a fixed model or machine name.
-Changing the API URL clears the previous key and model in the form. Changing a connection
-starts a fresh backend conversation; earlier answers remain visible but are not sent to the
-new provider. Settings cannot be changed while analysis is running.
-
-Settings live outside the repository at `~/.config/gpu-data-analysis/connection.json`
-(`XDG_CONFIG_HOME` is honored). `GPU_ANALYSIS_CONFIG` overrides this path. By default the key
-stays in memory only; only URL, model and preferences are saved. Saving the key requires the
-explicit **保存密钥到本机明文文件** checkbox. This is **plaintext**, not encryption: POSIX files
-are owner-only (`0600`); Windows inherits the config directory's ACL. Do not share this file.
-Unchecking key storage and saving removes the saved key. If startup is skipped and no key
-is saved or provided by the environment, use `/settings` to enter it before analysis.
-
-For unattended use, set `GPU_API_BASE_URL`, `GPU_API_KEY`, `GPU_API_MODEL`. The aliases
-`OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL` also work. Existing `STEPFUN_*` variables
-remain supported. Generic environment settings take precedence; a changed endpoint never
-inherits a stored or legacy StepFun key. `--base-url` and `--model` override this run's settings;
-provide secrets through the environment or hidden UI input, not command-line arguments.
-
-Offline connection regression tests (synthetic keys and mocked HTTP, no paid requests):
-`python agent/api_config_test.py`.
-
-- [Fair resident CPU vs resident GPU](benchmark/resident/README.md): five repeats, both load
-  once. At 20M rows / 3.04 GB, GPU workflow median is 2.92x faster (2.46x including startup).
-  At 1M rows, resident CPU is 2.64x faster. Compute-only GPU variability is explicitly flagged.
-- [Real electricity demo](benchmark/real_power_demo/report.md): 2,075,259 genuine UCI minute
-  records, provenance, missing-value handling, independently checked findings and HTML charts.
-  This modest dataset intentionally routes to CPU.
-- [Independent client validation](benchmark/portability/README.md): separate Codex CLI
-  automatically discovered the installed skill and exported checked artifacts without this
-  repository's agent code. This is not a Claude execution test.
-
-Install with `python tools/install_skill.py --project /path/to/project`. Existing installations
-are preserved. `--client claude` selects directory layout only, not verified execution.
-
-## How it works
-
-A language model cannot analyze a 3 GB CSV on its own. The file does not fit in the context
-window, so the model samples it and reports estimates rather than statistics, and any
-computation it does run is single-threaded on the CPU.
-
-This skill divides the work. The model interprets the question and chooses the operation; cuDF
-computes every statistic over the entire file:
-
-```
-              user question
-                    |
-                    v
-     +-------------------------------+
-     |  LLM: decides only            |   which skill, which arguments
-     |  configured model             |   receives prompts and tool results
-     +--------------+----------------+
-                    |  function call
-                    v
-     +-------------------------------+
-     |  skill: runs on this machine  |   full-dataset cuDF, no sampling
-     |  analyze_dataset              |   measures the CPU baseline too
-     +--------------+----------------+
-                    |  real statistics (JSON)
-                    v
-     +-------------------------------+
-     |  LLM: writes the answer only  |   conclusions + measured speedup
-     +-------------------------------+
-```
-
-Because the data never passes through the model, dataset size is not limited by context
-length. A 20,000,000-row, 3.04 GB CSV reaches the model as a few dozen lines of statistics.
-
-## A real run
-
-The transcript below is the original run, kept in its original Chinese. The demo script now
-drives the same nine stages with English prompts; the measured behaviour is unchanged.
-
-```console
-用户: 按 region 统计 sales_demo.csv 的 revenue 总和与均值，各取前5
-
-  [round 1] -> analyze_dataset({"file_path": "sales_demo.csv",
-                                "operation": "groupby", "by": "region",
-                                "agg": "revenue:sum,mean", "top_k": 5})
-      OK  engine=cudf  rows=20,000,000  2.63s  | GPU 2.63s vs CPU 10.22s = 3.88x
---- Agent 回答 ---
-## Revenue 总和排名（Top 5）
-| 排名 | 地区  | 总收入            |
-|------|-------|-------------------|
-| 1    | LATAM | 4,300,004,248.14  |
-| 2    | AMER  | 4,299,776,626.08  |
-| 3    | APAC  | 4,298,033,716.38  |
-| 4    | MEA   | 4,294,925,776.77  |
-| 5    | EMEA  | 4,286,931,276.58  |
-
-## 运行情况
-本次分析在 GPU（NVIDIA GB10）上通过 cuDF 完成，全量 20,000,000 行耗时 2.63 秒；
-同一计算在 CPU pandas 上耗时 10.22 秒，GPU 快 3.88 倍。
-> 注意：端到端耗时包含 CSV 读取，读取阶段两引擎都在用多核并行；pandas 基线默认
-> 单线程，因此该倍数并不完全等同于纯计算阶段的 GPU 优势。
-```
-
-The question did not name an operation; the model chose `groupby` itself. The scan covered all
-20,000,000 rows rather than a sample, and the speedup was measured on that question and that
-file, during the run.
-
-## How this maps to the judging criteria
-
-| Criterion | What is implemented | Where to check it |
-| :--- | :--- | :--- |
-| Skill invocation: choosing the right tool and arguments unprompted | The model selects built-in analysis tools and authorized external gateways. Given no path it calls `list_datasets` first. A conceptual question invokes nothing. Adaptive work uses sessions; independent known-column work can use `analyze_batch`. | Original criteria: `agent/run_criteria_tests.sh`, 11 cases. New batch validation: `agent/fast_execution_live_test.py`. Assertions inspect tool-call traces, not prose alone. |
-| Task completion: natural language in, real results out | All six operations return real statistics. An answer carries conclusions, rankings, tables and key findings, and the run also writes report and chart files the user can keep. | `smoke_test.py` (use the current runner output). `verify_*.py` recomputes the numbers independently. |
-| Innovation | Resident sessions avoid repeated parsing; plans are system state; portable scripts produce full-data results and deliverables. | Historical 20.4x drill-down compares resident GPU with stateless CPU, not pure acceleration. The fair resident benchmark is 2.92x at 20M rows. |
-| Code usability: deployable, robust, survives bad input | The engine degrades to pandas on its own. No tool ever raises. A session is refused before loading when memory is short. A file that changed underneath a session is refused rather than answered from a stale snapshot. Two-column grouping fails with an explicit message. No GPU, a missing file and a bad column name are all handled gracefully. Memory is released in a `finally` block. | The no-GPU path runs on an ordinary machine. `tool_contract_test.py`, `plan_test.py` and the session tests cover the public contracts. |
-| Demo quality: a smooth end-to-end conversation | A scripted nine-stage demo runs in 176.8 s and shows the measured speedup at every stage, with the deliverables stage and the multi-step drill-down as its two peaks. `--prewarm` removes the first-query wait on stage. | `agent/demo_script.py`. |
-
-### Where the innovation actually is
-
-Using cuDF for data analysis is not novel by itself, so the claims are made where they can be
-checked.
-
-- The speedup is measured inside the conversation, on the question being asked and the file being
-  analyzed, rather than quoted from a table prepared beforehand.
-- The attribution experiment is reported even though it weakens the headline. Around 3x of the
-  end-to-end gain comes from GPU compute; the rest comes from parallel CSV parsing, and the
-  pandas baseline runs on one core of twenty. The agent repeats those limits to the user instead
-  of quoting 6.45x on its own.
-- Two engines disagreeing on real data exposed a genuine correctness bug, traced to a 4e-14
-  floating-point difference. It is written up below rather than dropped.
-- Planning is system state rather than a per-round improvisation, which turns multi-step analysis
-  from luck into something reproducible.
-- Deliverables import only the standard library, and the generated report states in its own text
-  that chart rendering is not GPU-accelerated.
-
-## Measured results
-
-### Test machine
-
-| | |
-| :--- | :--- |
-| GPU | NVIDIA GB10 |
-| Driver | 580.126.09 |
-| Architecture | aarch64, Linux 6.14.0-1015-nvidia |
-| Memory | 121 GB (117 GB available) |
-| CPU | 20 logical cores |
-| cuDF | 25.10.00 |
-| pandas | 2.3.3 (baseline) |
-| Python | 3.11.16 |
-
-### GPU against CPU, 20,000,000 rows / 3.04 GB, same file and command
-
-| Operation | GPU | CPU | Speedup |
-| :--- | ---: | ---: | ---: |
-| `groupby` grouped aggregation | 2.60 s | 10.22 s | 3.93x |
-| `corr` correlation matrix | 3.13 s | 11.56 s | 3.69x |
-| `outliers` IQR detection | 3.37 s | 10.91 s | 3.24x |
-| `summary` quantiles / std | 5.28 s | 16.16 s | 2.62x |
-| `auto` combined profile | 9.45 s | 20.80 s | 2.20x |
-
-The two engines agreed exactly on every value: `rel_diff = 0.00e+00`.
-
-### End-to-end across scales
-
-| Rows | File | Read | groupby | End to end |
-| :--- | ---: | ---: | ---: | ---: |
-| 3M | 564 MB | 8.30x | 8.25x | 6.86x |
-| 10M | 1.88 GB | 8.30x | 11.89x | 7.16x |
-| 30M | 5.67 GB | 7.22x | 12.44x | 6.45x |
-
-Raw numbers and logs are in `benchmark/`.
-
-### How much of the speedup is actually the GPU
-
-This figure is easy to overstate, so it was measured on its own:
-
-| Scenario | Speedup | What it includes |
-| :--- | ---: | :--- |
-| Cold-cache read | 6.09x - 6.35x | includes parallel I/O, which is not GPU-specific |
-| Warm-cache read | 7.93x - 8.05x | includes parallel I/O, which is not GPU-specific |
-| In-memory compute only | 2.86x - 3.09x | GPU compute on its own |
-
-So roughly 47-49% of the cold-read gain comes from compute. The rest comes from parallel CSV
-parsing and from pandas running its operations on one core while the machine has twenty. The
-system prompt repeats this, and the agent restates it to the user rather than quoting 6.45x as
-a headline figure.
-
-### Multi-step analysis and the resident session
-
-A single query running three times faster is a small gain, because analysis is rarely one step:
-finding the outliers is almost always followed by locating their source, sizing their impact,
-and comparing the groups they fall into.
-
-A stateless engine re-reads the file on every one of those steps:
-
-| Approach (20,000,000 rows / 3.04 GB) | Five-step full-data analysis |
-| :--- | ---: |
-| CPU, re-reading every step | 49.7 s |
-| GPU, re-reading every step | 10.8 s |
-| GPU with a resident session (`dataset_session`) | 1.5 s |
-
-Inside one measured session on the same file:
-
-```
-open   load 20,000,000 rows    1.85 s   (1,692 MB resident)
-       profile                 0.05 s
-       outliers                0.42 s
-       groupby by region       0.04 s
-       groupby by category     0.03 s
-       corr                    0.53 s
-close  session total, 9 steps  8.46 s
-       vs CPU re-reading per step   ~77 s   ->  19.2x
-```
-
-The scripted drill-down in the demo measured between 7.9x and 20.4x depending on how many
-operations the model ran in that stage. Even the low end is an order of magnitude above the
-3-4x of a single query, because what it saves is re-reading 3 GB per step.
-
-Keeping the dataset resident is only possible because the machine holds 121 GB of device
-memory, and it also genuinely runs out. `open` therefore checks free device memory before
-loading and refuses rather than thrashing:
-
-```
-Not enough free device memory, load refused: the file is about 2.83GB, which needs roughly
-12.5GB free and only 4.1GB is available. Use analyze_dataset for a single analysis, or pass
-columns to read only the columns you need.
-```
-
-At most four sessions may be open at once; a fifth is refused instead of silently exhausting
-memory.
-
-Three guards exist because each one was needed in practice:
-
-| Guard | The failure it prevents |
-| :--- | :--- |
-| File identity check (path, size, mtime) | If the file changes during a session, later steps would answer from a stale snapshot. The worker refuses and asks for a re-`open`. |
-| A falsifiable no-re-read assertion | Verified by running the same operation twice and confirming the time does not change, and by checking that cumulative time equals load plus the sum of steps. Not a threshold guess. |
-| Forced release at the end | The model does forget to `close` (measured: 1.7 GB left resident). `run()` releases in a `finally` block rather than relying on the prompt. |
-
-## Plans: multi-step analysis that does not drift
-
-Left to itself, a model works out each next step on the fly. That works, but it is not
-reproducible: the same question asked three times produced three different paths, one of which
-ran out of rounds and one of which abandoned the session halfway. In a live demo that is a
-risk, and to a reviewer it looks like luck.
-
-So the plan is system state rather than an instruction in the prompt:
-
-```
-dataset_session(operation="open", file_path=..., goal="find the cause of the revenue outliers")
-    |
-    |  the system immediately returns an ordered plan for that goal,
-    |  with real column names filled in
-    v
-  plan: {kind: "drill_down", total_steps: 5, next_step: 0,
-         steps: [profile, outliers, groupby(region), groupby(category), corr],
-         do_next: 'operation="analyze", op="profile"'
-                  '  # Confirm the real column names and types; later steps need them'}
-    |
-    |  each executed step is recorded automatically
-    v
-  plan: {completed: 1, next_step: 1, ...}
-```
-
-Three design decisions:
-
-- Classification is a pure function of the goal text, scored by keyword, with no model call.
-  The same goal run fifty times gives the same plan. A classifier the model invokes is a
-  classifier that can change between runs.
-- Steps are executable, not templates. Group-by steps carry column names read out of the data
-  at open time. A step that says "group it" without naming the column is a template.
-- Steps outside the plan are recorded as `off_plan` rather than rejected. Hiding them would
-  make the progress report untrue. The plan guides; it does not confine.
-
-Measured on the same question, "find the revenue outliers and explain them":
-
-| | Rounds | Outcome |
-| :--- | :--- | :--- |
-| Before, run 1 | 6 (budget exhausted) | abandoned the session mid-way for the stateless path |
-| Before, run 2 | 8 (budget exhausted) | completed 9 steps but forgot to `close` (backstop released it) |
-| Before, run 3 | 3 | ran out of rounds with no answer |
-| After | 6 | followed 4 planned steps and closed, with no retries |
-
-Stage nine of the demo is this scenario: 1.861 s in session against 37.933 s on CPU, 20.4x.
-
-## Deliverables
-
-The brief asks for an agent that finishes work rather than one that only answers. An agent that
-produces prose in a chat window has done half of it.
-
-`export_deliverables` runs the full analysis on the GPU and writes three things the user can
-take away:
-
-| File | Contents |
-| :--- | :--- |
-| `report.md` | Source, row count, engine, statistics tables, outlier table, correlation table, embedded charts |
-| `*.svg` | Bar, line and heatmap charts generated from the aggregate results |
-| `*.csv`, `result.json` | The underlying numbers, for reuse |
-
-The charts are hand-written SVG rather than matplotlib, for three reasons:
-
-1. matplotlib is not installed on GB10 and pulling it onto aarch64 drags in a whole wheel
-   stack. This file imports only the standard library.
-2. Rendering is deterministic. No font discovery, no backend, no DPI differences, so the same
-   file looks the same on a reviewer's laptop, in a browser, and after conversion to PDF.
-3. SVG is text, so a chart change is visible in a commit diff.
-
-One caveat is written into the generated report itself: chart rendering is not GPU-accelerated.
-The GPU accelerated the aggregation behind the chart. Reporting a speedup for drawing five bars
-would be meaningless.
-
-Columns that are only identifiers are excluded from value charts automatically. An
-auto-increment `row_id` with a mean of 10,000,000 otherwise compresses every real column into a
-line at the axis. The rule is either the column name looks like an ID, or its values are exactly
-0..N-1.
-
-## Verification and reproducibility
-
-### Stability
-
-Stability is checked by a script rather than asserted. `agent/run_stability_check.sh` asks the
-same multi-step question N times, prints the tool-call sequence for each run, and checks three
-things:
-
-1. the session skill was used throughout, with no fallback to the stateless path;
-2. the session was closed, leaving no device memory held;
-3. each run's operation order is an ordered subsequence of the plan.
+在执行分析的机器上准备 Python 3.10+：
 
 ```bash
-bash run_stability_check.sh 3 /path/to/data.csv
+git clone https://github.com/AzzzWhy/Data-Analysis.git
+cd Data-Analysis
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt -r requirements-tui.txt
+python agent/agent_main.py
 ```
 
-Measured on GB10 with 20,000,000 rows:
+以上虚拟环境激活命令适用于 Linux/macOS；Windows PowerShell 使用 `.venv\Scripts\Activate.ps1`。已有 RAPIDS 环境时应使用该环境的 Python，无需另外创建上述 CPU 虚拟环境。
 
-| Question | Plan kind | Hygiene (session throughout, closed) | Plan coverage |
-| :--- | :--- | :---: | :--- |
-| Correlation plus group consistency | `relationships` | 3/3 | 3/3, identical call sequence every time |
-| Source of revenue outliers | `drill_down` | 3/3 | 2/3 (one run closed after 3 of 5 steps) |
+`requirements.txt` 提供基础依赖和 CPU 路径，**不会安装 cuDF**。GPU 执行需要另行配置与机器系统、CUDA 和 Python 匹配的 RAPIDS 环境。本仓库的 GPU 实验主要在 NVIDIA GB10 上完成；其他兼容硬件需要自行验证。没有可用 GPU/cuDF，或任务更适合 CPU 时，工具会报告实际的 pandas 执行。
 
-Hygiene means: no fallback to the stateless path, no duplicate `open`, and the session closed.
-That column is now 6/6. Before the fixes below, one run exhausted its rounds, forgot to `close`,
-and left 1.7 GB resident.
+首次交互启动会打开连接设置。填写 API 基础地址、密钥和模型；模型需要支持 **OpenAI 兼容的 Chat Completions 工具调用**。模型列表里有该 ID，不代表它一定能正确调用工具。当前未实现原生 Anthropic Messages、Gemini 原生接口或仅支持 Responses 的接口适配。
 
-One residual variation is left in place rather than suppressed with more prompt rules. On the
-`drill_down` goal, one run covered three steps (profile, outliers, groupby) before closing. The
-answer was valid, just less thorough than the plan. That is the model's own judgement varying,
-not a defect in the mechanism. The mechanism guarantees that progress is not lost, that memory
-is not leaked, and that the run does not stall. It does not guarantee five steps every time.
+进入 TUI 后选择本机文件并提问，例如：
 
-### Four bugs the verification found
-
-All four were surfaced by the script, not by inspection:
-
-| # | Symptom | Root cause | Fix |
-| :--- | :--- | :--- | :--- |
-| 1 | `relationships` succeeded only 1 time in 3 | The model asked for `agg="revenue:corr"`, and per-group correlation cannot be expressed as a group-by aggregate. The error listed valid function names, so it assumed a typo, retried three times, and gave up with a failure answer. | The engine now suggests the alternative by intent (`corr` becomes `op='corr'`, `var` becomes `std`, quantiles become `op='summary'`), and the prompt states the order in which to handle an in-session error. |
-| 2 | One run forgot to `close`, leaving 1.7 GB | It explored one extra drill-down dimension and used up the round budget. | `MAX_TOOL_ROUNDS` raised from 8 to 10, based on measured need rather than a guess. |
-| 3 | One run opened two sessions | The model lost the `session_id` and re-opened, loading the same file twice (about 3.4 GB). | The same file now reuses the existing session and reports its `session_id` explicitly. |
-| 4 | The checker reported correct behaviour as failure | It first required byte-identical call sequences across runs, which flagged exploring one extra dimension; then required strict plan order, which flagged a legitimate reordering; and it counted an early cross-check as a fallback to the stateless path. | The gate is now hygiene plus coverage. Ordering and extra steps are reported as information. |
-
-The fourth is the most instructive one. A hand-written assertion is easier to get wrong than the
-code it tests, and an assertion that is wrong in either direction, always failing or always
-passing, never announces itself.
-
-### Independent recomputation
-
-The numbers the agent reports are not taken on trust. `verify_*.py` recomputes them from scratch
-in pandas, which is a separate code path from cuDF, and compares:
-
-```
-column           agent  independent   match     pct
-----------------------------------------------------
-revenue        518,394      518,394      OK  10.37%
-quantity             0            0      OK   0.00%
-
-  revenue mean      = 1073.83      (agent said 1073.83)  OK
-  revenue median    = 403.67       (agent said 403.67)   OK
-  quantity min      = 1            (agent said 1)        OK
-  quantity max      = 499          (agent said 499)      OK
-  quantity median   = 250.0        (agent said 250)      OK
-
-mismatches: 0
-PASS: every recorded claim reproduced independently.
+```text
+/file /absolute/path/to/sales.csv
+按 region 统计 revenue 的总额和均值，展示前 5 组。
+分析 revenue 的分布和异常值，并说明实际使用的计算引擎。
 ```
 
-### An IQR bug that only real data exposed
+这里的文件必须位于**运行 Agent 的机器**上。通过 SSH 使用时填写服务器路径；选择路径不会上传本地电脑上的文件。
 
-On the UCI household power consumption dataset (2,075,259 rows), the IQR outlier count for the
-`Voltage` column differed between engines:
+| 操作 | TUI 命令 / 按键 |
+| --- | --- |
+| 选择文件 | `/file 路径`、`/file`、F3 |
+| 配置模型连接 | `/settings`、F5 |
+| 查看执行日志 | `/logs`、Ctrl+O、F2 |
+| 切换界面语言 | `/language zh`、`/language en`、F6 |
+| 查看帮助 | `/help`、F1 |
+| 退出 | `/quit`、Ctrl+Q、F10 |
 
-```
-pandas -> 51,067        cuDF -> 50,763        difference 304
-```
+未安装 Textual 时使用基本终端；也可加 `--plain`。语言选项翻译界面控件，不自动翻译模型答案或原始日志。分析中退出会等待当前操作结束和资源清理，不会立即取消 CUDA 或模型请求。
 
-Three diagnostic scripts ruled out the obvious causes. Q1 and Q3 were identical across engines
-and interpolation methods, so the interpolation assumption was wrong. The real cause was
-floating-point accumulation: pandas computed the lower fence as `233.14000000000004` and cuDF
-computed `233.14`, a difference of 4e-14, and the data contains exactly `233.14`. A bare
-`s < low` comparison therefore treated that tie differently in each engine.
+### 脚本运行与直接分析
 
-The fix is a `1e-9` relative tolerance plus explicit reporting of `fence_ties_excluded`. All
-seven columns now agree:
-
-```
-Voltage                 50,763   50,763    OK    fence_ties_excluded=304
-Sub_metering_1         169,105  169,105    OK    ties=1,880,175 (IQR=0)
-```
-
-### Running the tests yourself
+无界面运行前，通过环境变量提供 `GPU_API_BASE_URL`、`GPU_API_KEY`、`GPU_API_MODEL`，或使用已保存的完整配置。也兼容 `OPENAI_BASE_URL`、`OPENAI_API_KEY`、`OPENAI_MODEL` 和原有 `STEPFUN_*` 设置。
 
 ```bash
-# test suites (the plan layer and tool-schema contract need no GPU)
+python agent/agent_main.py --ask "分析 /absolute/path/to/sales.csv 的异常值" --plain
+```
+
+`--ask` 和管道输入不会弹出连接设置。`--configure` 可在交互式终端重新设置连接，`--base-url` 和 `--model` 可覆盖本次运行的地址和模型。
+
+如果分析操作已经确定，可以直接调用引擎，**无需模型或 API 密钥**：
+
+```bash
+python skills/cudf-analytics/scripts/gpu_analytics.py \
+  --input /absolute/path/to/sales.csv --op auto
+
+python skills/cudf-analytics/scripts/gpu_analytics.py \
+  --input /absolute/path/to/sales.csv --op groupby \
+  --by region --agg 'revenue:sum,mean' --force-cpu
+```
+
+### 固定报表与常驻服务
+
+以下命令从仓库根目录运行；示例计划使用仓库中的小型测试数据。分析自己的文件时，复制计划并修改 `file_path`、列名与操作。
+
+```bash
+python agent/batch_job.py --plan examples/batch-plan.json --output-root reports
+python agent/batch_queue.py --manifest examples/batch-queue.json --output-root reports
+python agent/report_service.py --output-root reports/service
+```
+
+常驻服务使用标准输入/输出的 JSON Lines 协议，可接收 `run`、`status`、`close` 请求；它不是 HTTP 服务。服务复用工作进程，但每次请求重新读取数据，不跨请求保留输入数据帧。队列允许有界 CPU 并发，可能使用 GPU 的任务走保守的独占调度。定时任务需要由操作系统或调用方触发。
+
+具体计划格式、服务协议和资源生命周期见[统一执行说明](docs/UNIFIED_EXECUTION.md)；GUI 集成见[核心接口约定](docs/GUI_CORE_CONTRACT.md)。
+
+## 执行方式
+
+```text
+用户问题
+   ↓
+模型选择工具与参数
+   ↓
+agent/skills.py：参数处理、工作进程通信、结果整理
+   ↓
+本地分析核心：CPU / 原生 GPU / CPU 读取后转 GPU
+   ↓
+统计结果 + 实际引擎 + 耗时 + 路由或回退原因
+   ↓
+模型解释结果；需要时调用导出工具
+```
+
+模型不需要把完整文件放进上下文。可处理的数据规模仍受本机内存、GPU 可用内存、格式及算子支持限制。
+
+当前注册六个内置工具：
+
+| 工具 | 用途 |
+| --- | --- |
+| `list_datasets` | 查找可用数据文件 |
+| `analyze_dataset` | 单次分析；交互模式可尝试常驻数据复用 |
+| `analyze_batch` | 执行同一文件上已确定的多项分析 |
+| `dataset_session` | 打开、分析、查看和关闭驻留会话 |
+| `export_deliverables` | 导出本地报告、图表和表格 |
+| `load_csv_dataset` | 保留的 CSV 加载兼容入口 |
+
+Agent 另注册四个外部工具入口：发现工具、读取 Skill、执行授权 Skill 命令及调用授权 MCP 工具。发现范围是已安装目录和已配置服务，不包含自动联网搜索或安装。[配置与权限说明](docs/EXTERNAL_TOOLS.md)
+
+对话工具循环默认最多 10 轮，随后尝试生成最终回答。常见参数错误、文件错误和执行失败以结构化结果返回，供模型解释或重试；这不保证任意模型都能自动纠正错误。`Agent.run()` 在 `finally` 中关闭遗留活动会话；允许保留的有界缓存与活动会话分别管理。
+
+### 计划、复用与内存
+
+- 自适应探索使用四类固定计划：`drill_down`、`compare_groups`、`data_quality`、`relationships`。分类器包含**中文和英文关键词**；未匹配的目标使用默认计划，不是任意自然语言规划器。
+- 相同目标的计划分类可重复，但模型的实际执行路径仍可能不同。系统记录已完成步骤及 `off_plan` 步骤，不强制模型完成全部计划，也不能由相关性证明因果关系。
+- 已知列与操作时，批量分析可以减少重复读取，并复用同一事务内的精确统计。交互会话则适合后续操作依赖前一步结果的探索。
+- 活动会话默认上限为 4，并有内存准入检查。可保留的 GPU 帧缓存默认上限为 4096 MB，空闲有效期 900 秒；`SESSION_WARM_CACHE_MB=0` 或 `SESSION_WARM_TTL_SECONDS=0` 可关闭它。
+- 文件身份检查用于拒绝已变化文件的旧会话或缓存。工作进程退出会释放其数据；报表服务的进程复用不等于跨请求的数据缓存。
+
+### CPU/GPU 自动选择
+
+小数据不一定受益于 GPU：初始化、读取和转换开销可能超过计算收益。引擎使用保守的规模规则和可选校准记录，并返回实际选择及回退原因。
+
+批量与混合路径的校准需要匹配文件身份、列投影、完整操作参数、实现与机器指纹以及执行上下文，有效期为 24 小时。冷启动、热工作进程和报表事务使用各自的测量，不能借用另一场景的时间。无匹配校准时回到默认策略，**不保证未知数据上总能选到最快路径**，正常请求也不会自动把三条路径全部重跑。
+
+性能收益需要分开理解：GPU 算子计算、读取方式、工作进程复用、减少重复读盘及统计结果复用都会影响总时间。额外 CPU 对照默认关闭；显式开启 `SKILL_SHOW_SPEEDUP=1` 会增加测量开销。没有可比的实测基线时，应显示“未测量”，不能由引擎名称推算加速倍数。
+
+详细实现见[本地优化](docs/OPTIMIZATION.md)、[快速执行](docs/FAST_EXECUTION.md)和[统一执行说明](docs/UNIFIED_EXECUTION.md)。
+
+## 性能与验证证据
+
+以下是仓库保存的实验记录，不是任意机器或数据上的性能承诺。GPU 测试主要使用 NVIDIA GB10、cuDF 25.10、pandas 2.3.3、Python 3.11。CPU 基线为相应实验的 pandas 实现，未证明优于所有经过优化的 CPU 分析引擎。
+
+### 公开数据：同模式 CPU/GPU 对照
+
+2026-09-29 的测试在热工作进程中执行四项单批次分析，共享一次读取；每条路径预热后交错运行三次，取中位数。时间包含请求、读取、转换、计算与返回结果，不含模型调用或工作进程首次启动。
+
+| 工作负载 | 行数 | CPU | 原生 GPU | CPU / GPU | 匹配校准后的自动选择 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Gas Sensor，128 个特征 | 13,910 | 0.0714 s | 0.4007 s | 0.18× | CPU |
+| Online Retail II，国家分组 | 1,067,371 | 0.1477 s | 0.0924 s | 1.60× | 原生 GPU |
+| SUSY，18 个特征 | 5,000,000 | 3.9507 s | 1.3071 s | 3.02× | 原生 GPU |
+
+比值小于 1 表示 GPU 更慢。自动选择列使用本轮匹配校准；未校准的零售分组任务曾选择 CPU。SUSY 来源本身是蒙特卡洛模拟数据，不是实测粒子事件。完整八组实验、数值一致性检查、数据来源及限制见[公开数据测试记录](docs/new-public-data-20260929/README.md)。
+
+### 其他可复核记录
+
+| 记录 | 测量内容与边界 |
+| --- | --- |
+| [公平驻留基准](benchmark/resident/README.md) | 两个引擎均只加载一次，五次重复。20M 行 / 3.04 GB CSV 的工作流比值为 2.92×，含启动为 2.46×；1M 行工作流 CPU 更快。计算阶段波动另行标注。 |
+| [最新核心验收](docs/FINAL_CORE_DEPLOYMENT.md) | 覆盖 20,000 行和 113,500,327 行、三步分析与四份报表，并有真实本地模型调用。大数据热三步分析 CPU/GPU 为 4.42×，冷工作进程含启动为 1.61×；不包含模型耗时。性能计时早于最后的输出压缩保真修复，文档明确区分。 |
+| [真实用电数据演示](benchmark/real_power_demo/README.md) | UCI 家庭用电数据 2,075,259 行，包含来源、缺失值处理和独立数值核验；该工作负载选择 CPU。 |
+| [独立客户端验证](benchmark/portability/README.md) | 独立 Codex CLI 发现已安装 Skill、执行工具并导出核验过的结果，不依赖本仓库 Agent 循环；不代表已验证 Claude 执行。 |
+| [七档规模实验](docs/ALL_SCALES_RESULTS.md) | 不同规模、冷／热状态及执行方式的历史对照，应按各自测量口径阅读。 |
+
+历史演示中将“逐步重读文件的 CPU”与“驻留 GPU”比较得到的较大倍数，包含消除重复读取的收益，不能作为纯 GPU 加速比。完整模型对话还包含规划、网络和生成回答的时间，不能等同于工具计算时间。
+
+### 本地验证
+
+安装基础依赖后，可从仓库根目录运行以下检查，无需模型 API：
+
+```bash
 python agent/tool_contract_test.py
+python agent/api_config_test.py
 python skills/cudf-analytics/scripts/plan_test.py
 python skills/cudf-analytics/scripts/smoke_test.py
-bash   agent/run_criteria_tests.sh                           # 11 judging-criteria cases
-bash   agent/run_stability_check.sh 3 <your-data.csv>        # reproducibility
+python agent/batch_result_compaction_test.py
 ```
 
-## The agent application
+在已配置的 RAPIDS 环境中验证 GPU 路径：
 
-### The tool-calling loop
-
-```python
-messages = [system, user]
-for _ in range(MAX_TOOL_ROUNDS):          # 10, to stop a runaway loop
-    resp = client.chat.completions.create(model=MODEL, messages=messages,
-                                          tools=skill_definitions, temperature=0)
-    if not resp.choices[0].message.tool_calls:
-        break                             # the model is ready to answer
-    for call in resp.choices[0].message.tool_calls:
-        result = execute_tool(call)       # never raises; failures are JSON too
-        messages.append(tool_result(result))
+```bash
+python skills/cudf-analytics/scripts/smoke_test.py --require-gpu
 ```
 
-Four tools are registered: `analyze_dataset` (stateless full-dataset operations),
-`dataset_session` (resident session, multi-step), `list_datasets` (discovery), and
-`export_deliverables` (report, charts and CSV output).
+可选 TUI 测试为 `python agent/tui_test.py`，需要 `requirements-tui.txt`。真实模型演示、验收及较大数据基准需要相应模型配置、数据和硬件，不包含在上述离线检查中。更多验收范围见[核心验收记录](docs/FINAL_CORE_DEPLOYMENT.md)与[早期验证记录](benchmark/VERIFICATION.md)，以各次输出为准，不将选定测试通过描述成全仓库测试通过。
 
-### Behaviour on bad input
+## 数据与配置边界
 
-| Input | Agent behaviour |
-| :--- | :--- |
-| File does not exist | Reports the path back with an explicit error. It does not guess or invent a result. |
-| Wrong column name | Calls `profile` to get the real column names, then retries. Self-heals within three rounds. |
-| A column whose name is not ASCII | Same recovery path. |
-| 1,440 distinct dates in the data | Does not treat every date as a group, which would blow up the token budget. |
-| No GPU present | Falls back to pandas and states `engine="pandas"` with the reason. |
-| API error or no `tool_calls` | Caught and degraded to a text answer. Does not crash. |
+内置分析工具在本机读取数据，不上传完整数据文件。**用户问题、文件路径、统计摘要，以及工具返回的有限预览和异常样例会进入所选模型上下文。** 使用远程 API 时，这些内容会发送给该服务；授权的外部工具也会收到相应调用参数。
 
-### Output contract
+连接配置默认位于 `~/.config/gpu-data-analysis/connection.json`，支持 `XDG_CONFIG_HOME` 和 `GPU_ANALYSIS_CONFIG`。默认只保存地址、模型和偏好，密钥保留在内存；只有主动选择保存密钥才写入本机明文配置。POSIX 文件使用 `0600` 权限，Windows 继承配置目录 ACL。具体设置与切换行为见[使用说明](docs/USAGE.md)。
 
-The engine puts metadata at the top level and each operation's data under its own key, so the
-agent can tell whether the GPU path was actually taken:
+外部 Skill/MCP 配置独立于模型配置。明确启用的本地命令以 Agent 用户权限执行，外部工具机制本身不是操作系统沙箱。[外部工具说明](docs/EXTERNAL_TOOLS.md)
 
-```jsonc
-{
-  "ok": true,
-  "op": "groupby",
-  "engine": "cudf",              // cuDF succeeded
-  "engine_version": "25.10.00",
-  "gpu": "NVIDIA GB10",
-  "accelerated": true,           // the GPU path really ran
-  "fallback_reason": null,       // populated when it did not
-  "execution_decision": {
-    "schema_version": 1,
-    "mode": "auto",             // auto, force_cpu, force_gpu or resident reuse
-    "policy": "measured_file_size_crossover",
-    "selected_backend": "cudf", // policy choice before probing/fallback
-    "actual_backend": "cudf",   // what really ran
-    "reason": "...",            // human-readable selection rationale
-    "signals": {"operation": "groupby", "file_size_bytes": 3038000000},
-    "estimate": {"elapsed_seconds": null, "peak_memory_mb": null,
-                 "status": "not_calibrated"},
-    "observed": {"phase": "request_total", "elapsed_seconds": 2.63,
-                 "compute_seconds": 1.91, "rows_scanned": 20000000},
-    "fallback_reason": null
-  },
-  "total_seconds": 2.63,         // end to end, including the read
-  "groupby": {
-    "by": "region",
-    "agg": "revenue:sum,mean",
-    "rows_scanned": 20000000,    // note: the row count lives inside the operation block
-    "compute_seconds": 1.91,     // compute only, excluding the read
-    "groups": 5,                 // number of groups, not the data
-    "sorted_by": "revenue__sum",
-    "top_k": [ /* the actual group rows, at most top_k of them */ ]
-  }
-}
+## 独立使用 Skill
+
+可将分析 Skill 安装到另一个项目：
+
+```bash
+python tools/install_skill.py --project /absolute/path/to/project
 ```
 
-`execution_decision` is also returned for resident session open, reuse and analysis steps.
-Its `selected_backend` and `actual_backend` differ when a GPU attempt falls back to pandas.
-Without a local calibration file, elapsed-time and peak-memory estimates are explicitly null.
-With at least three clean CPU and GPU measurements for the same operation and file format at
-two sizes, a checked linear model can set `estimate.elapsed_seconds` and route with a 10% GPU
-margin. Peak-memory prediction remains null; the session admission threshold
-(`admission_required_free_gb`) is a safety headroom requirement, not a prediction. Existing
-result fields remain available.
-Run `python skills/cudf-analytics/scripts/execution_decision_test.py` for the CPU-only contract
-checks, including forced GPU requests on machines without cuDF.
+默认复制到目标项目的 `.agents/skills/cudf-analytics`，已有目录会保留并报错，不覆盖。`--client claude` 改用 `.claude/skills` 目录布局；它不等于已经验证该客户端的执行行为。安装器不复制 Agent 代码或 API 凭据，也不安装 Python/GPU 依赖。
 
-The following optimizations are available in the analytics engine:
+Skill 包包含 [SKILL.md](skills/cudf-analytics/SKILL.md)、[能力与风险说明](skills/cudf-analytics/skill-card.md)、[本地评估任务](skills/cudf-analytics/evals/evals.json)和[评估报告](skills/cudf-analytics/BENCHMARK.md)。这是第三方 Skill，没有 NVIDIA 官方签名；本地评估器也不代表官方认证。
 
-- Named groupby metrics and explicit summary/correlation/outlier columns automatically
-  project the required input columns. Profile/auto and unspecified metric requests preserve
-  the full schema. `--no-auto-usecols` is the full-read reference for a fair A/B test.
-- Interactive CLI/TUI one-step requests can use the bounded GPU frame cache automatically.
-  Single-run `--ask` remains stateless. Resident refusal falls back to the stateless path;
-  set `GPU_ANALYSIS_RESIDENT_INTERACTIVE=0` to disable interactive reuse. These requests
-  do not run an extra CPU baseline or claim a pure GPU speedup.
+## 仓库结构
 
-- `auto` computes each numeric column's quartiles once and reuses Q1/Q3 in outlier detection.
-- A closed GPU session can leave a validated warm frame for the next question in the same
-  agent process. The default budget is 4096 MB and the idle lifetime is 900 seconds; change
-  `SESSION_WARM_CACHE_MB` / `SESSION_WARM_TTL_SECONDS`, or set either to `0` to disable it.
-  Active session handles still close after every answer. Worker exit or `close all` without
-  `retain` releases the cache. `list` reports its count and memory use.
-- To opt in to disk conversion, pass `--parquet-cache-dir <directory>` (or set
-  `GPU_ANALYSIS_PARQUET_CACHE_DIR`). A full CSV read builds a Parquet copy; later full reads
-  can use it. The source's path, byte size and nanosecond modification time are in the cache
-  key, and a change during conversion aborts the request. `execution_decision.observed.parquet_cache`
-  reports `built`, `hit`, `disabled` or `unavailable` and conversion time. Column projections
-  can use a complete converted cache, including from session open; row-limited reads do not.
-  The first conversion reads the full source and charges conversion time to that request.
-  The original CSV is never modified. Provision and clean the directory as
-  needed; the engine does not silently write beside the dataset.
-- To opt in to learned routing, pass `--calibration-file <measurements.jsonl>` (or set
-  `GPU_ANALYSIS_CALIBRATION_FILE`). Successful full, uncached one-off runs append only
-  operation, format, backend, byte size and measured seconds (no dataset path or rows).
-  Collect CPU and GPU A/B runs with `--force-cpu` and `--force-gpu` at multiple sizes.
-  If the fit lacks coverage or is noisy, the existing measured size threshold remains in use.
-  Parquet-cache runs are not mixed into CSV cold-run calibration.
-
-Projected reads do not reuse whole-file calibrated cost fits either. Stored CPU comparison
-timings use a new versioned format, so pre-projection measurements are discarded. Only exact
-query signatures are compared; Parquet cache builds/hits omit unmatched cold-CPU ratios.
-
-Exit codes, observed rather than assumed:
-
-| Code | Meaning | Observed cases |
-| ---: | :--- | :--- |
-| 0 | Analysis completed, result in the `ok` field | Success; also returned when a file reads fine but has no usable columns |
-| 2 | Bad request, which the model can correct itself | File missing, unknown `by` column, unknown `columns` entry |
-| 3 | Unexpected engine failure | Anything not covered above; reserved for real bugs |
-
-The distinction between 2 and 3 is practical. A 2 means the model passed a bad argument and can
-retry; a 3 means the engine broke. No failure mode raises an exception; every one returns
-`{"ok": false, "error": "..."}`.
-
-## Repository layout
-
-```
-agent/                              the agent application (the submission proper)
-  agent_main.py                     the tool-calling loop
-  skills.py                         skill registration, GPU/CPU measurement, output trimming
-  demo_script.py                    9-stage scripted demo (--prewarm; deliverables and drill-down)
-  run_criteria_tests.sh             11 judging-criteria cases
-  run_stability_check.sh            reproducibility: N runs, session hygiene and plan coverage
-  gpu_vs_cpu_demo.py                side-by-side engine comparison
-  tool_contract_test.py             schema/function signature regression checks
-  session_skill_test.py             session tool-layer assertions
-  env_stepfun.sh                    key loading for non-interactive shells
-  verify_*.py                       independent recomputation of the agent's numbers
-  diagnose_iqr*.py                  root-cause diagnosis of the IQR floating-point bug
-  probe_tool_calling.py             confirms the model supports function calling
-
-skills/cudf-analytics/              the skill itself
-  SKILL.md                          trigger conditions and workflow
-  skill-card.md                     governance card: identity, licence, risks, evaluation
-  evals/evals.json                  13 evaluation tasks (5 positive, 3 negative, 5 safety)
-  evals/run_evals.py                local trace-based scorer
-  references/engine-contract.md     engine CLI contract, JSON field names, session protocol
+```text
+agent/
+  agent_main.py             模型对话与工具调用循环
+  skills.py                 工具定义、工作进程通信与结果整理
+  api_config.py             模型连接配置
+  api_setup.py              连接设置界面
+  tui_app.py                Textual 终端界面
+  batch_job.py              单份固定分析计划
+  batch_queue.py            多份计划队列
+  report_service.py         JSON Lines 常驻报表服务
+  external_tools.py         外部 Skill / MCP 发现与授权调用
+skills/cudf-analytics/
+  SKILL.md                  独立 Skill 使用说明
   scripts/
-    gpu_analytics.py                core engine (cuDF and pandas paths, stateless)
-    gpu_session.py                  resident session worker
-    analysis_plan.py                plan catalog and progress bookkeeping (pure functions)
-    make_deliverables.py            zero-dependency SVG charts and Markdown report
-    smoke_test.py                   self-checks plus GPU/CPU numeric agreement
-    plan_test.py                    plan-layer assertions
-    session_worker_test.py          worker protocol and guard tests
-    attribution_test.py             attribution of I/O against compute
-    memory_ceiling_test.py          multi-scale stress test
-    benchmark_cpu_vs_gpu.py         benchmark harness
-
-benchmark/                          measured GB10 evidence and raw logs
-  benchmark_results.json            machine-readable measurements
-  benchmark_results.md              measurement tables
-  gb10_run.log                      raw run log
-  smoke/gb10_smoke_test.log         self-check log from GB10
-  charts/                           generated chart samples, readable without any dependency
-    groupby_bar.svg                 grouped bar chart
-    corr_heatmap.svg                correlation heatmap
-    outliers_bar.svg                outlier distribution
-    summary_means.svg               column means (identifier columns removed)
-
-skill.md                            entry point, pointing at SKILL.md and this file
-INNOVATION_OPTIONS.md               evaluation of five candidate innovations
-LICENSE, requirements.txt
+    gpu_analytics.py        CPU/GPU 统计引擎
+    gpu_session.py          常驻会话、批量执行和数据复用
+    hybrid_execution.py     混合加载与匹配校准选路
+    analysis_plan.py        中英文关键词计划与进度记录
+    make_deliverables.py    SVG、Markdown 和表格导出
+    build_html_report.py    HTML 报告构建
+  evals/                    本地评估任务与执行器
+  references/               引擎与会话接口约定
+docs/                       使用、部署、接口和实验记录
+benchmark/                  基准脚本、结果与演示材料
+examples/                   批量计划和外部工具示例
+tools/                      Skill 安装与可移植性验证
+scripts/run_gb10_core.sh    已配置 GB10 环境的启动入口
 ```
 
-### How the skill gets triggered
+## 当前限制
 
-The `description` field in `SKILL.md` is the trigger. It is written as the situations in which
-the skill must be called, and it also names the situations in which it must not be.
+- 分析能力以既有算子和计划为边界，不提供任意 SQL、多表连接或任意 Python 分析代码生成执行。当前分组接口使用单个分组列。
+- 模型可能选错工具、遗漏步骤或误读统计结果；计划记录与工具错误处理不保证回答正确或完整。
+- 自动路由依赖规则和匹配校准，尚不保证未知数据的最优执行路径。数值型 Parquet 混合加载不适用于所有数据类型。
+- 当前主要界面是 CLI/TUI；本仓库提供 GUI 对接约定，没有内置交互式分析仪表盘。`Agent.run()` 返回最终文字，现有接口不是逐 token 流式输出。
+- 导出文件保存在本机；内置报表不提供托管分享或多数据集连接分析。图表类型有限，图表渲染不属于 GPU 统计加速。
+- 驻留与批量执行仍受可用内存限制，不是任意大数据的分块流式引擎，也不是 CPU/GPU 异步流水线。
 
-One discovery detail matters. DSH only auto-discovers skills under `.dsh/skills`,
-`.agents/skills` and `$DSH_HOME/skills`, and only one level deep as `<name>/SKILL.md`. So
-`skills/cudf-analytics/SKILL.md` is not auto-loaded by DSH; it has to be copied or mounted into
-one of those locations. Registering the tools with the model directly, as `skills.py` does here,
-makes that step unnecessary.
+## 许可
 
-## Running it
-
-### Without a GPU
-
-The GPU path needs a GB10, but the whole pipeline runs without one: the engine falls back to
-pandas and reports `engine: "pandas"` with the reason. Analysis correctness, the agent loop and
-error handling can all be verified on an ordinary machine.
-
-```bash
-pip install -r requirements.txt
-python agent/tool_contract_test.py
-python skills/cudf-analytics/scripts/smoke_test.py
-python skills/cudf-analytics/scripts/gpu_analytics.py --input <any.csv> --op auto
-```
-
-Expect `"accelerated": false`. A deliberate small-file CPU route carries `routing_reason` and
-no `fallback_reason`; a file routed to the GPU when cuDF is unavailable carries a
-`fallback_reason`. No speedup is claimed on either CPU path.
-
-```bash
-export STEPFUN_API_KEY=<your key>
-cd agent && python agent_main.py --ask "analyze the outliers in /path/to/data.csv"
-```
-
-### On a GB10 (full GPU path)
-
-```bash
-ssh -p <port> <user>@<host>
-source ~/.bashrc                        # provides STEPFUN_API_KEY
-conda activate rapids-cudf              # cuDF 25.10 / pandas 2.3.3 / Python 3.11
-
-# 1) tool contract plus skill self-check, including GPU/CPU numeric agreement
-python agent/tool_contract_test.py
-cd skills/cudf-analytics && python scripts/smoke_test.py --require-gpu
-
-# 2) single agent question
-cd ../../agent && python agent_main.py --ask "analyze the outliers in /path/to/data.csv"
-
-# 3) scripted demo (9 stages, measured at 176.8 s, showing the measured speedup at each stage)
-export DEMO_DATA=/path/to/sales_demo.csv
-python demo_script.py --prewarm && python demo_script.py
-
-# 4) judging-criteria suite (11 cases)
-bash run_criteria_tests.sh
-
-# 5) evaluation dataset (13 tasks: 5 positive, 3 negative, 5 safety)
-python ../skills/cudf-analytics/evals/run_evals.py
-
-# 6) reproducibility: the same question three times, checking hygiene and coverage
-bash run_stability_check.sh 3 "$DEMO_DATA"
-
-# 7) plan-layer unit tests (no GPU needed)
-python ../skills/cudf-analytics/scripts/plan_test.py
-```
-
-In benchmark mode (`SKILL_SHOW_SPEEDUP=1`), `--prewarm` matters. On the first run of any given question the agent also runs it on CPU to
-measure the speedup, which takes 15-25 seconds. Prewarming writes those baselines to
-`.gpu_vs_cpu_cache.json`, so every stage of the live demo can show its speedup immediately, and
-it warms the session workflow so stage nine is not left waiting on a comparison measurement.
-
-### Generating the demo data
-
-The repository does not ship data files, since they run to several gigabytes. Generate one:
-
-```bash
-python skills/cudf-analytics/scripts/memory_ceiling_test.py --sizes 20m --columns 8
-```
-
-Use the 20,000,000-row file for a demo. At 5,000,000 rows the speedup is only 1.4x; at
-20,000,000 it is 3.9x. Too small a dataset makes the GPU look useless.
-
-### Conformance with the official skill directory spec
-
-The official directory layout requires five governance artefacts per published skill; a
-published skill missing any of them is rejected by the sync pipeline.
-
-| Requirement | This repository | Status |
-| :--- | :--- | :--- |
-| `SKILL.md` | `skills/cudf-analytics/SKILL.md` | present |
-| `skill-card.md` governance card | `skills/cudf-analytics/skill-card.md` | present, filled in section by section from the official Jinja template |
-| Tier-3 evaluation dataset | `skills/cudf-analytics/evals/evals.json` | present, 13 tasks in the official schema |
-| `BENCHMARK.md` evaluation report | `skills/cudf-analytics/BENCHMARK.md` | present |
-| `skill.oms.sig` detached signature | — | not applicable |
-| `references/` | `skills/cudf-analytics/references/engine-contract.md` | present |
-
-On the signature: `skill.oms.sig` is NVIDIA's signature over official skills, verified against
-`nv-agent-root-cert.pem`. A third-party skill has no NVIDIA private key, so it cannot be signed
-and should not be faked. The official material says as much: once the contents change, the old
-signature no longer vouches for them. Changes belong either in an adaptation layer or in a
-third-party skill. This is a third-party skill, so the signature row is not applicable rather
-than missing.
-
-On the evaluation, without overstating it: `evals/run_evals.py` is a local scorer written for
-this repository. It grades on the tool-call trace, meaning which skill ran, with which arguments,
-and whether the session was closed. It is not NVIDIA's NVSkills-Eval, and it does not produce the
-five Security, Correctness, Discoverability, Effectiveness and Efficiency percentages, which
-would require the official harness, reference scorers and a multi-agent run. The scorer says so
-in its own output.
-
-## Known limitations
-
-- Plans come from a fixed catalog rather than being inferred on the spot. Four shapes
-  (`drill_down`, `compare_groups`, `data_quality`, `relationships`) cover the common phrasings;
-  a goal outside the catalog falls back to a default shape instead of deriving a new strategy.
-  That is the price paid for reproducibility, not a ceiling on capability.
-- Plans are not enforced, so step counts vary. The model may take steps the plan did not
-  anticipate (recorded as `off_plan`), and as measured above it may close after covering only
-  part of the plan. The mechanism guarantees that progress is recorded, memory is released and
-  the run does not stall; it does not guarantee a full plan every time.
-- Chart types are limited to bar, line, scatter, histogram and heatmap. There is no interactive
-  dashboard.
-- The CSV path is well tested; Parquet and Excel go through a generic read path.
-- Deliverables are written to a local directory. There is no upload or sharing, and several
-  datasets cannot be combined into one report.
-- Optional speedup comparisons (`SKILL_SHOW_SPEEDUP=1`) run extra CPU passes and can delay
-  the first answer. Normal mode defaults to off; `--prewarm` helps comparison demos.
-- Answers to conceptual questions are limited by the model, not by the skill.
-- Goal-to-plan classification matches English keywords. A goal phrased in another language falls
-  back to the default plan shape.
-
-## Third-party components
-
-RAPIDS cuDF (Apache-2.0), pandas (BSD-3-Clause), openai-python (Apache-2.0) and StepFun
-step-3.7-flash are dependencies, not bundled components, and the repository ships no binaries.
-
-MIT licensed; see [LICENSE](LICENSE).
+项目采用 [MIT License](LICENSE)。RAPIDS cuDF、pandas、NumPy、openai-python、Textual 等依赖遵循各自许可，不随仓库捆绑。模型服务可配置，历史 StepFun 或本地模型实验不构成对某个模型的固定依赖。公开数据的来源与许可见对应实验记录。
