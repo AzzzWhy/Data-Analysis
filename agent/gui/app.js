@@ -87,6 +87,7 @@ function applyChrome() {
     // select used to be rewritten here and the control vanished with it, which silently broke
     // the tool form. Only leaf nodes are ever translated.
     if (node.children.length) return;
+    if (node.closest && node.closest("#set-model")) return;
     if (node.dataset.label === undefined) node.dataset.label = node.textContent.trim();
     const translated = t(node.dataset.label);
     if (translated !== node.textContent) node.textContent = translated;
@@ -98,6 +99,8 @@ function applyChrome() {
     ? "e.g. Compare total and average revenue by region" : "例如：按地区统计 revenue 的总和与均值";
   $("goal").placeholder = t("例如：找出 revenue 离群点的成因");
   $("drawer-toggle").textContent = logVisible ? t("收起") : t("展开");
+  const modelPlaceholder = $("set-model").querySelector("option[value='']");
+  if (modelPlaceholder) modelPlaceholder.textContent = t("请选择模型");
   // Attributes are outside the text sweep, so the tablist's accessible name is localised here --
   // leaving it in the HTML would strand a Chinese label under language=en.
   els.tabs.setAttribute("aria-label", t("图表类型"));
@@ -957,14 +960,15 @@ addEventListener("keydown", (event) => {
    a credential, so there is nothing to prefill, and an input that cannot show what is stored is
    better than one that pretends to. */
 const veil = $("veil");
-$("open-settings").addEventListener("click", () => {
+$("open-settings").addEventListener("click", async () => {
   $("set-msg").textContent = "";
   $("set-key").value = "";
   // Re-read from the server on every open, so the form cannot show a stale address or a stale
   // `记住密钥 / Remember key` box: the checkbox's value is submitted back verbatim, and a stale
   // unchecked box is what used to delete an already-stored key during an unrelated edit.
-  refreshState();
   veil.classList.add("open");
+  await refreshState();
+  loadModels();
 });
 $("cancel").addEventListener("click", () => veil.classList.remove("open"));
 addEventListener("keydown", (event) => { if (event.key === "Escape") veil.classList.remove("open"); });
@@ -994,12 +998,81 @@ $("settings").addEventListener("submit", async (event) => {
   await refreshState();
 });
 
+let modelFetchGen = 0;
+
+function fillModels(models) {
+  const select = $("set-model");
+  const current = select.dataset.current || "";
+  const known = Array.isArray(models) ? models : [];
+  select.replaceChildren();
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = t("请选择模型");
+  select.appendChild(placeholder);
+  for (const name of known) {
+    const option = document.createElement("option");
+    option.value = name;
+    option.textContent = name;
+    select.appendChild(option);
+  }
+  if (known.length && current && known.includes(current)) select.value = current;
+  else if (!known.length && current) {
+    const kept = document.createElement("option");
+    kept.value = current;
+    kept.textContent = current;
+    select.appendChild(kept);
+    select.value = current;
+  } else select.value = "";
+  select.dataset.current = select.value;
+}
+
+async function loadModels() {
+  const gen = ++modelFetchGen;
+  const url = $("set-url").value.trim();
+  if (!url) {
+    fillModels([]);
+    return;
+  }
+  $("set-msg").textContent = t("正在读取模型列表…（不会发送分析数据）");
+  const body = { base_url: url };
+  const key = $("set-key").value.trim();
+  if (key) body.api_key = key;
+  const { status, data } = await post("/api/models", body);
+  if (gen !== modelFetchGen) return;
+  const models = data && Array.isArray(data.models) ? data.models : [];
+  if (status === 404) {
+    fillModels([]);
+    $("set-msg").textContent = t("工作台进程还是旧的，请先重启它，再读取模型列表。");
+    return;
+  }
+  if (status !== 200 || !data || data.ok !== true || !models.length) {
+    fillModels([]);
+    $("set-msg").textContent = (data && data.error) || t("读取失败：请检查地址、密钥或网络；服务不支持 /models 时可手填模型名。");
+    return;
+  }
+  fillModels(models);
+  $("set-msg").textContent = t("已读取 {count} 个模型，请选择一个。").replace("{count}", models.length);
+}
+
+$("fetch-models").addEventListener("click", () => loadModels());
+$("set-url").addEventListener("change", () => {
+  if ($("set-url").value.trim() !== ($("set-model").dataset.url || "")) {
+    $("set-model").dataset.current = "";
+  }
+  loadModels();
+});
+$("set-key").addEventListener("change", () => loadModels());
+$("set-model").addEventListener("change", () => {
+  $("set-model").dataset.current = $("set-model").value;
+});
+
 async function refreshState() {
   const state = await fetch("/api/state").then((r) => r.json()).catch(() => null);
   if (state) {
     renderState(state);
     $("set-url").value = state.base_url || "";
-    $("set-model").value = state.model || "";
+    $("set-model").dataset.url = state.base_url || "";
+    $("set-model").dataset.current = state.model || "";
     // The checkbox used to open unchecked no matter what was on disk, while the submit below
     // always sends `remember_key` -- so editing only the model silently deleted a stored key.
     // Prefill it, and let an explicit uncheck be the only thing that can remove one.
@@ -1020,6 +1093,7 @@ els.release.addEventListener("click", async () => {
   if (data.state) renderSession({ ...data.state, reused: false });
 });
 
+followGlow();
 loadFiles();
 fetch("/api/state").then((r) => r.json()).then(renderState)
   .then(() => setTimeout(layoutSelfTest, 900))
@@ -1083,6 +1157,27 @@ function layoutSelfTest() {
     els.banner.dataset.kind = "bad";
     els.banner.textContent = t("底部输入栏未固定：当前浏览器的布局自检已检出，详情在执行记录与 diag.json。");
   }
+}
+
+function followGlow() {
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const root = document.documentElement;
+  let x = innerWidth * 0.62;
+  let y = innerHeight * 0.28;
+  let tx = x;
+  let ty = y;
+  addEventListener("pointermove", (event) => {
+    tx = event.clientX;
+    ty = event.clientY;
+  }, { passive: true });
+  const frame = () => {
+    x += (tx - x) * 0.07;
+    y += (ty - y) * 0.07;
+    root.style.setProperty("--mx", x + "px");
+    root.style.setProperty("--my", y + "px");
+    requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
 }
 
 function reportLayout(payload) {

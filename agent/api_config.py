@@ -23,12 +23,40 @@ class APIConfig:
         return bool(self.api_key and self.model and self.base_url)
 
 
+def _directory_writable(path):
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / '.write-probe'
+        probe.write_text('', encoding='utf-8')
+        probe.unlink(missing_ok=True)
+        return True
+    except OSError:
+        return False
+
+
+def _config_root():
+    """Same root gui.gate_file() uses. Keep the two in step."""
+    forced = os.environ.get('XDG_CONFIG_HOME')
+    if forced:
+        return Path(forced).expanduser()
+    chosen = getattr(_config_root, 'chosen', None)
+    if chosen is not None:
+        return chosen
+    home_config = Path.home() / '.config'
+    if _directory_writable(home_config):
+        chosen = home_config
+    else:
+        appdata = os.environ.get('APPDATA') or os.environ.get('LOCALAPPDATA')
+        chosen = Path(appdata).expanduser() if appdata else home_config
+    _config_root.chosen = chosen
+    return chosen
+
+
 def config_path():
     override = os.environ.get('GPU_ANALYSIS_CONFIG')
     if override:
         return Path(override).expanduser()
-    root = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config'))
-    return root / 'gpu-data-analysis' / 'connection.json'
+    return _config_root() / 'gpu-data-analysis' / 'connection.json'
 
 
 def normalize_url(value):

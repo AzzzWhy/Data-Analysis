@@ -1,23 +1,23 @@
-/* The sign-in page: a dark antechamber to a light workbench.
-   It borrows the workbench's identity (the D mark, the overline, teal accents) and
-   nothing else -- the door should feel like the building, not like the room.
-   Everything animates with transform/opacity only, and everything stops when the
-   visitor asks the system to reduce motion. No secret ever reaches this file. */
+/* Sign-in: a quiet dark antechamber.
+   Floor is #0b101c. A soft blue-violet wash follows the pointer, a glass card
+   sits in the middle, and a few dim specks drift behind it. Nothing flashes.
+   Motion is transform/opacity, and it stops when the visitor asks for less motion.
+   No secret ever reaches this file. */
 
 :root {
-  --ink-0: #0a0f16;        /* scene floor */
-  --ink-1: #0f1722;        /* raised */
-  --paper: #f2f4f7;        /* primary text on dark */
-  --slate-1: #9aa7b4;      /* secondary text */
-  --slate-2: #5d6b78;      /* faint text */
-  --line: rgba(255,255,255,.09);
-  --line-strong: rgba(255,255,255,.16);
-  --teal: #2ba583;         /* the workbench accent, lifted for dark */
-  --teal-bright: #37c79d;
-  --teal-deep: #196b67;
-  --bad: #ff8f8f;
+  --floor: #0b101c;
+  --paper: #e7ebf4;
+  --slate-1: #9aa3b5;
+  --slate-2: #6d7688;
+  --line: rgba(186, 198, 230, .14);
+  --line-strong: rgba(186, 198, 230, .28);
+  --violet: #8b97c9;
+  --violet-deep: #6d78b0;
+  --bad: #e3a0a8;
   --sans: Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   --mono: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  --mx: 50%;
+  --my: 42%;
 }
 
 * { box-sizing: border-box; }
@@ -26,203 +26,288 @@ body {
   margin: 0;
   color: var(--paper);
   font: 14px/1.55 var(--sans);
-  background: var(--ink-0);
-  overflow-x: hidden;
+  background: var(--floor);
 }
 button, input { font: inherit; }
 button { cursor: pointer; }
+@keyframes page-in { from { opacity: 0; } }
 
-/* -- the scene ------------------------------------------------------------------ */
+/* -- atmosphere ---------------------------------------------------------------- */
 
-.scene { position: fixed; inset: 0; overflow: hidden; pointer-events: none; }
-.scene-glow {
-  position: absolute; inset: 0;
-  background: radial-gradient(1100px 520px at 50% -12%, rgba(43,165,131,.16), transparent 62%);
+#dust {
+  position: fixed; inset: 0; width: 100%; height: 100%;
+  pointer-events: none; z-index: 1;
+  animation: page-in .8s ease both;
 }
-.scene-grid {
-  position: absolute; inset: -60px;
-  background-image:
-    linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px);
-  background-size: 46px 46px;
-  -webkit-mask-image: radial-gradient(ellipse 90% 75% at 50% 38%, #000 25%, transparent 78%);
-  mask-image: radial-gradient(ellipse 90% 75% at 50% 38%, #000 25%, transparent 78%);
-  animation: grid-drift 26s linear infinite;
+.glow {
+  position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  animation: page-in .8s ease both;
+  background:
+    radial-gradient(640px 520px at var(--mx) var(--my), rgba(118, 142, 198, .28), transparent 62%),
+    radial-gradient(1100px 820px at var(--mx) var(--my), rgba(108, 92, 168, .16), transparent 70%);
 }
-@keyframes grid-drift { to { transform: translateY(46px); } }
+.vignette {
+  position: fixed; inset: 0; pointer-events: none; z-index: 2;
+  animation: page-in .8s ease both;
+  background: radial-gradient(ellipse at 50% 46%, transparent 42%, rgba(6, 9, 16, .42) 100%);
+}
+.motes { position: fixed; inset: 0; z-index: 1; pointer-events: none; overflow: hidden; }
+.motes i {
+  position: absolute; width: 4px; height: 4px; border-radius: 50%;
+  background: #e8edf8;
+  box-shadow: 0 0 12px 3px rgba(176, 190, 230, .7);
+  animation: mote 15s ease-in-out infinite;
+}
+.motes i:nth-child(1) { left: 11%; top: 20%; }
+.motes i:nth-child(2) { left: 22%; top: 72%; animation-duration: 18s; animation-delay: -4s; width: 3px; height: 3px; }
+.motes i:nth-child(3) { left: 78%; top: 16%; animation-duration: 13s; animation-delay: -2s; }
+.motes i:nth-child(4) { left: 86%; top: 58%; animation-duration: 17s; animation-delay: -7s; width: 5px; height: 5px; }
+.motes i:nth-child(5) { left: 18%; top: 40%; animation-duration: 20s; animation-delay: -9s; width: 3px; height: 3px; }
+.motes i:nth-child(6) { left: 70%; top: 78%; animation-duration: 16s; animation-delay: -1s; }
+.motes i:nth-child(7) { left: 46%; top: 12%; animation-duration: 19s; animation-delay: -6s; width: 3px; height: 3px; }
+.motes i:nth-child(8) { left: 62%; top: 34%; animation-duration: 14s; animation-delay: -3s; }
+@keyframes mote {
+  0%, 100% { transform: translate(0, 0) scale(1); opacity: .28; }
+  50% { transform: translate(14px, -22px) scale(1.35); opacity: .9; }
+}
 
-.orb { position: absolute; border-radius: 50%; filter: blur(70px); opacity: .5; }
-.orb-a {
-  width: 340px; height: 340px; left: -80px; top: 12%;
-  background: rgba(30,110,96,.5);
-  animation: orb-a 19s ease-in-out infinite alternate;
+.figures { position: fixed; inset: 0; z-index: 3; pointer-events: none; overflow: hidden; }
+.figure {
+  position: absolute;
+  color: rgba(226, 232, 248, .82);
+  transform-origin: left center;
+  animation: bloom 11s ease-in-out infinite;
 }
-.orb-b {
-  width: 420px; height: 420px; right: -120px; bottom: -6%;
-  background: rgba(36,70,110,.42);
-  animation: orb-b 23s ease-in-out infinite alternate;
+.figure small {
+  display: block; margin-bottom: 4px;
+  color: rgba(186, 198, 224, .7);
+  font-size: 10px; font-weight: 650; letter-spacing: .16em; text-transform: uppercase;
 }
-@keyframes orb-a { to { transform: translate(70px, 50px) scale(1.12); } }
-@keyframes orb-b { to { transform: translate(-60px, -70px) scale(.94); } }
+.figure b {
+  display: block;
+  font: 560 clamp(22px, 2.5vw, 40px)/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.02em;
+}
+.f1 { left: 6%; top: 14%; animation-duration: 9.5s; animation-delay: -1.2s; }
+.f2 { left: 9%; top: 46%; animation-duration: 13s; animation-delay: -6.4s; }
+.f3 { left: 5%; bottom: 12%; animation-duration: 10.5s; animation-delay: -3.1s; }
+.f4 { right: 6%; top: 16%; text-align: right; transform-origin: right center; animation-duration: 12s; animation-delay: -8.2s; }
+.f5 { right: 8%; top: 50%; text-align: right; transform-origin: right center; animation-duration: 8.8s; animation-delay: -2.4s; }
+.f6 { right: 5%; bottom: 13%; text-align: right; transform-origin: right center; animation-duration: 14.5s; animation-delay: -10s; }
+@keyframes bloom {
+  0% { transform: scale(.72); opacity: 0; }
+  16% { transform: scale(.84); opacity: .72; }
+  100% { transform: scale(1.55); opacity: 0; }
+}
+
+button.lang {
+  position: fixed; top: 22px; right: 24px; z-index: 5;
+  border: 1px solid rgba(186, 198, 230, .16);
+  padding: 5px 12px; border-radius: 999px;
+  background: rgba(14, 18, 32, .35);
+  color: var(--slate-1); font-size: 12px;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  transition: color .18s ease, border-color .18s ease;
+}
+button.lang:hover { color: var(--paper); border-color: rgba(186, 198, 230, .32); }
 
 /* -- the card ------------------------------------------------------------------- */
 
-.gate { min-height: 100vh; display: grid; place-items: center; padding: 24px; position: relative; }
+.gate {
+  min-height: 100vh; min-height: 100dvh;
+  display: grid; place-items: center;
+  padding: 72px 24px 56px;
+  position: relative; z-index: 4;
+}
 .gate-panel {
-  width: min(412px, 100%);
-  background: rgba(15, 23, 34, .72);
-  -webkit-backdrop-filter: blur(16px);
-  backdrop-filter: blur(16px);
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  box-shadow: 0 24px 70px rgba(2, 6, 12, .55), 0 2px 8px rgba(2, 6, 12, .4);
-  overflow: hidden;
-  animation: card-in .7s cubic-bezier(.16, 1, .3, 1) both;
+  width: min(420px, 100%);
+  position: relative;
+  padding: 0;
+  border-radius: 20px;
+  background: linear-gradient(180deg, rgba(20, 26, 44, .62), rgba(12, 16, 28, .46));
+  -webkit-backdrop-filter: blur(24px) saturate(1.2);
+  backdrop-filter: blur(24px) saturate(1.2);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, .05) inset,
+    0 24px 70px rgba(3, 6, 14, .55),
+    0 0 80px rgba(92, 112, 176, .08);
+  animation: card-in .9s cubic-bezier(.16, 1, .3, 1) both;
 }
-@keyframes card-in {
-  from { opacity: 0; transform: translateY(18px) scale(.97); }
+.gate-panel::before {
+  content: "";
+  position: absolute; inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(
+    150deg,
+    rgba(186, 198, 232, .55),
+    rgba(126, 118, 186, .16) 36%,
+    rgba(90, 108, 168, .08) 64%,
+    rgba(156, 146, 204, .40)
+  );
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
 }
+@keyframes card-in { from { opacity: 0; transform: translateY(16px); } }
+.gate-panel[data-entered="1"] { animation: none; }
 .gate-panel[data-nudge="1"] { animation: nudge .32s ease; }
-@keyframes nudge { 20% { transform: translateX(-8px); } 60% { transform: translateX(8px); } }
+@keyframes nudge { 20% { transform: translateX(-7px); } 60% { transform: translateX(7px); } }
 
-.gate-head {
-  display: flex; align-items: center; justify-content: space-between; gap: 16px;
-  padding: 20px 22px 16px; border-bottom: 1px solid var(--line);
-}
+.gate-head { padding: 28px 32px 0; }
 .product { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .product-mark {
-  width: 36px; height: 36px; flex: none;
-  display: grid; place-items: center;
-  border-radius: 10px;
-  background: linear-gradient(135deg, var(--teal-deep), #2f9d7a);
-  color: #fff; font: 650 16px/1 var(--sans);
-  box-shadow: 0 0 0 0 rgba(55,199,157,.35);
-  animation: mark-pulse 3.2s ease-in-out infinite;
+  width: 36px; height: 36px; flex: none; display: block;
+  filter: drop-shadow(0 8px 16px rgba(70, 84, 140, .35));
 }
-@keyframes mark-pulse {
-  50% { box-shadow: 0 0 0 9px rgba(55,199,157,0); }
-}
-.product-copy { display: flex; flex-direction: column; line-height: 1.3; min-width: 0; }
-.product-copy strong { font-size: 14.5px; letter-spacing: -.01em; }
-.product-copy span { color: var(--slate-1); font-size: 11px; margin-top: 2px; }
+.product-mark svg { display: block; width: 36px; height: 36px; }
+.product-copy { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
+.product-copy strong { font-size: 14px; letter-spacing: -.01em; font-weight: 620; }
+.product-copy span { color: var(--slate-1); font-size: 12px; margin-top: 2px; }
 
-button.text-button {
-  border: 1px solid var(--line); padding: 5px 10px;
-  background: transparent; color: var(--slate-1); font-size: 11px;
-  border-radius: 999px; transition: color .18s ease, border-color .18s ease;
+.live {
+  display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px;
+  margin: 22px 32px 0; padding-top: 14px;
+  border-top: 1px solid rgba(186, 198, 230, .12);
 }
-button.text-button:hover { color: var(--paper); border-color: var(--line-strong); }
-
-/* -- the form ------------------------------------------------------------------- */
-
-.gate-body { display: flex; flex-direction: column; padding: 24px 24px 22px; }
-.overline {
-  display: block; color: var(--teal-bright); font-size: 10px; font-weight: 700;
-  letter-spacing: .14em; text-transform: uppercase; margin-bottom: 5px;
-  animation: field-in .5s .08s cubic-bezier(.16,1,.3,1) both;
+.live span {
+  display: block; color: var(--slate-2);
+  font-size: 10px; font-weight: 650; letter-spacing: .14em; text-transform: uppercase;
 }
+.live b {
+  display: block; margin-top: 5px;
+  color: #e4e9f6;
+  font: 600 16px/1.15 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.gate-body { display: flex; flex-direction: column; padding: 18px 32px 8px; }
+.gate-body[hidden] { display: none; }
 h1 {
-  margin: 0 0 6px; font-size: 21px; line-height: 1.25;
-  letter-spacing: -.02em; font-weight: 650;
-  animation: field-in .5s .12s cubic-bezier(.16,1,.3,1) both;
+  margin: 16px 0 6px; font-size: 26px; line-height: 1.2;
+  letter-spacing: -.03em; font-weight: 620;
 }
-.gate-sub {
-  margin: 0; color: var(--slate-1); font-size: 12.5px;
-  animation: field-in .5s .16s cubic-bezier(.16,1,.3,1) both;
-}
-@keyframes field-in { from { opacity: 0; transform: translateY(7px); } }
+.gate-sub { margin: 0 0 4px; color: var(--slate-1); font-size: 13px; }
 
+.field { margin-top: 16px; }
 .lt {
-  display: block; margin: 18px 0 7px; color: var(--slate-1); font-size: 11px; font-weight: 600;
-  animation: field-in .5s .2s cubic-bezier(.16,1,.3,1) both;
+  display: block; margin: 0 0 7px;
+  color: var(--slate-1); font-size: 12px; font-weight: 560;
 }
-
-#password, #confirm {
-  width: 100%; height: 44px; padding: 0 14px;
-  color: var(--paper); font: 13px/1 var(--mono); letter-spacing: .05em;
-  background: rgba(255,255,255,.045);
-  border: 1px solid var(--line-strong); border-radius: 9px; outline: none;
+.field input {
+  width: 100%; height: 46px; padding: 0 14px;
+  color: var(--paper); font: 14px/1 var(--sans);
+  background: rgba(255, 255, 255, .035);
+  border: 1px solid rgba(186, 198, 230, .14);
+  border-radius: 11px; outline: none;
   transition: border-color .18s ease, box-shadow .18s ease, background .18s ease;
-  animation: field-in .5s .22s cubic-bezier(.16,1,.3,1) both;
 }
-#confirm { animation-delay: .26s; }
-#password:focus, #confirm:focus {
-  border-color: rgba(55,199,157,.65);
-  box-shadow: 0 0 0 4px rgba(43,165,131,.16);
-  background: rgba(255,255,255,.06);
+.field input::placeholder { color: var(--slate-2); }
+.field input:hover { border-color: rgba(186, 198, 230, .26); }
+.field input:focus {
+  border-color: rgba(168, 182, 224, .62);
+  box-shadow: 0 0 0 4px rgba(120, 138, 196, .14);
+  background: rgba(255, 255, 255, .05);
 }
-#password::placeholder, #confirm::placeholder { color: var(--slate-2); font-family: var(--sans); }
-
-.gate-panel[data-armed="1"] #password,
-.gate-panel[data-armed="1"] #confirm {
-  border-color: rgba(255,143,143,.55);
-  box-shadow: 0 0 0 4px rgba(255,120,120,.10);
+.gate-panel[data-armed="1"] .field input {
+  border-color: rgba(210, 140, 150, .55);
+  box-shadow: 0 0 0 4px rgba(190, 110, 120, .10);
 }
 
-.gate-msg {
-  margin: 11px 0 0; color: var(--bad); font-size: 12px;
-  animation: msg-in .25s ease both;
-}
-@keyframes msg-in { from { opacity: 0; transform: translateY(-3px); } }
+.gate-msg { margin: 12px 0 0; color: var(--bad); font-size: 12.5px; }
 .gate-msg[hidden] { display: none; }
 
 button.primary {
-  margin-top: 16px; height: 44px; width: 100%;
-  border: 0; border-radius: 9px;
-  background: linear-gradient(135deg, var(--teal-deep) 0%, #2f9d7a 55%, var(--teal) 100%);
-  color: #fff; font-weight: 650; padding: 10px 16px;
+  margin-top: 22px; height: 46px; width: 100%;
+  border: 0; border-radius: 11px;
+  background: linear-gradient(180deg, #97a2d4 0%, #6f7ab4 100%);
+  color: #f6f7fb; font-weight: 620; letter-spacing: .01em;
   display: flex; align-items: center; justify-content: center;
-  box-shadow: 0 6px 20px rgba(30,110,90,.32), inset 0 1px 0 rgba(255,255,255,.14);
-  transition: filter .16s ease, transform .14s ease, box-shadow .16s ease;
-  animation: field-in .5s .28s cubic-bezier(.16,1,.3,1) both;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .28),
+    0 8px 24px rgba(86, 100, 168, .22);
+  transition: transform .16s ease, box-shadow .2s ease, filter .2s ease;
 }
 button.primary:hover:not(:disabled) {
-  filter: brightness(1.11);
+  filter: brightness(1.06);
   transform: translateY(-1px);
-  box-shadow: 0 10px 28px rgba(35,130,105,.42), inset 0 1px 0 rgba(255,255,255,.18);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .34),
+    0 0 0 1px rgba(176, 188, 230, .35),
+    0 12px 36px rgba(112, 128, 196, .42);
 }
-button.primary:active:not(:disabled) { transform: translateY(0) scale(.985); }
+button.primary:active:not(:disabled) { transform: translateY(0); filter: brightness(.98); }
 button.primary:disabled { opacity: .55; cursor: not-allowed; }
 button.primary[data-busy="1"]::before {
-  content: ""; width: 15px; height: 15px; margin-right: 9px; border-radius: 50%;
-  border: 2px solid rgba(255,255,255,.35); border-top-color: #fff;
+  content: ""; width: 14px; height: 14px; margin-right: 9px; border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, .35); border-top-color: #fff;
   animation: spin .7s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 button.primary[data-ok="1"] {
-  background: linear-gradient(135deg, #1d7a4f, #34b374);
+  background: linear-gradient(180deg, #8fafb0, #6d9094);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .28), 0 8px 24px rgba(80, 120, 124, .22);
 }
 
-/* -- the waiting state ------------------------------------------------------------ */
+.auth-switch {
+  display: flex; justify-content: center; align-items: center; gap: 6px;
+  margin: 16px 0 6px; color: var(--slate-2); font-size: 13px;
+}
+.auth-switch[hidden] { display: none; }
+.auth-switch button {
+  border: 0; padding: 0; background: none;
+  color: #c5cdec; font-weight: 560;
+  transition: color .18s ease, text-shadow .18s ease;
+}
+.auth-switch button:hover {
+  color: #eef1fb;
+  text-shadow: 0 0 16px rgba(170, 184, 230, .55);
+}
 
 .waiting-note {
   display: flex; align-items: center; gap: 10px;
-  margin-top: 22px; padding: 12px 14px;
-  border: 1px solid var(--line); border-radius: 9px;
-  background: rgba(255,255,255,.03);
-  color: var(--slate-1); font-size: 12px;
+  margin: 22px 0 8px; padding: 12px 14px;
+  border: 1px solid var(--line); border-radius: 11px;
+  background: rgba(255, 255, 255, .03);
+  color: var(--slate-1); font-size: 12.5px;
 }
 .waiting-note .spinner {
   width: 13px; height: 13px; flex: none; border-radius: 50%;
-  border: 2px solid rgba(255,255,255,.18); border-top-color: var(--teal-bright);
+  border: 2px solid rgba(255, 255, 255, .16); border-top-color: var(--violet);
   animation: spin .8s linear infinite;
 }
 
 .gate-foot {
-  padding: 13px 24px 17px; border-top: 1px solid var(--line);
-  background: rgba(255,255,255,.02);
-  color: var(--slate-2); font-size: 11px;
+  padding: 8px 32px 22px;
+  color: var(--slate-2); font-size: 11px; line-height: 1.45;
 }
-/* The build tag answers "which page am I actually looking at" from the page itself, so a
-   tab rendered hours ago cannot masquerade as the current release. */
 .build-tag {
-  float: right; color: var(--slate-2); font-family: var(--mono);
-  font-size: 10px; letter-spacing: .04em; opacity: .8;
+  position: fixed; right: 22px; bottom: 16px; z-index: 5;
+  color: rgba(154, 163, 181, .45);
+  font: 10px/1 var(--mono); letter-spacing: .04em;
+}
+
+.field[hidden], #confirm-field[hidden] { display: none; }
+
+@media (max-width: 980px) {
+  .figures { display: none; }
+}
+@media (max-width: 520px) {
+  .gate { padding: 64px 16px 40px; }
+  .gate-head, .gate-body, .gate-foot, .live { padding-left: 22px; padding-right: 22px; }
+  .live { margin-left: 22px; margin-right: 22px; }
+  h1 { font-size: 23px; }
+  button.lang { top: 14px; right: 14px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .scene-grid, .orb, .product-mark,
-  .gate-panel, .overline, h1, .gate-sub, .lt, #password, #confirm,
-  button.primary, .gate-msg { animation: none !important; }
-  button.primary, #password, #confirm, button.text-button { transition: none; }
+  #dust, .glow, .vignette, .gate-panel, .figure, .motes i,
+  button.primary[data-busy="1"]::before, .waiting-note .spinner {
+    animation: none !important;
+  }
+  button.primary, .field input, button.lang, .auth-switch button { transition: none; }
 }

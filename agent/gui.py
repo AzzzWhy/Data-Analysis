@@ -37,6 +37,8 @@ from collections import deque
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import urllib.error
+import urllib.request
 from urllib.parse import parse_qs, urlparse
 
 HERE = Path(__file__).resolve().parent
@@ -52,12 +54,13 @@ import skills  # noqa: E402
 AGENT_IMPORT_ERROR = ""
 try:
     from agent_main import Agent, build_client  # noqa: E402
-    from api_config import (APIConfig, load_config,  # noqa: E402
+    from api_config import (APIConfig, discover_models, load_config,  # noqa: E402
                             normalize_url, save_config)
 except Exception as _exc:  # pragma: no cover - depends on the operator's environment
     Agent = None
     build_client = None
     APIConfig = None
+    discover_models = None
     load_config = None
     normalize_url = None
     save_config = None
@@ -98,6 +101,41 @@ CSP = ("default-src 'self'; style-src 'self'; script-src 'self'; "
        "connect-src 'self'; img-src 'self' data:")
 
 
+def _directory_writable(path: Path) -> bool:
+    """True when a file can be created in path. A failed probe leaves nothing behind."""
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / ".write-probe"
+        probe.write_text("", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        return True
+    except OSError:
+        return False
+
+
+def _config_root() -> Path:
+    """Where gate.json and connection.json live.
+
+    XDG_CONFIG_HOME wins. Otherwise ~/.config, unless this profile cannot create it
+    (Windows home directories are sometimes read-only for the user). Then AppData.
+    Mirrored in api_config.config_path(); keep the two in step.
+    """
+    forced = os.environ.get("XDG_CONFIG_HOME")
+    if forced:
+        return Path(forced).expanduser()
+    chosen = getattr(_config_root, "chosen", None)
+    if chosen is not None:
+        return chosen
+    home_config = Path.home() / ".config"
+    if _directory_writable(home_config):
+        chosen = home_config
+    else:
+        appdata = os.environ.get("APPDATA") or os.environ.get("LOCALAPPDATA")
+        chosen = Path(appdata).expanduser() if appdata else home_config
+    _config_root.chosen = chosen
+    return chosen
+
+
 def gate_file() -> Path:
     """gate.json sits beside connection.json, resolved by the same rules.
 
@@ -108,8 +146,7 @@ def gate_file() -> Path:
     override = os.environ.get("GPU_ANALYSIS_CONFIG")
     if override:
         return Path(override).expanduser().parent / "gate.json"
-    root = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-    return root / "gpu-data-analysis" / "gate.json"
+    return _config_root() / "gpu-data-analysis" / "gate.json"
 
 
 def diag_file() -> Path:
@@ -316,6 +353,47 @@ class Job:
             return [e for e in self.events if e[0] > cursor], self.done
 
 
+def _model_ids(base_url: str, api_key: str) -> list[str]:
+    """Read /models from one OpenAI-compatible address. The key stays in the request."""
+    endpoint = base_url.rstrip("/") + "/models"
+    request = urllib.request.Request(
+        endpoint,
+        headers={
+            "Authorization": "Bearer " + api_key,
+            "Accept": "application/json",
+            "User-Agent": "gpu-workbench",
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            raw = response.read()
+    except urllib.error.HTTPError as exc:
+        raise ValueError(f"无法读取模型列表（HTTP {exc.code}）。检查地址和密钥。") from None
+    except Exception as exc:
+        raise ValueError(f"无法读取模型列表（{type(exc).__name__}）。检查地址、密钥或网络。") from None
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except Exception:
+        raise ValueError("这个地址返回的模型列表不是 JSON。") from None
+    rows = None
+    if isinstance(payload, dict):
+        rows = payload.get("data")
+        if not isinstance(rows, list):
+            rows = payload.get("models")
+    if not isinstance(rows, list):
+        raise ValueError("这个地址没有返回模型列表。")
+    names = []
+    for item in rows:
+        if isinstance(item, str) and item.strip():
+            names.append(item.strip())
+        elif isinstance(item, dict):
+            name = item.get("id") or item.get("name") or item.get("model")
+            if isinstance(name, str) and name.strip():
+                names.append(name.strip())
+    return sorted(set(names))
+
+
 class Workbench:
     """Holds the single agent, the single session worker behind it, and the job registry.
 
@@ -487,6 +565,39 @@ class Workbench:
             "warning": warning,
         }
         return response
+
+    def list_models(self, body: dict) -> dict:
+        """Ask the address in the form for its model ids. The key is never returned.
+
+        A key typed into this request is used only for that one /models call. If the
+        field is empty and the address matches the saved one, the stored key is used.
+        A different address never inherits the previous provider's key.
+        """
+        if load_config is None or normalize_url is None or APIConfig is None or discover_models is None:
+            return {"ok": False, "error": f"settings layer unavailable: {AGENT_IMPORT_ERROR}"}
+        try:
+            config = load_config()
+        except Exception as exc:
+            return {"ok": False, "error": f"could not read current settings: {exc}"}
+        raw = str(body.get("base_url") or "").strip() or config.base_url
+        try:
+            target = normalize_url(raw)
+            stored = normalize_url(config.base_url) if str(config.base_url or "").strip() else ""
+        except Exception as exc:
+            reason = ui_i18n.tr(self.language, str(exc)) if ui_i18n else str(exc)
+            return {"ok": False, "error": reason}
+        key = str(body.get("api_key") or "").strip()
+        if not key and target == stored:
+            key = config.api_key
+        if not key:
+            return {"ok": False, "error": "请先填写 API 密钥，再读取模型。本地无鉴权服务可填 local。"}
+        try:
+            models = _model_ids(target, key)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        if not models:
+            return {"ok": False, "error": "这个地址没有返回可选模型。检查地址和密钥后再试。"}
+        return {"ok": True, "models": models}
 
     def session_status(self) -> dict:
         """Ask the worker what it holds, with a deadline this module owns.
@@ -1111,6 +1222,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(code, {"error": problem})
             return self._json(202, {"job_id": job.id,
                                     "note": "direct tool call, no model involved"})
+        if url.path == "/api/models":
+            if "api_key" in parse_qs(url.query):
+                return self._json(400, {"error": "api_key must be sent in the request body, "
+                                                 "never in the query string"})
+            body = self._body()
+            if body is None:
+                return
+            return self._json(200, wb.list_models(body))
         if url.path == "/api/diag":
             # The page measures its own layout once per load and reports here; the report is
             # geometry only, lands in diag.json beside connection.json, and exists so that

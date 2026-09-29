@@ -1,0 +1,64 @@
+.backend-connection-trigger { white-space: nowrap; }
+.backend-dialog-backdrop[hidden] { display: none; }
+.backend-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+  background: rgba(4, 7, 20, .78);
+  backdrop-filter: blur(8px);
+}
+.backend-dialog {
+  box-sizing: border-box;
+  width: min(100%, 530px);
+  max-height: min(90vh, 740px);
+  overflow-y: auto;
+  padding: 1.5rem;
+  border: 1px solid #48516e;
+  border-radius: 20px;
+  background: #161c2c;
+  color: #f1f3fb;
+  box-shadow: 0 25px 80px rgba(0, 0, 0, .45);
+}
+.backend-dialog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.backend-dialog-head h2 { margin: .15rem 0 0; font-size: 1.35rem; }
+.backend-dialog-head button { font-size: 1.5rem; line-height: 1; }
+.backend-eyebrow { margin: 0; color: #a9b5de; font-size: .68rem; letter-spacing: .13em; }
+.backend-dialog-copy { color: #aeb8d1; font-size: .86rem; line-height: 1.55; }
+.backend-current {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 1.15rem 0;
+  padding: .8rem 1rem;
+  border: 1px solid #3c4664;
+  border-radius: 12px;
+  background: #20283b;
+  font-size: .9rem;
+}
+.backend-current strong { text-align: right; }
+.backend-dialog-actions { display: flex; flex-wrap: wrap; gap: .65rem; }
+.backend-dialog-actions button { min-height: 38px; }
+.backend-dialog-divider { height: 1px; margin: 1.25rem 0; background: #3b4560; }
+.backend-field { display: grid; gap: .45rem; margin: .9rem 0; font-size: .86rem; color: #c9d1e7; }
+.backend-field input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 42px;
+  padding: .6rem .75rem;
+  border: 1px solid #56617f;
+  border-radius: 10px;
+  background: #0e1423;
+  color: #f2f5ff;
+  font: inherit;
+}
+.backend-field input:focus { outline: 2px solid #8499e8; outline-offset: 2px; }
+.backend-dialog-message { min-height: 1.4em; margin: .8rem 0 0; color: #e2c493; font-size: .82rem; }
+@media (max-width: 600px) {
+  .backend-connection-trigger { max-width: 9rem; overflow: hidden; text-overflow: ellipsis; }
+  .backend-dialog { padding: 1.1rem; border-radius: 15px; }
+  .backend-dialog-actions button { flex: 1 1 auto; }
+}

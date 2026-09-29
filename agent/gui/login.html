@@ -8,42 +8,69 @@
 </head>
 <body>
 
-<div class="scene" aria-hidden="true">
-  <div class="scene-glow"></div>
-  <div class="scene-grid"></div>
-  <div class="orb orb-a"></div>
-  <div class="orb orb-b"></div>
+<canvas id="dust" aria-hidden="true"></canvas>
+<div class="glow" id="glow" aria-hidden="true"></div>
+<div class="motes" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+<div class="figures" aria-hidden="true">
+  <div class="figure f1"><small data-fig="0"></small><b data-meter="rows">12,840,221</b></div>
+  <div class="figure f2"><small data-fig="1"></small><b data-meter="rate">3.88×</b></div>
+  <div class="figure f3"><small data-fig="2"></small><b data-meter="time">2.63s</b></div>
+  <div class="figure f4"><small data-fig="0"></small><b data-meter="rows">8,420,118</b></div>
+  <div class="figure f5"><small data-fig="1"></small><b data-meter="rate">2.46×</b></div>
+  <div class="figure f6"><small data-fig="2"></small><b data-meter="time">1.84s</b></div>
 </div>
+<div class="vignette" aria-hidden="true"></div>
+<button type="button" id="lang" class="lang">English</button>
 
 <main class="gate">
   <div class="gate-panel" id="gate-panel">
     <header class="gate-head">
       <div class="product">
-        <span class="product-mark" aria-hidden="true">D</span>
+        <span class="product-mark" aria-hidden="true">
+          <svg viewBox="0 0 36 36" width="36" height="36">
+            <defs>
+              <linearGradient id="mark-bg" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#242c44"/>
+                <stop offset="1" stop-color="#141a2e"/>
+              </linearGradient>
+            </defs>
+            <rect width="36" height="36" rx="10" fill="url(#mark-bg)"/>
+            <rect x="8" y="20" width="4.5" height="8" rx="1.6" fill="#6e7ab4"/>
+            <rect x="15.75" y="14.5" width="4.5" height="13.5" rx="1.6" fill="#a8b2dc"/>
+            <rect x="23.5" y="8" width="4.5" height="20" rx="1.6" fill="#f4f6fb"/>
+          </svg>
+        </span>
         <div class="product-copy">
           <strong>Data Workbench</strong>
-          <span>GPU 数据分析工作台</span>
+          <span>AI 数据分析</span>
         </div>
       </div>
-      <button type="button" id="lang" class="text-button">English</button>
     </header>
 
-    <!-- sign-in: the gate has a password -->
-    <form id="gate-form" class="gate-body" novalidate>
-      <span class="overline">Access</span>
-      <h1 id="t-title">输入访问密码</h1>
-      <p id="t-sub" class="gate-sub">这份工作台由访问密码保护，密码来自启动这份服务的一方。</p>
-      <label class="lt" for="password" id="t-label">访问密码</label>
-      <input id="password" type="password" autocomplete="current-password" spellcheck="false" autofocus>
-      <label class="lt confirm-row" for="confirm" id="t-label2" hidden>再输入一次</label>
-      <input id="confirm" class="confirm-row" type="password" autocomplete="new-password" spellcheck="false" hidden>
+    <div class="live" aria-hidden="true">
+      <div><span id="live-k0"></span><b id="live-n0">0</b></div>
+      <div><span id="live-k1"></span><b id="live-n1">0</b></div>
+      <div><span id="live-k2"></span><b id="live-n2">0</b></div>
+    </div>
+
+    <form id="gate-form" class="gate-body" hidden novalidate>
+      <h1 id="t-title">设置访问密码</h1>
+      <p id="t-sub" class="gate-sub">第一次打开请设置访问密码。设置之后，再次打开才需要输入它。</p>
+
+      <div class="field">
+        <label class="lt" for="password" id="t-label">访问密码</label>
+        <input id="password" name="password" type="password" autocomplete="new-password" spellcheck="false" placeholder="至少 8 位">
+      </div>
+      <div class="field" id="confirm-field">
+        <label class="lt" for="confirm" id="t-label2">再输入一次</label>
+        <input id="confirm" type="password" autocomplete="new-password" spellcheck="false" placeholder="重复一次，确认无误">
+      </div>
+
       <p class="gate-msg" id="gate-msg" role="alert" hidden></p>
-      <button type="submit" id="gate-submit" class="primary full">进入工作台</button>
+      <button type="submit" id="gate-submit" class="primary">设置密码并进入</button>
     </form>
 
-    <!-- setup pending, seen from another machine: nothing to do but wait -->
     <div id="gate-waiting" class="gate-body" hidden>
-      <span class="overline">Setup</span>
       <h1 id="t-wait-title">等待初始设置</h1>
       <p id="t-wait-sub" class="gate-sub">这份服务还没有设置访问密码。请在运行它的那台机器上打开本页面，完成首次设置后，这里即可登录。</p>
       <div class="waiting-note"><span class="spinner" aria-hidden="true"></span><span id="t-wait-note">正在等待管理员设置密码…</span></div>
@@ -51,11 +78,11 @@
 
     <footer class="gate-foot">
       <span id="t-foot">密码只在请求体中传输 · 会话保留 7 天 · 服务重启后失效</span>
-      <span class="build-tag">{{BUILD}}</span>
     </footer>
   </div>
 </main>
 
+<span class="build-tag">{{BUILD}}</span>
 <script src="/login.js"></script>
 </body>
 </html>
